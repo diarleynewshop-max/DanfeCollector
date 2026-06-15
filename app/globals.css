@@ -1,0 +1,28 @@
+@import "tailwindcss";
+
+/* Interface clara fixa — sem variação por prefers-color-scheme,
+   pois os cards usam fundo branco e o texto precisa ser sempre escuro. */
+:root {
+  --background: #ffffff;
+  --foreground: #171717;
+}
+
+body {
+  color: var(--foreground);
+}
+
+/* Impressão da DANFE: esconde tudo menos a área da nota */
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  body {
+    background: #fff;
+  }
+  .print-area {
+    box-shadow: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    max-width: none !important;
+  }
+}

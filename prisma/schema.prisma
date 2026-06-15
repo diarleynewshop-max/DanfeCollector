@@ -1,0 +1,69 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Cnpj {
+  id           Int       @id @default(autoincrement())
+  cnpj         String    @unique
+  razaoSocial  String?
+  uf           String    @default("CE")
+  ultimoNSU    String    @default("0")
+  maxNSU       String    @default("0")
+  ativo        Boolean   @default(true)
+  situacao     String    @default("Nunca sincronizado")
+  ultimaBusca  DateTime?
+  // SEFAZ cStat 656 (consumo indevido): bloqueia novas consultas até este horário
+  bloqueadoAte DateTime?
+  // Certificado digital vinculado (lido do repositório do Windows)
+  certSerial     String?
+  certThumbprint String?
+  certVencimento DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  notas        NotaFiscal[]
+}
+
+model NotaFiscal {
+  id            Int      @id @default(autoincrement())
+  chave         String   @unique
+  nsu           String?
+  numero        String?
+  serie         String?
+  emitidaEm     DateTime
+  tipoOperacao  String?  // "Entrada" ou "Saída" (tpNF)
+  naturezaOp    String?  // natureza da operação (natOp)
+
+  // Emitente
+  emitenteNome  String?
+  emitenteCnpj  String?
+  emitenteIe    String?
+  emitenteUf    String?
+
+  // Destinatário (só disponível em notas COMPLETA)
+  destNome      String?
+  destCnpj      String?
+
+  // Valores (breakdown disponível em notas COMPLETA)
+  valorTotal    Float?
+  valorProdutos Float?
+  valorFrete    Float?
+  valorDesconto Float?
+  valorIcms     Float?
+
+  // RESUMO (resNFe — aguardando manifestação) ou COMPLETA (procNFe — XML integral)
+  status        String   @default("RESUMO")
+  // Data da Ciência da Operação (evento 210210) já registrada para esta nota.
+  // Quando preenchida, NÃO se deve manifestar de novo (SEFAZ só aceita 1x).
+  manifestadaEm DateTime?
+  xmlPath       String?
+  pdfPath       String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  cnpjId        Int
+  cnpj          Cnpj     @relation(fields: [cnpjId], references: [id])
+}
