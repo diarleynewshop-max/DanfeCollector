@@ -85,6 +85,11 @@ model NotaFiscal {
   manifestadaEm DateTime?
   xmlPath       String?
   pdfPath       String?
+  // Pagamento do DAE registrado manualmente (via importação da relação de pagamento SITRAM).
+  // Quando preenchido, o DAE é tratado como PAGO independente do status do SITRAM.
+  pagamentoManualEm    DateTime?
+  pagamentoManualRef   String?   // referência do lote/relatório importado
+  pagamentoManualValor Float?     // valor do lançamento pago (informado no relatório)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
   cnpjId        Int

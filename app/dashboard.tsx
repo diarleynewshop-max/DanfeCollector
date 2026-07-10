@@ -19,6 +19,10 @@ import {
   manifestarNotasLote,
   listarNotasPorAno,
   listarTodasNotas,
+  previewPagamentoSitram,
+  aplicarPagamentoSitram,
+  anexarComprovanteLote,
+  type PreviewPagamentoSitram,
   atualizarSitramPorChaves,
   listarChavesSitramSemConsulta,
   atualizarTransporteNotasExistentes,
@@ -394,6 +398,9 @@ export default function Dashboard({
   const [filtroCnpjId, setFiltroCnpjId] = useState<number | 'todos'>('todos');
   const [filtroStatus, setFiltroStatus] = useState<'todos' | 'RESUMO' | 'COMPLETA'>('todos');
   const [expandida, setExpandida] = useState<number | null>(null);
+
+  // Painel de importação da relação de pagamento SITRAM
+  const [mostrarPagamento, setMostrarPagamento] = useState(false);
 
   // Busca rápida por número da NF (ou chave)
   const [filtroNumero, setFiltroNumero] = useState('');
@@ -887,6 +894,12 @@ export default function Dashboard({
               Importar chaves
             </button>
             <button
+              onClick={() => setMostrarPagamento((v) => !v)}
+              className="px-3.5 py-2 rounded-lg text-sm font-medium border border-[var(--border-strong)] bg-[var(--surface)] text-[var(--ink)] hover:bg-[var(--surface-2)] transition"
+            >
+              Importar pagamento
+            </button>
+            <button
               onClick={() => setMostrarSitram((v) => !v)}
               className="px-3.5 py-2 rounded-lg text-sm font-medium border border-[var(--border-strong)] bg-[var(--surface)] text-[var(--ink)] hover:bg-[var(--surface-2)] transition"
             >
@@ -942,6 +955,13 @@ export default function Dashboard({
           <KpiCard label="Valor movimentado" value={moeda(valorGeral)} sub="notas carregadas" tone="good" />
           <KpiCard label="A manifestar" value={String(pendentes)} sub="resumos pendentes" tone="warn" />
         </div>
+
+        {mostrarPagamento && (
+          <ImportarPagamentoSitram
+            onFechar={() => setMostrarPagamento(false)}
+            onAplicado={() => { setTodasCarregadas(false); router.refresh(); }}
+          />
+        )}
 
         {/* Painel de importação por chave */}
         {mostrarImport && (
@@ -1890,6 +1910,159 @@ function deslocarData(dias: number): string {
   valor.setHours(12, 0, 0, 0);
   valor.setDate(valor.getDate() + dias);
   return chaveDataLocal(valor.toISOString()) ?? '';
+}
+
+function ImportarPagamentoSitram({
+  onFechar,
+  onAplicado,
+}: {
+  onFechar: () => void;
+  onAplicado: () => void;
+}) {
+  const [analisando, setAnalisando] = useState(false);
+  const [preview, setPreview] = useState<PreviewPagamentoSitram | null>(null);
+  const [referencia, setReferencia] = useState('');
+  const [comprovante, setComprovante] = useState<File | null>(null);
+  const [aplicando, setAplicando] = useState(false);
+  const [msg, setMsg] = useState<{ ok: boolean; texto: string } | null>(null);
+
+  async function handleAnalisar(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const form = e.currentTarget;
+    const fd = new FormData(form);
+    if (!(fd.get('arquivo') instanceof File) || (fd.get('arquivo') as File).size === 0) {
+      setMsg({ ok: false, texto: 'Selecione o PDF da relação.' });
+      return;
+    }
+    setAnalisando(true);
+    setMsg(null);
+    const res = await previewPagamentoSitram(fd);
+    setAnalisando(false);
+    if (!res.ok) { setMsg({ ok: false, texto: res.message ?? 'Falha ao analisar.' }); return; }
+    setPreview(res);
+  }
+
+  const idsParaAplicar = (preview?.encontradas ?? []).filter((n) => !n.jaPago).map((n) => n.id);
+  const totalAberto = (preview?.encontradas ?? []).reduce((t, n) => t + n.valorAberto, 0);
+
+  async function handleConfirmar() {
+    if (idsParaAplicar.length === 0) { setMsg({ ok: false, texto: 'Nada para marcar (todas já pagas ou nenhuma encontrada).' }); return; }
+    setAplicando(true);
+    setMsg(null);
+    const res = await aplicarPagamentoSitram(idsParaAplicar, referencia);
+    if (res.success && comprovante) {
+      const fd = new FormData();
+      fd.set('comprovante', comprovante);
+      fd.set('nome', referencia.trim() ? `Comprovante ${referencia.trim()}` : 'Comprovante de pagamento');
+      const resAnexo = await anexarComprovanteLote(idsParaAplicar, fd);
+      setMsg({ ok: resAnexo.success, texto: `${res.message} ${resAnexo.message}` });
+    } else {
+      setMsg({ ok: res.success, texto: res.message });
+    }
+    setAplicando(false);
+    if (res.success) onAplicado();
+  }
+
+  return (
+    <div className="mb-4 bg-[var(--surface)] border border-[var(--border)] rounded-2xl p-5 shadow-sm">
+      <div className="flex items-center justify-between mb-3 border-b border-[var(--border)] pb-3">
+        <h2 className="text-base font-semibold text-[var(--ink)]">Importar pagamento (relação SITRAM)</h2>
+        <button onClick={onFechar} className="text-sm text-[var(--ink-mut)] hover:text-[var(--ink)]">Fechar ✕</button>
+      </div>
+
+      {!preview ? (
+        <form onSubmit={handleAnalisar} className="space-y-3">
+          <p className="text-sm text-[var(--ink-mut)]">
+            Suba o PDF da <strong>Relação de Lançamentos de Nota Fiscal</strong> do SITRAM. O app cruza cada
+            linha (nº da NF + CNPJ do emitente) com suas notas e marca o DAE como pago.
+          </p>
+          <input
+            type="file"
+            name="arquivo"
+            accept="application/pdf,.pdf"
+            className="w-full text-sm text-[var(--ink-mut)] file:mr-3 file:rounded-lg file:border-0 file:bg-[var(--accent-soft)] file:px-3 file:py-2 file:text-sm file:font-medium file:text-[var(--ink)]"
+          />
+          <button type="submit" disabled={analisando}
+            className="bg-[var(--accent)] text-[var(--accent-ink)] px-5 py-2 rounded-lg text-sm font-medium hover:brightness-150 disabled:opacity-50">
+            {analisando ? 'Analisando PDF…' : 'Analisar'}
+          </button>
+        </form>
+      ) : (
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div className="rounded-xl border border-[var(--border)] p-3">
+              <p className="text-[11px] uppercase tracking-wide text-[var(--ink-mut)] font-semibold">Lançamentos</p>
+              <p className="text-xl font-bold text-[var(--ink)]">{preview.totalLancamentos}</p>
+            </div>
+            <div className="rounded-xl border border-[var(--border)] p-3">
+              <p className="text-[11px] uppercase tracking-wide text-[var(--ink-mut)] font-semibold">NFs encontradas</p>
+              <p className="text-xl font-bold" style={{ color: 'var(--good)' }}>{preview.encontradas.length}</p>
+            </div>
+            <div className="rounded-xl border border-[var(--border)] p-3">
+              <p className="text-[11px] uppercase tracking-wide text-[var(--ink-mut)] font-semibold">Não encontradas</p>
+              <p className="text-xl font-bold" style={{ color: preview.naoEncontradas.length ? 'var(--crit)' : 'var(--ink)' }}>{preview.naoEncontradas.length}</p>
+            </div>
+            <div className="rounded-xl border border-[var(--border)] p-3">
+              <p className="text-[11px] uppercase tracking-wide text-[var(--ink-mut)] font-semibold">Em aberto</p>
+              <p className="text-xl font-bold text-[var(--ink)]">{moeda(totalAberto)}</p>
+            </div>
+          </div>
+
+          <div className="max-h-64 overflow-y-auto rounded-xl border border-[var(--border)] divide-y divide-[var(--border)]">
+            {preview.encontradas.map((n) => (
+              <div key={n.id} className="flex items-center gap-3 px-3 py-2 text-sm">
+                <span className="font-semibold text-[var(--ink)] w-20 shrink-0">NF {n.numero || '—'}</span>
+                <span className="truncate flex-1 text-[var(--ink-mut)]" title={n.emitente || ''}>{n.emitente || formatarCnpj(n.cnpj)}</span>
+                <span className="tabular-nums text-[var(--ink)]">{moeda(n.valorAberto)}</span>
+                {n.jaPago && <Badge tone="green">já pago</Badge>}
+              </div>
+            ))}
+            {preview.encontradas.length === 0 && (
+              <p className="px-3 py-4 text-center text-sm text-[var(--ink-mut)]">Nenhuma NF do relatório bate com o banco.</p>
+            )}
+          </div>
+
+          {preview.naoEncontradas.length > 0 && (
+            <details className="text-sm">
+              <summary className="cursor-pointer text-[var(--ink-mut)]">{preview.naoEncontradas.length} lançamento(s) não encontrado(s) no banco</summary>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {preview.naoEncontradas.map((n, i) => (
+                  <span key={i} className="rounded-lg bg-[var(--surface-2)] px-2 py-1 text-xs text-[var(--ink-mut)]">NF {n.numero} · {formatarCnpj(n.cnpj)}</span>
+                ))}
+              </div>
+            </details>
+          )}
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div>
+              <label className="block text-xs text-[var(--ink-mut)] mb-1">Referência do pagamento (opcional)</label>
+              <input value={referencia} onChange={(e) => setReferencia(e.target.value)}
+                placeholder="Ex.: DAE 05/2026 · lote maio"
+                className="w-full border border-[var(--border-strong)] rounded-lg px-3 py-2 text-sm bg-[var(--surface)] text-[var(--ink)] focus:ring-2 focus:ring-[var(--border-strong)] outline-none" />
+            </div>
+            <div>
+              <label className="block text-xs text-[var(--ink-mut)] mb-1">Comprovante para anexar a todas (opcional)</label>
+              <input type="file" accept="application/pdf,image/*,.pdf,.jpg,.jpeg,.png,.webp"
+                onChange={(e) => setComprovante(e.target.files?.[0] ?? null)}
+                className="w-full text-sm text-[var(--ink-mut)] file:mr-3 file:rounded-lg file:border-0 file:bg-[var(--accent-soft)] file:px-3 file:py-2 file:text-sm file:font-medium file:text-[var(--ink)]" />
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <button onClick={handleConfirmar} disabled={aplicando || idsParaAplicar.length === 0}
+              className="bg-[var(--accent)] text-[var(--accent-ink)] px-5 py-2 rounded-lg text-sm font-medium hover:brightness-150 disabled:opacity-50">
+              {aplicando ? 'Aplicando…' : `Marcar ${idsParaAplicar.length} como pago${comprovante ? ' + anexar' : ''}`}
+            </button>
+            <button onClick={() => { setPreview(null); setMsg(null); }} className="px-4 py-2 rounded-lg text-sm font-medium border border-[var(--border-strong)] text-[var(--ink)] hover:bg-[var(--surface-2)]">
+              Trocar PDF
+            </button>
+          </div>
+        </div>
+      )}
+
+      {msg && <p className={`mt-3 text-sm ${msg.ok ? 'text-emerald-700' : 'text-red-700'}`}>{msg.texto}</p>}
+    </div>
+  );
 }
 
 function AlertaDaes({

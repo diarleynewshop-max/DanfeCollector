@@ -47,6 +47,8 @@ export interface NotaComDadosDae {
   sitramDaeStatus?: string | null;
   sitramDaeResumo?: string | null;
   sitramDetalhe?: string | null;
+  // Pagamento registrado manualmente (importação da relação SITRAM) — tem prioridade.
+  pagamentoManualEm?: Date | string | null;
 }
 
 type Registro = Record<string, unknown>;
@@ -242,6 +244,9 @@ export function extrairResumoDae(nota: NotaComDadosDae): ResumoDaeNormalizado {
 }
 
 export function statusDaeEfetivo(nota: NotaComDadosDae): string {
+  // Pagamento registrado manualmente vence qualquer status do SITRAM.
+  if (nota.pagamentoManualEm) return 'PAGO';
+
   const resumo = extrairResumoDae(nota);
   if (resumo.lancamentos.length > 0) {
     return resumo.lancamentos.every((l) => l.pago) ? 'PAGO' : 'EM_ABERTO';

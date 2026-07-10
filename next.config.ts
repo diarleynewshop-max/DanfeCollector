@@ -8,6 +8,8 @@ const nextConfig: NextConfig = {
     // Upload de anexos (PDF/foto/planilha) via server action — o padrão é 1MB.
     serverActions: { bodySizeLimit: "30mb" },
   },
+  // pdf-parse (usa pdfjs) roda melhor fora do bundle do servidor.
+  serverExternalPackages: ["pdf-parse"],
 };
 
 export default nextConfig;

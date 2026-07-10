@@ -29,7 +29,9 @@ import {
   type SitramPortalLancamento,
   type SitramPortalNotaFiscal,
 } from './sitram/portal';
-import { classificarStatusDaePortal } from './sitram/dae';
+import { classificarStatusDaePortal, extrairResumoDae, statusDaeEfetivo } from './sitram/dae';
+import { parseRelacaoPagamentoSitram, chaveCruzamento } from './sitram/pagamento';
+import { salvarArquivo, mimeAceito, TAMANHO_MAX } from './anexos/storage';
 
 export interface ActionResult {
   success: boolean;
@@ -1459,4 +1461,163 @@ export async function manifestarNotasLote(notaIds: number[]): Promise<ResultadoM
 
   revalidatePath('/');
   return resultados;
+}
+
+// ===== Importação da relação de pagamento SITRAM (marcar DAE pago em lote) =====
+
+export interface NotaPagamentoPreview {
+  id: number;
+  numero: string | null;
+  cnpj: string; // CNPJ do emitente (14 díg.)
+  emitente: string | null;
+  valorAberto: number;
+  jaPago: boolean;
+}
+
+export interface PreviewPagamentoSitram {
+  ok: boolean;
+  message?: string;
+  totalLancamentos: number;
+  encontradas: NotaPagamentoPreview[];
+  naoEncontradas: { cnpj: string; numero: string }[];
+}
+
+async function extrairTextoPdf(bytes: Buffer): Promise<string> {
+  const { PDFParse } = await import('pdf-parse');
+  const parser = new PDFParse({ data: new Uint8Array(bytes) });
+  const res = await parser.getText();
+  return res.text ?? '';
+}
+
+function valorAbertoDae(nota: {
+  sitramDaeStatus: string | null;
+  sitramDaeResumo: string | null;
+  sitramDetalhe: string | null;
+}): number {
+  const resumo = extrairResumoDae(nota);
+  return resumo.lancamentos.reduce((total, l) => total + (l.pago ? 0 : (l.valorAberto ?? 0)), 0);
+}
+
+export async function previewPagamentoSitram(formData: FormData): Promise<PreviewPagamentoSitram> {
+  await exigirUsuario();
+  const arquivo = formData.get('arquivo');
+  if (!(arquivo instanceof File) || arquivo.size === 0) {
+    return { ok: false, message: 'Selecione o PDF da relação.', totalLancamentos: 0, encontradas: [], naoEncontradas: [] };
+  }
+  if (arquivo.type && arquivo.type !== 'application/pdf') {
+    return { ok: false, message: 'Envie um arquivo PDF.', totalLancamentos: 0, encontradas: [], naoEncontradas: [] };
+  }
+
+  let texto: string;
+  try {
+    texto = await extrairTextoPdf(Buffer.from(await arquivo.arrayBuffer()));
+  } catch (e) {
+    return { ok: false, message: `Falha ao ler o PDF: ${(e as Error).message}`, totalLancamentos: 0, encontradas: [], naoEncontradas: [] };
+  }
+
+  const lancamentos = parseRelacaoPagamentoSitram(texto);
+  if (lancamentos.length === 0) {
+    return { ok: false, message: 'Não reconheci nenhum lançamento no PDF. Confira se é a Relação de Lançamentos do SITRAM.', totalLancamentos: 0, encontradas: [], naoEncontradas: [] };
+  }
+
+  const notas = await prisma.notaFiscal.findMany({
+    select: {
+      id: true, numero: true, emitenteCnpj: true, emitenteNome: true,
+      sitramDaeStatus: true, sitramDaeResumo: true, sitramDetalhe: true, pagamentoManualEm: true,
+    },
+  });
+
+  const mapa = new Map<string, typeof notas>();
+  for (const n of notas) {
+    const chave = chaveCruzamento(n.emitenteCnpj, n.numero);
+    const grupo = mapa.get(chave) ?? [];
+    grupo.push(n);
+    mapa.set(chave, grupo);
+  }
+
+  const encontradas: NotaPagamentoPreview[] = [];
+  const naoEncontradas: { cnpj: string; numero: string }[] = [];
+  const idsVistos = new Set<number>();
+
+  for (const l of lancamentos) {
+    const grupo = mapa.get(`${l.cnpjEmitente}-${l.numeroNota}`);
+    if (!grupo || grupo.length === 0) {
+      naoEncontradas.push({ cnpj: l.cnpjEmitente, numero: l.numeroNota });
+      continue;
+    }
+    for (const n of grupo) {
+      if (idsVistos.has(n.id)) continue;
+      idsVistos.add(n.id);
+      encontradas.push({
+        id: n.id,
+        numero: n.numero,
+        cnpj: n.emitenteCnpj ?? l.cnpjEmitente,
+        emitente: n.emitenteNome,
+        valorAberto: valorAbertoDae(n),
+        jaPago: !!n.pagamentoManualEm,
+      });
+    }
+  }
+
+  return { ok: true, totalLancamentos: lancamentos.length, encontradas, naoEncontradas };
+}
+
+export async function aplicarPagamentoSitram(
+  notaIds: number[],
+  referencia: string
+): Promise<ActionResult> {
+  await exigirUsuario();
+  const ids = notaIds.filter((n) => Number.isInteger(n));
+  if (ids.length === 0) return { success: false, message: 'Nenhuma nota para marcar.' };
+
+  await prisma.notaFiscal.updateMany({
+    where: { id: { in: ids } },
+    data: {
+      pagamentoManualEm: new Date(),
+      pagamentoManualRef: referencia.trim() || null,
+    },
+  });
+
+  revalidatePath('/');
+  return { success: true, message: `${ids.length} nota(s) marcada(s) como pagas.` };
+}
+
+export async function anexarComprovanteLote(
+  notaIds: number[],
+  formData: FormData
+): Promise<ActionResult> {
+  const usuario = await exigirUsuario();
+  const ids = notaIds.filter((n) => Number.isInteger(n));
+  if (ids.length === 0) return { success: false, message: 'Nenhuma nota selecionada.' };
+
+  const arquivo = formData.get('comprovante');
+  const nome = String(formData.get('nome') ?? '').trim() || 'Comprovante de pagamento';
+  if (!(arquivo instanceof File) || arquivo.size === 0) {
+    return { success: false, message: 'Selecione o comprovante.' };
+  }
+  if (arquivo.size > TAMANHO_MAX) {
+    return { success: false, message: `Comprovante muito grande (máx. ${Math.round(TAMANHO_MAX / 1024 / 1024)} MB).` };
+  }
+  if (!mimeAceito(arquivo.type)) {
+    return { success: false, message: `Tipo não aceito (${arquivo.type || 'desconhecido'}).` };
+  }
+
+  const bytes = Buffer.from(await arquivo.arrayBuffer());
+  for (const notaId of ids) {
+    const caminho = await salvarArquivo(notaId, arquivo.type, bytes);
+    await prisma.anexo.create({
+      data: {
+        notaId,
+        nome,
+        arquivoNome: arquivo.name,
+        mime: arquivo.type,
+        tamanho: arquivo.size,
+        caminho,
+        criadoPor: usuario.login,
+      },
+    });
+  }
+
+  revalidatePath('/');
+  return { success: true, message: `Comprovante anexado a ${ids.length} nota(s).` };
 }
