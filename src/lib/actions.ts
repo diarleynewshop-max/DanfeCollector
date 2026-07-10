@@ -733,6 +733,18 @@ export async function listarNotas(pagina = 1, porPagina = 50) {
   });
 }
 
+/**
+ * Todas as notas (sem paginação), para busca/filtro no cliente.
+ * O volume é pequeno (poucos milhares) e a tela é interna.
+ */
+export async function listarTodasNotas() {
+  await exigirUsuario();
+  return prisma.notaFiscal.findMany({
+    orderBy: { emitidaEm: 'desc' },
+    include: { cnpj: { select: { cnpj: true, razaoSocial: true } } },
+  });
+}
+
 export async function listarNotasAlertaDae() {
   await exigirUsuario();
   return prisma.notaFiscal.findMany({

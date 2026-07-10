@@ -18,6 +18,7 @@ import {
   alternarEtiqueta,
   manifestarNotasLote,
   listarNotasPorAno,
+  listarTodasNotas,
   atualizarSitramPorChaves,
   listarChavesSitramSemConsulta,
   atualizarTransporteNotasExistentes,
@@ -394,6 +395,14 @@ export default function Dashboard({
   const [filtroStatus, setFiltroStatus] = useState<'todos' | 'RESUMO' | 'COMPLETA'>('todos');
   const [expandida, setExpandida] = useState<number | null>(null);
 
+  // Busca rápida por número da NF (ou chave)
+  const [filtroNumero, setFiltroNumero] = useState('');
+
+  // Carrega TODAS as notas em memória para busca/filtro funcionar sobre o
+  // conjunto inteiro (e não só a página atual de 50).
+  const [todasCarregadas, setTodasCarregadas] = useState(false);
+  const [carregandoTodas, setCarregandoTodas] = useState(false);
+
   // Filtros avançados
   const [mostrarFiltros, setMostrarFiltros] = useState(false);
   const [filtroEmitente, setFiltroEmitente] = useState('');
@@ -520,14 +529,36 @@ export default function Dashboard({
     filtroEtiquetas.length > 0 ? '1' : '',
     filtroExcluirEmitentes.length > 0 ? '1' : '',
   ].filter(Boolean).length;
+  // Há alguma busca/filtro ativo? (inclui empresa, status e a busca por número)
+  const algumFiltroAtivo =
+    filtrosAtivos > 0 ||
+    filtroNumero.trim() !== '' ||
+    filtroCnpjId !== 'todos' ||
+    filtroStatus !== 'todos';
+
+  // Paginação no servidor só na visão padrão (sem filtro e sem ter carregado tudo).
   const usandoPaginacaoServidor =
     anoCarregado === null &&
-    filtroCnpjId === 'todos' &&
-    filtroStatus === 'todos' &&
-    filtrosAtivos === 0;
+    !todasCarregadas &&
+    !algumFiltroAtivo;
   const totalPaginasServidor = Math.max(1, Math.ceil(totalNotas / porPagina));
 
+  // Assim que o usuário busca/filtra, garante TODAS as notas em memória para
+  // que o filtro atue sobre o conjunto inteiro — não só as 50 da página.
+  useEffect(() => {
+    if (!algumFiltroAtivo || todasCarregadas || carregandoTodas || anoCarregado !== null) return;
+    setCarregandoTodas(true);
+    listarTodasNotas()
+      .then((todas) => {
+        setNotas(todas as NotaComCnpj[]);
+        setNotasAlerta(todas as NotaComCnpj[]);
+        setTodasCarregadas(true);
+      })
+      .finally(() => setCarregandoTodas(false));
+  }, [algumFiltroAtivo, todasCarregadas, carregandoTodas, anoCarregado]);
+
   function limparFiltrosAvancados() {
+    setFiltroNumero('');
     setFiltroEmitente('');
     setFiltroDestinatario('');
     setFiltroValorMin('');
@@ -538,9 +569,12 @@ export default function Dashboard({
     setFiltroDataFim('');
     setFiltroMes('');
     setFiltroAnoState('');
+    setFiltroCnpjId('todos');
+    setFiltroStatus('todos');
     setNotas(notasIniciais);
     setNotasAlerta(notasAlertaIniciais);
     setAnoCarregado(null);
+    setTodasCarregadas(false);
     setFiltroSituacao('todas');
     setFiltroDaeSitram('todos');
     setFiltroDaeVencInicio('');
@@ -593,6 +627,8 @@ export default function Dashboard({
   }
 
   const notasFiltradas = useMemo(() => {
+    const numeroBusca = filtroNumero.trim();
+    const numeroBuscaDigitos = numeroBusca.replace(/\D/g, '');
     const emitenteBusca = filtroEmitente.trim().toLowerCase();
     const emitenteBuscaDigitos = filtroEmitente.replace(/\D/g, '');
     const destBusca = filtroDestinatario.trim().toLowerCase();
@@ -605,6 +641,15 @@ export default function Dashboard({
     return notas.filter((n) => {
       if (filtroCnpjId !== 'todos' && n.cnpjId !== filtroCnpjId) return false;
       if (filtroStatus !== 'todos' && n.status !== filtroStatus) return false;
+
+      // Busca por número da NF (ignora zeros à esquerda) ou por chave de acesso.
+      if (numeroBuscaDigitos) {
+        const numNota = String(Number(n.numero ?? '') || '');
+        const alvoBusca = String(Number(numeroBuscaDigitos) || '');
+        const matchNumero = numNota.length > 0 && numNota.includes(alvoBusca);
+        const matchChave = numeroBuscaDigitos.length >= 8 && n.chave.includes(numeroBuscaDigitos);
+        if (!matchNumero && !matchChave) return false;
+      }
 
       if (emitenteBusca) {
         const nomeAlvo = (n.emitenteNome ?? '').toLowerCase();
@@ -693,6 +738,7 @@ export default function Dashboard({
     notas,
     filtroCnpjId,
     filtroStatus,
+    filtroNumero,
     filtroEmitente,
     filtroDestinatario,
     filtroValorMin,
@@ -721,6 +767,7 @@ export default function Dashboard({
     notas,
     filtroCnpjId,
     filtroStatus,
+    filtroNumero,
     filtroEmitente,
     filtroDestinatario,
     filtroValorMin,
@@ -898,11 +945,11 @@ export default function Dashboard({
 
         {/* Painel de importação por chave */}
         {mostrarImport && (
-          <div className="mb-6 bg-white border border-slate-200 rounded-2xl p-5 shadow-sm">
-            <div className="flex items-center justify-between mb-3 border-b border-slate-100 pb-3">
-              <h2 className="text-base font-semibold text-slate-800">📥 Importar notas por chave de acesso</h2>
+          <div className="mb-6 bg-[var(--surface)] border border-[var(--border)] rounded-2xl p-5 shadow-sm">
+            <div className="flex items-center justify-between mb-3 border-b border-[var(--border)] pb-3">
+              <h2 className="text-base font-semibold text-[var(--ink)]">📥 Importar notas por chave de acesso</h2>
             </div>
-            <p className="text-sm text-slate-500 mb-3">
+            <p className="text-sm text-[var(--ink-mut)] mb-3">
               Cole as chaves de acesso (44 dígitos) — pode colar a coluna inteira do Excel. O app
               busca cada nota na SEFAZ pela chave (consulta direta, sem depender do NSU).
             </p>
@@ -910,14 +957,14 @@ export default function Dashboard({
               <select
                 value={importCnpjId}
                 onChange={(e) => setImportCnpjId(e.target.value ? Number(e.target.value) : '')}
-                className="border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white text-slate-700 focus:ring-2 focus:ring-[var(--border-strong)] outline-none"
+                className="border border-[var(--border-strong)] rounded-lg px-3 py-2 text-sm bg-[var(--surface)] text-[var(--ink)] focus:ring-2 focus:ring-[var(--border-strong)] outline-none"
               >
                 <option value="">Empresa destinatária das notas…</option>
                 {cnpjs.map((c) => (
                   <option key={c.id} value={c.id}>{c.razaoSocial || formatarCnpj(c.cnpj)}</option>
                 ))}
               </select>
-              <label className="flex items-center gap-2 text-sm text-slate-600">
+              <label className="flex items-center gap-2 text-sm text-[var(--ink-mut)]">
                 <input
                   type="checkbox"
                   checked={importManifestar}
@@ -932,7 +979,7 @@ export default function Dashboard({
               onChange={(e) => setImportTexto(e.target.value)}
               placeholder="Cole aqui as chaves de acesso (uma por linha ou coladas do Excel)…"
               rows={5}
-              className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm font-mono bg-white text-slate-900 placeholder-slate-400 focus:ring-2 focus:ring-[var(--border-strong)] outline-none"
+              className="w-full border border-[var(--border-strong)] rounded-lg px-3 py-2 text-sm font-mono bg-[var(--surface)] text-[var(--ink)] placeholder-[var(--ink-mut)] focus:ring-2 focus:ring-[var(--border-strong)] outline-none"
             />
             <div className="flex items-center gap-3 mt-3">
               <button
@@ -944,14 +991,14 @@ export default function Dashboard({
                   ? `Importando… ${importProgresso.feito}/${importProgresso.total}`
                   : 'Importar'}
               </button>
-              <span className="text-xs text-slate-400">
+              <span className="text-xs text-[var(--ink-mut)]">
                 {[...new Set(importTexto.match(/\d{44}/g) ?? [])].length} chave(s) detectada(s)
               </span>
             </div>
 
             {importProgresso && (
               <div className="mt-3">
-                <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
+                <div className="w-full bg-[var(--surface-2)] rounded-full h-2 overflow-hidden">
                   <div
                     className="bg-[var(--accent)] h-2 transition-all"
                     style={{ width: `${(importProgresso.feito / importProgresso.total) * 100}%` }}
@@ -973,16 +1020,16 @@ export default function Dashboard({
 
             {/* Importar arquivos XML de uma pasta (notas antigas, do contador/ERP) */}
             {podeAdministrar && (
-            <div className="mt-5 pt-4 border-t border-slate-100">
-              <p className="text-sm font-medium text-slate-700 mb-1">
-                Importar XMLs de uma pasta <span className="text-slate-400 font-normal">(notas antigas / do contador — sem SEFAZ, qualquer data)</span>
+            <div className="mt-5 pt-4 border-t border-[var(--border)]">
+              <p className="text-sm font-medium text-[var(--ink)] mb-1">
+                Importar XMLs de uma pasta <span className="text-[var(--ink-mut)] font-normal">(notas antigas / do contador — sem SEFAZ, qualquer data)</span>
               </p>
               <div className="flex gap-2">
                 <input
                   value={pastaXml}
                   onChange={(e) => setPastaXml(e.target.value)}
                   placeholder="Ex.: C:\Users\diarl\Documents\XMLs-Contador"
-                  className="flex-1 border border-slate-300 rounded-lg px-3 py-2 text-sm font-mono bg-white text-slate-900 placeholder-slate-400 focus:ring-2 focus:ring-[var(--border-strong)] outline-none"
+                  className="flex-1 border border-[var(--border-strong)] rounded-lg px-3 py-2 text-sm font-mono bg-[var(--surface)] text-[var(--ink)] placeholder-[var(--ink-mut)] focus:ring-2 focus:ring-[var(--border-strong)] outline-none"
                 />
                 <button
                   onClick={handleImportarPasta}
@@ -992,7 +1039,7 @@ export default function Dashboard({
                   Importar pasta
                 </button>
               </div>
-              <p className="text-xs text-slate-400 mt-1">
+              <p className="text-xs text-[var(--ink-mut)] mt-1">
                 Cada XML é associado à empresa (emitente ou destinatário) já cadastrada. Funciona para qualquer ano.
               </p>
             </div>
@@ -1001,11 +1048,11 @@ export default function Dashboard({
         )}
 
         {mostrarSitram && (
-          <div className="mb-6 bg-white border border-slate-200 rounded-2xl p-5 shadow-sm">
-            <div className="flex items-center justify-between mb-3 border-b border-slate-100 pb-3">
-              <h2 className="text-base font-semibold text-slate-800">SITRAM por NF-e ou MDF-e</h2>
+          <div className="mb-6 bg-[var(--surface)] border border-[var(--border)] rounded-2xl p-5 shadow-sm">
+            <div className="flex items-center justify-between mb-3 border-b border-[var(--border)] pb-3">
+              <h2 className="text-base font-semibold text-[var(--ink)]">SITRAM por NF-e ou MDF-e</h2>
             </div>
-            <p className="text-sm text-slate-500 mb-3">
+            <p className="text-sm text-[var(--ink-mut)] mb-3">
               Cole chave(s) de NF-e modelo 55 para consultar direto. Chave de MDF-e modelo 58 tambem funciona pelo manifesto.
             </p>
             <textarea
@@ -1013,7 +1060,7 @@ export default function Dashboard({
               onChange={(e) => setSitramTexto(e.target.value)}
               placeholder="Cole aqui uma ou mais chaves de NF-e ou MDF-e..."
               rows={4}
-              className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm font-mono bg-white text-slate-900 placeholder-slate-400 focus:ring-2 focus:ring-[var(--border-strong)] outline-none"
+              className="w-full border border-[var(--border-strong)] rounded-lg px-3 py-2 text-sm font-mono bg-[var(--surface)] text-[var(--ink)] placeholder-[var(--ink-mut)] focus:ring-2 focus:ring-[var(--border-strong)] outline-none"
             />
             <div className="flex items-center gap-3 mt-3">
               <button
@@ -1023,24 +1070,24 @@ export default function Dashboard({
               >
                 {pending ? 'Consultando...' : 'Consultar SITRAM'}
               </button>
-              <span className="text-xs text-slate-400">
+              <span className="text-xs text-[var(--ink-mut)]">
                 {[...new Set(sitramTexto.match(/\d{44}/g) ?? [])].length} chave(s) detectada(s)
               </span>
             </div>
-            <div className="mt-4 pt-4 border-t border-slate-100 grid md:grid-cols-[1fr_auto] gap-3 items-end">
+            <div className="mt-4 pt-4 border-t border-[var(--border)] grid md:grid-cols-[1fr_auto] gap-3 items-end">
               <div>
-                <p className="text-sm font-medium text-slate-700">Consultar todas as NF sem consulta SITRAM</p>
-                <p className="text-xs text-slate-400">
+                <p className="text-sm font-medium text-[var(--ink)]">Consultar todas as NF sem consulta SITRAM</p>
+                <p className="text-xs text-[var(--ink-mut)]">
                   Processa automaticamente, uma por uma, todas as NF-e de emitente fora do CE no ano escolhido. Usa a empresa selecionada acima, se houver.
                 </p>
                 <div className="flex flex-wrap items-center gap-3 mt-2">
-                  <label className="text-xs text-slate-500">
+                  <label className="text-xs text-[var(--ink-mut)]">
                     Ano
                     <select
                       value={sitramAno}
                       onChange={(e) => setSitramAno(e.target.value)}
                       disabled={sitramConsultandoTudo}
-                      className="ml-2 border border-slate-300 rounded-lg px-3 py-1 text-sm bg-white text-slate-700 focus:ring-2 focus:ring-[var(--border-strong)] outline-none disabled:opacity-50"
+                      className="ml-2 border border-[var(--border-strong)] rounded-lg px-3 py-1 text-sm bg-[var(--surface)] text-[var(--ink)] focus:ring-2 focus:ring-[var(--border-strong)] outline-none disabled:opacity-50"
                     >
                       {anosDisponiveis.map((ano) => (
                         <option key={ano} value={String(ano)}>{ano}</option>
@@ -1064,25 +1111,25 @@ export default function Dashboard({
                 <button
                   onClick={handleAtualizarTransporte}
                   disabled={pending}
-                  className="border border-slate-300 text-slate-600 hover:bg-slate-100 px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50"
+                  className="border border-[var(--border-strong)] text-[var(--ink-mut)] hover:bg-[var(--surface-2)] px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50"
                 >
                   Atualizar transportadoras
                 </button>
               </div>
             </div>
             {sitramProgresso && (
-              <div className="mt-3 rounded-xl border border-slate-200 bg-[var(--surface-2)] p-3">
-                <div className="mb-2 flex items-center justify-between gap-3 text-xs text-slate-600">
+              <div className="mt-3 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-3">
+                <div className="mb-2 flex items-center justify-between gap-3 text-xs text-[var(--ink-mut)]">
                   <span>{sitramProgresso.feito} de {sitramProgresso.total} consultada(s)</span>
                   <span>{sitramProgresso.atualizadas} atualizada(s) • {sitramProgresso.erros} erro(s)</span>
                 </div>
-                <div className="h-2 overflow-hidden rounded-full bg-slate-200">
+                <div className="h-2 overflow-hidden rounded-full bg-[var(--surface-2)]">
                   <div
                     className="h-full bg-emerald-500 transition-all"
                     style={{ width: `${sitramProgresso.total ? (sitramProgresso.feito / sitramProgresso.total) * 100 : 0}%` }}
                   />
                 </div>
-                <p className="mt-2 text-[11px] text-slate-400">A consulta continua sozinha até terminar o ano. Os últimos 100 resultados aparecem abaixo.</p>
+                <p className="mt-2 text-[11px] text-[var(--ink-mut)]">A consulta continua sozinha até terminar o ano. Os últimos 100 resultados aparecem abaixo.</p>
               </div>
             )}
             {sitramResultados && (
@@ -1090,7 +1137,7 @@ export default function Dashboard({
                 {sitramResultados.map((r) => (
                   <div
                     key={r.chave}
-                    className={r.status === 'erro' ? 'text-red-700' : 'text-slate-600'}
+                    className={r.status === 'erro' ? 'text-red-700' : 'text-[var(--ink-mut)]'}
                   >
                     <span className="font-mono">{r.chave.slice(0, 8)}...{r.chave.slice(-6)}</span>
                     {' - '}
@@ -1107,9 +1154,9 @@ export default function Dashboard({
 
         {/* Painel de certificados */}
         {podeAdministrar && certs && (
-          <div className="mb-6 bg-white border border-slate-200 rounded-2xl p-5 shadow-sm">
-            <div className="flex items-center justify-between mb-3 border-b border-slate-100 pb-3">
-              <h2 className="text-base font-semibold text-slate-800">🔐 Certificados Digitais no Windows</h2>
+          <div className="mb-6 bg-[var(--surface)] border border-[var(--border)] rounded-2xl p-5 shadow-sm">
+            <div className="flex items-center justify-between mb-3 border-b border-[var(--border)] pb-3">
+              <h2 className="text-base font-semibold text-[var(--ink)]">🔐 Certificados Digitais no Windows</h2>
               <button
                 onClick={handleVincularCerts}
                 disabled={pending}
@@ -1119,12 +1166,12 @@ export default function Dashboard({
               </button>
             </div>
             {certs.length === 0 ? (
-              <p className="text-sm text-slate-400 py-2">Nenhum e-CNPJ encontrado no repositório do Windows.</p>
+              <p className="text-sm text-[var(--ink-mut)] py-2">Nenhum e-CNPJ encontrado no repositório do Windows.</p>
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full text-left text-sm">
                   <thead>
-                    <tr className="text-slate-400 text-xs uppercase tracking-wide border-b border-slate-100">
+                    <tr className="text-[var(--ink-mut)] text-xs uppercase tracking-wide border-b border-[var(--border)]">
                       <th className="pb-2 font-medium">Empresa</th>
                       <th className="pb-2 font-medium">CNPJ</th>
                       <th className="pb-2 font-medium">UF</th>
@@ -1132,13 +1179,13 @@ export default function Dashboard({
                       <th className="pb-2 font-medium">Situação</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-slate-100">
+                  <tbody className="divide-y divide-[var(--border)]">
                     {certs.map((c) => (
                       <tr key={c.thumbprint} className="hover:bg-[var(--surface-2)]">
-                        <td className="py-2.5 font-medium text-slate-700">{c.razaoSocial}</td>
-                        <td className="py-2.5 font-mono text-xs text-slate-500">{formatarCnpj(c.cnpj)}</td>
+                        <td className="py-2.5 font-medium text-[var(--ink)]">{c.razaoSocial}</td>
+                        <td className="py-2.5 font-mono text-xs text-[var(--ink-mut)]">{formatarCnpj(c.cnpj)}</td>
                         <td className="py-2.5">{c.uf}</td>
-                        <td className={`py-2.5 ${c.vencido ? 'text-red-600 font-medium' : 'text-slate-600'}`}>
+                        <td className={`py-2.5 ${c.vencido ? 'text-red-600 font-medium' : 'text-[var(--ink-mut)]'}`}>
                           {new Date(c.vencimento).toLocaleDateString('pt-BR')}
                           {c.vencido ? ' (vencido)' : ''}
                         </td>
@@ -1153,7 +1200,7 @@ export default function Dashboard({
                 </table>
               </div>
             )}
-            <p className="text-xs text-slate-400 mt-3">
+            <p className="text-xs text-[var(--ink-mut)] mt-3">
               Para sincronizar/manifestar, cada empresa precisa do arquivo .pfx (a chave no Windows não é
               exportável). Empresas da mesma raiz compartilham o mesmo .pfx.
             </p>
@@ -1167,7 +1214,7 @@ export default function Dashboard({
               ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
               : status.success === false
                 ? 'bg-red-50 border-red-200 text-red-700'
-                : 'bg-white border-slate-200 text-slate-600'
+                : 'bg-[var(--surface)] border-[var(--border)] text-[var(--ink-mut)]'
           }`}
         >
           <span>
@@ -1178,13 +1225,13 @@ export default function Dashboard({
 
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
           {/* Empresas */}
-          <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200">
-            <h2 className="text-base font-semibold text-slate-800 mb-3 pb-3 border-b border-slate-100">
+          <div className="bg-[var(--surface)] p-5 rounded-2xl shadow-sm border border-[var(--border)]">
+            <h2 className="text-base font-semibold text-[var(--ink)] mb-3 pb-3 border-b border-[var(--border)]">
               Empresas
             </h2>
 
             {cnpjs.length === 0 && !mostrarForm && (
-              <p className="text-sm text-slate-400 py-2">Nenhum CNPJ cadastrado.</p>
+              <p className="text-sm text-[var(--ink-mut)] py-2">Nenhum CNPJ cadastrado.</p>
             )}
 
             <ul className="space-y-2">
@@ -1194,18 +1241,18 @@ export default function Dashboard({
                   ? new Date(c.bloqueadoAte).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
                   : '';
                 return (
-                  <li key={c.id} className="rounded-xl border border-slate-100 p-3 hover:border-slate-200 hover:bg-[var(--surface-2)]/60 transition">
+                  <li key={c.id} className="rounded-xl border border-[var(--border)] p-3 hover:border-[var(--border)] hover:bg-[var(--surface-2)]/60 transition">
                     <div className="flex justify-between items-start gap-2">
                       <div className="min-w-0">
-                        <p className="font-semibold text-sm text-slate-800 truncate">{c.razaoSocial || 'Sem nome'}</p>
-                        <p className="text-xs text-slate-500 font-mono">{formatarCnpj(c.cnpj)}</p>
-                        <p className="text-[11px] text-slate-400 mt-0.5">
+                        <p className="font-semibold text-sm text-[var(--ink)] truncate">{c.razaoSocial || 'Sem nome'}</p>
+                        <p className="text-xs text-[var(--ink-mut)] font-mono">{formatarCnpj(c.cnpj)}</p>
+                        <p className="text-[11px] text-[var(--ink-mut)] mt-0.5">
                           {c.uf} · NSU {Number(c.ultimoNSU)} · {c._count.notas} nota(s)
                         </p>
                       </div>
                       <Badge tone={c.ativo ? 'green' : 'gray'}>{c.ativo ? 'ATIVO' : 'INATIVO'}</Badge>
                     </div>
-                    <p className="text-[11px] text-slate-500 mt-1.5 truncate" title={c.situacao}>
+                    <p className="text-[11px] text-[var(--ink-mut)] mt-1.5 truncate" title={c.situacao}>
                       {c.situacao}
                     </p>
                     <div className="flex gap-3 mt-2 text-xs">
@@ -1242,107 +1289,148 @@ export default function Dashboard({
             </ul>
 
             {podeAdministrar && (mostrarForm ? (
-              <form action={handleAdicionarCnpj} className="mt-4 space-y-2 border-t border-slate-100 pt-4">
+              <form action={handleAdicionarCnpj} className="mt-4 space-y-2 border-t border-[var(--border)] pt-4">
                 <input name="cnpj" placeholder="CNPJ (somente números)" required
-                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white text-slate-900 placeholder-slate-400 focus:ring-2 focus:ring-[var(--border-strong)] focus:border-[var(--accent)] outline-none" />
+                  className="w-full border border-[var(--border-strong)] rounded-lg px-3 py-2 text-sm bg-[var(--surface)] text-[var(--ink)] placeholder-[var(--ink-mut)] focus:ring-2 focus:ring-[var(--border-strong)] focus:border-[var(--accent)] outline-none" />
                 <input name="razaoSocial" placeholder="Razão Social (opcional)"
-                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white text-slate-900 placeholder-slate-400 focus:ring-2 focus:ring-[var(--border-strong)] focus:border-[var(--accent)] outline-none" />
+                  className="w-full border border-[var(--border-strong)] rounded-lg px-3 py-2 text-sm bg-[var(--surface)] text-[var(--ink)] placeholder-[var(--ink-mut)] focus:ring-2 focus:ring-[var(--border-strong)] focus:border-[var(--accent)] outline-none" />
                 <input name="uf" placeholder="UF (ex.: CE)" required maxLength={2}
-                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm uppercase bg-white text-slate-900 placeholder-slate-400 focus:ring-2 focus:ring-[var(--border-strong)] focus:border-[var(--accent)] outline-none" />
+                  className="w-full border border-[var(--border-strong)] rounded-lg px-3 py-2 text-sm uppercase bg-[var(--surface)] text-[var(--ink)] placeholder-[var(--ink-mut)] focus:ring-2 focus:ring-[var(--border-strong)] focus:border-[var(--accent)] outline-none" />
                 <div className="flex gap-2">
                   <button type="submit" disabled={pending}
                     className="flex-1 bg-[var(--accent)] hover:bg-[var(--accent)] text-white py-2 rounded-lg text-sm font-medium disabled:opacity-50">
                     Salvar
                   </button>
                   <button type="button" onClick={() => setMostrarForm(false)}
-                    className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 py-2 rounded-lg text-sm font-medium">
+                    className="flex-1 bg-[var(--surface-2)] hover:bg-[var(--surface-2)] text-[var(--ink)] py-2 rounded-lg text-sm font-medium">
                     Cancelar
                   </button>
                 </div>
               </form>
             ) : (
               <button onClick={() => setMostrarForm(true)}
-                className="mt-4 w-full border border-dashed border-slate-300 text-[var(--accent)] text-sm font-medium hover:bg-[var(--accent-soft)] hover:border-[var(--border-strong)] rounded-lg py-2 transition">
+                className="mt-4 w-full border border-dashed border-[var(--border-strong)] text-[var(--accent)] text-sm font-medium hover:bg-[var(--accent-soft)] hover:border-[var(--border-strong)] rounded-lg py-2 transition">
                 + Adicionar CNPJ
               </button>
             ))}
           </div>
 
           {/* Notas */}
-          <div className="lg:col-span-3 bg-white p-5 rounded-2xl shadow-sm border border-slate-200">
+          <div className="lg:col-span-3 bg-[var(--surface)] p-5 rounded-2xl shadow-sm border border-[var(--border)]">
             <AlertaDaes
               notas={notasAlerta}
               cnpjId={filtroCnpjId}
               onFiltrar={filtrarVencimentoDae}
             />
-            <div className="flex flex-wrap items-center gap-3 mb-4 pb-3 border-b border-slate-100">
-              <h2 className="text-base font-semibold text-slate-800 mr-auto">Notas Fiscais</h2>
-              <select
-                value={filtroCnpjId}
-                onChange={(e) => setFiltroCnpjId(e.target.value === 'todos' ? 'todos' : Number(e.target.value))}
-                className="border border-slate-300 rounded-lg px-3 py-1.5 text-sm bg-white text-slate-700 focus:ring-2 focus:ring-[var(--border-strong)] outline-none"
-              >
-                <option value="todos">Todas as empresas</option>
-                {cnpjs.map((c) => (
-                  <option key={c.id} value={c.id}>{c.razaoSocial || formatarCnpj(c.cnpj)}</option>
-                ))}
-              </select>
-              <select
-                value={filtroStatus}
-                onChange={(e) => setFiltroStatus(e.target.value as typeof filtroStatus)}
-                className="border border-slate-300 rounded-lg px-3 py-1.5 text-sm bg-white text-slate-700 focus:ring-2 focus:ring-[var(--border-strong)] outline-none"
-              >
-                <option value="todos">Todos os status</option>
-                <option value="RESUMO">Resumo</option>
-                <option value="COMPLETA">Completa</option>
-              </select>
-              <button
-                onClick={() => {
-                  setFiltroForaCe15SemDae(false);
-                  setFiltroDaeSitram((v) => (v === 'a-pagar' ? 'todos' : 'a-pagar'));
-                }}
-                title="Mostrar só notas com DAE a pagar (em aberto ou a gerar)"
-                className={`px-3 py-1.5 rounded-lg text-sm font-medium border transition ${
-                  filtroDaeSitram === 'a-pagar'
-                    ? 'bg-amber-500 border-amber-500 text-white'
-                    : 'border-amber-300 text-amber-700 hover:bg-amber-50'
-                }`}
-              >
-                💰 DAE a pagar
-              </button>
-              <button
-                onClick={alternarFiltroForaCe15SemDae}
-                title="Notas completas de emitentes fora do CE, emitidas há mais de 15 dias, sem DAE gerado e sem ICMS pago"
-                className={`px-3 py-1.5 rounded-lg text-sm font-medium border transition ${
-                  filtroForaCe15SemDae
-                    ? 'bg-red-600 border-red-600 text-white'
-                    : 'border-red-300 text-red-700 hover:bg-red-50'
-                }`}
-              >
-                Fora do CE +15 dias ({qtdForaCe15SemDae})
-              </button>
-              <button
-                onClick={() => setMostrarFiltros((v) => !v)}
-                className={`px-3 py-1.5 rounded-lg text-sm font-medium border transition ${
-                  mostrarFiltros || filtrosAtivos > 0
-                    ? 'bg-[var(--accent-soft)] border-[var(--border-strong)] text-[var(--accent)]'
-                    : 'border-slate-300 text-slate-600 hover:bg-[var(--surface-2)]'
-                }`}
-              >
-                🔍 Filtros{filtrosAtivos > 0 ? ` (${filtrosAtivos})` : ''}
-              </button>
+            <div className="mb-4 pb-3 border-b border-[var(--border)] space-y-3">
+              <div className="flex flex-wrap items-center gap-2.5">
+                <h2 className="text-base font-semibold text-[var(--ink)]">Notas Fiscais</h2>
+                <div className="relative flex-1 min-w-[220px]">
+                  <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--ink-mut)] text-sm">🔎</span>
+                  <input
+                    value={filtroNumero}
+                    onChange={(e) => setFiltroNumero(e.target.value)}
+                    inputMode="numeric"
+                    placeholder="Buscar pelo número da NF (ou chave)…"
+                    className="w-full border border-[var(--border-strong)] rounded-lg pl-9 pr-8 py-2 text-sm bg-[var(--surface)] text-[var(--ink)] placeholder-[var(--ink-mut)] focus:ring-2 focus:ring-[var(--border-strong)] focus:border-[var(--accent)] outline-none"
+                  />
+                  {filtroNumero && (
+                    <button
+                      type="button"
+                      onClick={() => setFiltroNumero('')}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--ink-mut)] hover:text-[var(--ink)] text-sm"
+                      aria-label="Limpar busca"
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
+                <select
+                  value={filtroCnpjId}
+                  onChange={(e) => setFiltroCnpjId(e.target.value === 'todos' ? 'todos' : Number(e.target.value))}
+                  className="border border-[var(--border-strong)] rounded-lg px-3 py-2 text-sm bg-[var(--surface)] text-[var(--ink)] focus:ring-2 focus:ring-[var(--border-strong)] outline-none"
+                >
+                  <option value="todos">Todas as empresas</option>
+                  {cnpjs.map((c) => (
+                    <option key={c.id} value={c.id}>{c.razaoSocial || formatarCnpj(c.cnpj)}</option>
+                  ))}
+                </select>
+                <select
+                  value={filtroStatus}
+                  onChange={(e) => setFiltroStatus(e.target.value as typeof filtroStatus)}
+                  className="border border-[var(--border-strong)] rounded-lg px-3 py-2 text-sm bg-[var(--surface)] text-[var(--ink)] focus:ring-2 focus:ring-[var(--border-strong)] outline-none"
+                >
+                  <option value="todos">Todos os status</option>
+                  <option value="RESUMO">Resumo</option>
+                  <option value="COMPLETA">Completa</option>
+                </select>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  onClick={() => {
+                    setFiltroForaCe15SemDae(false);
+                    setFiltroDaeSitram((v) => (v === 'a-pagar' ? 'todos' : 'a-pagar'));
+                  }}
+                  title="Mostrar só notas com DAE a pagar (em aberto ou a gerar)"
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium border transition ${
+                    filtroDaeSitram === 'a-pagar'
+                      ? 'text-white'
+                      : 'bg-[var(--surface)] hover:bg-[var(--surface-2)]'
+                  }`}
+                  style={filtroDaeSitram === 'a-pagar'
+                    ? { background: 'var(--warn)', borderColor: 'var(--warn)' }
+                    : { color: 'var(--warn)', borderColor: 'color-mix(in srgb, var(--warn) 40%, var(--border))' }}
+                >
+                  <span className="w-1.5 h-1.5 rounded-full" style={{ background: filtroDaeSitram === 'a-pagar' ? '#fff' : 'var(--warn)' }} />
+                  DAE a pagar
+                </button>
+                <button
+                  onClick={alternarFiltroForaCe15SemDae}
+                  title="Notas completas de emitentes fora do CE, emitidas há mais de 15 dias, sem DAE gerado e sem ICMS pago"
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium border transition ${
+                    filtroForaCe15SemDae ? 'text-white' : 'bg-[var(--surface)] hover:bg-[var(--surface-2)]'
+                  }`}
+                  style={filtroForaCe15SemDae
+                    ? { background: 'var(--crit)', borderColor: 'var(--crit)' }
+                    : { color: 'var(--crit)', borderColor: 'color-mix(in srgb, var(--crit) 40%, var(--border))' }}
+                >
+                  <span className="w-1.5 h-1.5 rounded-full" style={{ background: filtroForaCe15SemDae ? '#fff' : 'var(--crit)' }} />
+                  Fora do CE +15 dias · {qtdForaCe15SemDae}
+                </button>
+                <button
+                  onClick={() => setMostrarFiltros((v) => !v)}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium border transition ${
+                    mostrarFiltros || filtrosAtivos > 0
+                      ? 'bg-[var(--accent)] border-[var(--accent)] text-[var(--accent-ink)]'
+                      : 'border-[var(--border-strong)] text-[var(--ink)] bg-[var(--surface)] hover:bg-[var(--surface-2)]'
+                  }`}
+                >
+                  Filtros{filtrosAtivos > 0 ? ` · ${filtrosAtivos}` : ''}
+                </button>
+                {(algumFiltroAtivo || mostrarFiltros) && (
+                  <button
+                    onClick={limparFiltrosAvancados}
+                    className="px-3 py-1.5 rounded-full text-sm font-medium text-[var(--ink-mut)] hover:text-[var(--ink)] hover:bg-[var(--surface-2)] transition"
+                  >
+                    Limpar tudo
+                  </button>
+                )}
+                {carregandoTodas && (
+                  <span className="text-xs text-[var(--ink-mut)]">carregando todas as notas…</span>
+                )}
+              </div>
             </div>
 
             {mostrarFiltros && (
-              <div className="mb-4 p-4 bg-[var(--surface-2)] border border-slate-200 rounded-xl grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+              <div className="mb-4 p-4 bg-[var(--surface-2)] border border-[var(--border)] rounded-xl grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
                 <div>
-                  <label className="block text-xs font-medium text-slate-500 mb-1">Emitente (nome ou CNPJ)</label>
+                  <label className="block text-xs font-medium text-[var(--ink-mut)] mb-1">Emitente (nome ou CNPJ)</label>
                   <input
                     value={filtroEmitente}
                     onChange={(e) => setFiltroEmitente(e.target.value)}
                     placeholder="Buscar emitente…"
                     list="sugestoes-emitente"
-                    className="w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm bg-white text-slate-900 placeholder-slate-400 focus:ring-2 focus:ring-[var(--border-strong)] outline-none"
+                    className="w-full border border-[var(--border-strong)] rounded-lg px-3 py-1.5 text-sm bg-[var(--surface)] text-[var(--ink)] placeholder-[var(--ink-mut)] focus:ring-2 focus:ring-[var(--border-strong)] outline-none"
                   />
                   <datalist id="sugestoes-emitente">
                     {sugestoesEmitente.map((s) => (
@@ -1351,13 +1439,13 @@ export default function Dashboard({
                   </datalist>
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-slate-500 mb-1">Destinatário (nome ou CNPJ)</label>
+                  <label className="block text-xs font-medium text-[var(--ink-mut)] mb-1">Destinatário (nome ou CNPJ)</label>
                   <input
                     value={filtroDestinatario}
                     onChange={(e) => setFiltroDestinatario(e.target.value)}
                     placeholder="Buscar destinatário…"
                     list="sugestoes-destinatario"
-                    className="w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm bg-white text-slate-900 placeholder-slate-400 focus:ring-2 focus:ring-[var(--border-strong)] outline-none"
+                    className="w-full border border-[var(--border-strong)] rounded-lg px-3 py-1.5 text-sm bg-[var(--surface)] text-[var(--ink)] placeholder-[var(--ink-mut)] focus:ring-2 focus:ring-[var(--border-strong)] outline-none"
                   />
                   <datalist id="sugestoes-destinatario">
                     {sugestoesDestinatario.map((s) => (
@@ -1366,7 +1454,7 @@ export default function Dashboard({
                   </datalist>
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-slate-500 mb-1">Etiqueta</label>
+                  <label className="block text-xs font-medium text-[var(--ink-mut)] mb-1">Etiqueta</label>
                   <div className="flex flex-wrap gap-1.5">
                     <button
                       type="button"
@@ -1374,7 +1462,7 @@ export default function Dashboard({
                       className={`px-2.5 py-1 rounded-full text-xs font-medium border transition ${
                         filtroEtiquetas.includes('sem-etiqueta')
                           ? 'bg-[var(--accent)] border-[var(--accent)] text-white'
-                          : 'bg-white border-slate-300 text-slate-600 hover:border-[var(--border-strong)] hover:bg-[var(--accent-soft)]'
+                          : 'bg-[var(--surface)] border-[var(--border-strong)] text-[var(--ink-mut)] hover:border-[var(--border-strong)] hover:bg-[var(--accent-soft)]'
                       }`}
                     >
                       Sem etiqueta
@@ -1387,7 +1475,7 @@ export default function Dashboard({
                         className={`px-2.5 py-1 rounded-full text-xs font-medium border transition ${
                           filtroEtiquetas.includes(tag)
                             ? 'bg-[var(--accent)] border-[var(--accent)] text-white'
-                            : 'bg-white border-slate-300 text-slate-600 hover:border-[var(--border-strong)] hover:bg-[var(--accent-soft)]'
+                            : 'bg-[var(--surface)] border-[var(--border-strong)] text-[var(--ink-mut)] hover:border-[var(--border-strong)] hover:bg-[var(--accent-soft)]'
                         }`}
                       >
                         {tag}
@@ -1396,26 +1484,26 @@ export default function Dashboard({
                   </div>
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-slate-500 mb-1">Valor da NF (R$)</label>
+                  <label className="block text-xs font-medium text-[var(--ink-mut)] mb-1">Valor da NF (R$)</label>
                   <div className="flex gap-2">
                     <input
                       type="number"
                       value={filtroValorMin}
                       onChange={(e) => setFiltroValorMin(e.target.value)}
                       placeholder="Mín."
-                      className="w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm bg-white text-slate-900 placeholder-slate-400 focus:ring-2 focus:ring-[var(--border-strong)] outline-none"
+                      className="w-full border border-[var(--border-strong)] rounded-lg px-3 py-1.5 text-sm bg-[var(--surface)] text-[var(--ink)] placeholder-[var(--ink-mut)] focus:ring-2 focus:ring-[var(--border-strong)] outline-none"
                     />
                     <input
                       type="number"
                       value={filtroValorMax}
                       onChange={(e) => setFiltroValorMax(e.target.value)}
                       placeholder="Máx."
-                      className="w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm bg-white text-slate-900 placeholder-slate-400 focus:ring-2 focus:ring-[var(--border-strong)] outline-none"
+                      className="w-full border border-[var(--border-strong)] rounded-lg px-3 py-1.5 text-sm bg-[var(--surface)] text-[var(--ink)] placeholder-[var(--ink-mut)] focus:ring-2 focus:ring-[var(--border-strong)] outline-none"
                     />
                   </div>
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-slate-500 mb-1">Qtd. de itens</label>
+                  <label className="block text-xs font-medium text-[var(--ink-mut)] mb-1">Qtd. de itens</label>
                   <div className="flex gap-2">
                     <input
                       type="number"
@@ -1423,7 +1511,7 @@ export default function Dashboard({
                       value={filtroItensMin}
                       onChange={(e) => setFiltroItensMin(e.target.value)}
                       placeholder="Mín."
-                      className="w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm bg-white text-slate-900 placeholder-slate-400 focus:ring-2 focus:ring-[var(--border-strong)] outline-none"
+                      className="w-full border border-[var(--border-strong)] rounded-lg px-3 py-1.5 text-sm bg-[var(--surface)] text-[var(--ink)] placeholder-[var(--ink-mut)] focus:ring-2 focus:ring-[var(--border-strong)] outline-none"
                     />
                     <input
                       type="number"
@@ -1431,35 +1519,35 @@ export default function Dashboard({
                       value={filtroItensMax}
                       onChange={(e) => setFiltroItensMax(e.target.value)}
                       placeholder="Máx."
-                      className="w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm bg-white text-slate-900 placeholder-slate-400 focus:ring-2 focus:ring-[var(--border-strong)] outline-none"
+                      className="w-full border border-[var(--border-strong)] rounded-lg px-3 py-1.5 text-sm bg-[var(--surface)] text-[var(--ink)] placeholder-[var(--ink-mut)] focus:ring-2 focus:ring-[var(--border-strong)] outline-none"
                     />
                   </div>
-                  <p className="text-[11px] text-slate-400 mt-1">Disponível apenas para notas COMPLETA.</p>
+                  <p className="text-[11px] text-[var(--ink-mut)] mt-1">Disponível apenas para notas COMPLETA.</p>
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-slate-500 mb-1">Data de emissão (intervalo)</label>
+                  <label className="block text-xs font-medium text-[var(--ink-mut)] mb-1">Data de emissão (intervalo)</label>
                   <div className="flex gap-2">
                     <input
                       type="date"
                       value={filtroDataInicio}
                       onChange={(e) => setFiltroDataInicio(e.target.value)}
-                      className="w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm bg-white text-slate-900 focus:ring-2 focus:ring-[var(--border-strong)] outline-none"
+                      className="w-full border border-[var(--border-strong)] rounded-lg px-3 py-1.5 text-sm bg-[var(--surface)] text-[var(--ink)] focus:ring-2 focus:ring-[var(--border-strong)] outline-none"
                     />
                     <input
                       type="date"
                       value={filtroDataFim}
                       onChange={(e) => setFiltroDataFim(e.target.value)}
-                      className="w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm bg-white text-slate-900 focus:ring-2 focus:ring-[var(--border-strong)] outline-none"
+                      className="w-full border border-[var(--border-strong)] rounded-lg px-3 py-1.5 text-sm bg-[var(--surface)] text-[var(--ink)] focus:ring-2 focus:ring-[var(--border-strong)] outline-none"
                     />
                   </div>
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-slate-500 mb-1">Mês / Ano</label>
+                  <label className="block text-xs font-medium text-[var(--ink-mut)] mb-1">Mês / Ano</label>
                   <div className="flex gap-2">
                     <select
                       value={filtroMes}
                       onChange={(e) => setFiltroMes(e.target.value)}
-                      className="w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm bg-white text-slate-700 focus:ring-2 focus:ring-[var(--border-strong)] outline-none"
+                      className="w-full border border-[var(--border-strong)] rounded-lg px-3 py-1.5 text-sm bg-[var(--surface)] text-[var(--ink)] focus:ring-2 focus:ring-[var(--border-strong)] outline-none"
                     >
                       <option value="">Todos os meses</option>
                       {['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'].map((m, i) => (
@@ -1470,7 +1558,7 @@ export default function Dashboard({
                       value={filtroAno}
                       onChange={(e) => setFiltroAno(e.target.value)}
                       disabled={carregandoAno}
-                      className="w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm bg-white text-slate-700 focus:ring-2 focus:ring-[var(--border-strong)] outline-none disabled:opacity-60"
+                      className="w-full border border-[var(--border-strong)] rounded-lg px-3 py-1.5 text-sm bg-[var(--surface)] text-[var(--ink)] focus:ring-2 focus:ring-[var(--border-strong)] outline-none disabled:opacity-60"
                     >
                       <option value="">Todos (2000 recentes)</option>
                       {anosDisponiveis.map((ano) => (
@@ -1481,11 +1569,11 @@ export default function Dashboard({
                   </div>
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-slate-500 mb-1">Situação SEFAZ</label>
+                  <label className="block text-xs font-medium text-[var(--ink-mut)] mb-1">Situação SEFAZ</label>
                   <select
                     value={filtroSituacao}
                     onChange={(e) => setFiltroSituacao(e.target.value as typeof filtroSituacao)}
-                    className="w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm bg-white text-slate-700 focus:ring-2 focus:ring-[var(--border-strong)] outline-none"
+                    className="w-full border border-[var(--border-strong)] rounded-lg px-3 py-1.5 text-sm bg-[var(--surface)] text-[var(--ink)] focus:ring-2 focus:ring-[var(--border-strong)] outline-none"
                   >
                     <option value="todas">Todas</option>
                     <option value="AUTORIZADA">Autorizada</option>
@@ -1494,11 +1582,11 @@ export default function Dashboard({
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-slate-500 mb-1">DAE SITRAM</label>
+                  <label className="block text-xs font-medium text-[var(--ink-mut)] mb-1">DAE SITRAM</label>
                   <select
                     value={filtroDaeSitram}
                     onChange={(e) => setFiltroDaeSitram(e.target.value as FiltroDaeSitram)}
-                    className="w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm bg-white text-slate-700 focus:ring-2 focus:ring-[var(--border-strong)] outline-none"
+                    className="w-full border border-[var(--border-strong)] rounded-lg px-3 py-1.5 text-sm bg-[var(--surface)] text-[var(--ink)] focus:ring-2 focus:ring-[var(--border-strong)] outline-none"
                   >
                     <option value="todos">Todos</option>
                     <option value="consultado">Consultado</option>
@@ -1511,24 +1599,24 @@ export default function Dashboard({
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-slate-500 mb-1">Vencimento do DAE (intervalo)</label>
+                  <label className="block text-xs font-medium text-[var(--ink-mut)] mb-1">Vencimento do DAE (intervalo)</label>
                   <div className="flex gap-2">
                     <input
                       type="date"
                       value={filtroDaeVencInicio}
                       onChange={(e) => setFiltroDaeVencInicio(e.target.value)}
-                      className="w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm bg-white text-slate-900 focus:ring-2 focus:ring-[var(--border-strong)] outline-none"
+                      className="w-full border border-[var(--border-strong)] rounded-lg px-3 py-1.5 text-sm bg-[var(--surface)] text-[var(--ink)] focus:ring-2 focus:ring-[var(--border-strong)] outline-none"
                     />
                     <input
                       type="date"
                       value={filtroDaeVencFim}
                       onChange={(e) => setFiltroDaeVencFim(e.target.value)}
-                      className="w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm bg-white text-slate-900 focus:ring-2 focus:ring-[var(--border-strong)] outline-none"
+                      className="w-full border border-[var(--border-strong)] rounded-lg px-3 py-1.5 text-sm bg-[var(--surface)] text-[var(--ink)] focus:ring-2 focus:ring-[var(--border-strong)] outline-none"
                     />
                   </div>
                 </div>
                 <div className="lg:col-span-2">
-                  <label className="block text-xs font-medium text-slate-500 mb-1">Excluir emitente (nome ou CNPJ)</label>
+                  <label className="block text-xs font-medium text-[var(--ink-mut)] mb-1">Excluir emitente (nome ou CNPJ)</label>
                   <div className="flex gap-2">
                     <input
                       value={excluirEmitenteInput}
@@ -1541,13 +1629,13 @@ export default function Dashboard({
                       }}
                       placeholder="Não mostrar notas deste emitente…"
                       list="sugestoes-emitente"
-                      className="w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm bg-white text-slate-900 placeholder-slate-400 focus:ring-2 focus:ring-[var(--border-strong)] outline-none"
+                      className="w-full border border-[var(--border-strong)] rounded-lg px-3 py-1.5 text-sm bg-[var(--surface)] text-[var(--ink)] placeholder-[var(--ink-mut)] focus:ring-2 focus:ring-[var(--border-strong)] outline-none"
                     />
                     <button
                       type="button"
                       onClick={adicionarExclusaoEmitente}
                       disabled={!excluirEmitenteInput.trim()}
-                      className="shrink-0 border border-slate-300 text-slate-600 text-sm font-medium hover:bg-slate-100 rounded-lg px-3 py-1.5 transition disabled:opacity-40"
+                      className="shrink-0 border border-[var(--border-strong)] text-[var(--ink-mut)] text-sm font-medium hover:bg-[var(--surface-2)] rounded-lg px-3 py-1.5 transition disabled:opacity-40"
                     >
                       Excluir
                     </button>
@@ -1577,7 +1665,7 @@ export default function Dashboard({
                   <button
                     onClick={limparFiltrosAvancados}
                     disabled={filtrosAtivos === 0}
-                    className="w-full border border-dashed border-slate-300 text-slate-500 text-sm font-medium hover:bg-slate-100 hover:border-slate-400 rounded-lg py-1.5 transition disabled:opacity-40"
+                    className="w-full border border-dashed border-[var(--border-strong)] text-[var(--ink-mut)] text-sm font-medium hover:bg-[var(--surface-2)] hover:border-slate-400 rounded-lg py-1.5 transition disabled:opacity-40"
                   >
                     Limpar filtros avançados
                   </button>
@@ -1601,12 +1689,12 @@ export default function Dashboard({
               </div>
             )}
 
-            <div className="flex justify-between text-sm text-slate-500 mb-2 px-1">
+            <div className="flex justify-between text-sm text-[var(--ink-mut)] mb-2 px-1">
               <span>
                 {notasFiltradas.length} nota(s)
                 {anoCarregado ? ` de ${anoCarregado}` : ''}
               </span>
-              <span>Total: <strong className="text-slate-800">{moeda(totalFiltrado)}</strong></span>
+              <span>Total: <strong className="text-[var(--ink)]">{moeda(totalFiltrado)}</strong></span>
             </div>
 
             {notasManifestaveis.length > 0 && (
@@ -1653,7 +1741,7 @@ export default function Dashboard({
               </div>
             )}
 
-            <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+            <div className="overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--surface)]">
               <table className="w-full table-fixed text-left text-sm">
                 <colgroup>
                   <col className="w-[56px]" />
@@ -1665,7 +1753,7 @@ export default function Dashboard({
                   <col className="w-[160px]" />
                 </colgroup>
                 <thead>
-                  <tr className="bg-[var(--surface-2)] text-slate-500 text-xs uppercase tracking-wide border-b border-slate-200">
+                  <tr className="bg-[var(--surface-2)] text-[var(--ink-mut)] text-xs uppercase tracking-wide border-b border-[var(--border)]">
                     <th className="px-3 py-2 font-medium"></th>
                     <th className="px-3 py-2 font-medium">NF</th>
                     <th className="px-3 py-2 font-medium">Emitente</th>
@@ -1675,10 +1763,10 @@ export default function Dashboard({
                     <th className="px-3 py-2 font-medium">Status</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-100">
+                <tbody className="divide-y divide-[var(--border)]">
                   {notasFiltradas.length === 0 && (
                     <tr>
-                      <td colSpan={7} className="py-10 text-center text-slate-400">
+                      <td colSpan={7} className="py-10 text-center text-[var(--ink-mut)]">
                         Nenhuma nota para o filtro selecionado.
                       </td>
                     </tr>
@@ -1698,7 +1786,7 @@ export default function Dashboard({
               </table>
             </div>
 
-            <div className="mt-3 flex flex-wrap items-center justify-between gap-3 text-sm text-slate-500">
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-3 text-sm text-[var(--ink-mut)]">
               <span>
                 Mostrando {notasFiltradas.length === 0 ? 0 : (paginaClienteSegura - 1) * porPagina + 1}
                 {' '}a {Math.min(paginaClienteSegura * porPagina, notasFiltradas.length)} de {notasFiltradas.length}
@@ -1708,7 +1796,7 @@ export default function Dashboard({
                   <button
                     onClick={() => router.push(paginaAtual <= 2 ? '/' : `/?page=${paginaAtual - 1}`)}
                     disabled={paginaAtual <= 1}
-                    className="rounded-lg border border-slate-300 px-3 py-1.5 text-slate-700 hover:bg-slate-100 disabled:opacity-40"
+                    className="rounded-lg border border-[var(--border-strong)] px-3 py-1.5 text-[var(--ink)] hover:bg-[var(--surface-2)] disabled:opacity-40"
                   >
                     Anterior
                   </button>
@@ -1718,7 +1806,7 @@ export default function Dashboard({
                   <button
                     onClick={() => router.push(`/?page=${paginaAtual + 1}`)}
                     disabled={paginaAtual >= totalPaginasServidor}
-                    className="rounded-lg border border-slate-300 px-3 py-1.5 text-slate-700 hover:bg-slate-100 disabled:opacity-40"
+                    className="rounded-lg border border-[var(--border-strong)] px-3 py-1.5 text-[var(--ink)] hover:bg-[var(--surface-2)] disabled:opacity-40"
                   >
                     Próxima
                   </button>
@@ -1728,7 +1816,7 @@ export default function Dashboard({
                   <button
                     onClick={() => setPaginaCliente((p) => Math.max(1, p - 1))}
                     disabled={paginaClienteSegura <= 1}
-                    className="rounded-lg border border-slate-300 px-3 py-1.5 text-slate-700 hover:bg-slate-100 disabled:opacity-40"
+                    className="rounded-lg border border-[var(--border-strong)] px-3 py-1.5 text-[var(--ink)] hover:bg-[var(--surface-2)] disabled:opacity-40"
                   >
                     Anterior
                   </button>
@@ -1738,7 +1826,7 @@ export default function Dashboard({
                   <button
                     onClick={() => setPaginaCliente((p) => Math.min(totalPaginasCliente, p + 1))}
                     disabled={paginaClienteSegura >= totalPaginasCliente}
-                    className="rounded-lg border border-slate-300 px-3 py-1.5 text-slate-700 hover:bg-slate-100 disabled:opacity-40"
+                    className="rounded-lg border border-[var(--border-strong)] px-3 py-1.5 text-[var(--ink)] hover:bg-[var(--surface-2)] disabled:opacity-40"
                   >
                     Próxima
                   </button>
@@ -1748,7 +1836,7 @@ export default function Dashboard({
           </div>
         </div>
 
-        <p className="text-center text-xs text-slate-400 mt-8">
+        <p className="text-center text-xs text-[var(--ink-mut)] mt-8">
           DanfeCollector · NF-e direto da SEFAZ
         </p>
       </div>
@@ -1773,7 +1861,7 @@ function Badge({ tone, children }: { tone: 'green' | 'amber' | 'gray' | 'blue' |
   const tones: Record<string, string> = {
     green: 'bg-emerald-100 text-emerald-700',
     amber: 'bg-amber-100 text-amber-700',
-    gray: 'bg-slate-200 text-slate-500',
+    gray: 'bg-[var(--surface-2)] text-[var(--ink-mut)]',
     blue: 'bg-[var(--accent-soft)] text-[var(--accent)]',
     sky: 'bg-sky-100 text-sky-700',
     orange: 'bg-orange-100 text-orange-700',
@@ -1869,6 +1957,18 @@ function AlertaDaes({
     return [...mapa.entries()];
   }, [itens]);
 
+  const [aberto, setAberto] = useState(true);
+  useEffect(() => {
+    const v = typeof window !== 'undefined' ? localStorage.getItem('danfe-alerta-dae-aberto') : null;
+    if (v !== null) setAberto(v === '1');
+  }, []);
+  function alternarAberto() {
+    setAberto((a) => {
+      try { localStorage.setItem('danfe-alerta-dae-aberto', a ? '0' : '1'); } catch {}
+      return !a;
+    });
+  }
+
   if (itens.length === 0) return null;
 
   const vencidos = itens.filter((item) => item.dias !== null && item.dias < 0);
@@ -1882,8 +1982,8 @@ function AlertaDaes({
       <div className="border-b border-amber-200 bg-amber-100/70 px-4 py-3">
         <div className="flex flex-wrap items-center gap-3">
           <div className="mr-auto">
-            <h2 className="font-bold text-slate-900">Alerta de DAE a pagar</h2>
-            <p className="text-xs text-slate-600">{itens.length} pendência(s) • {moeda(totalAberto)} em aberto</p>
+            <h2 className="font-bold text-[var(--ink)]">Alerta de DAE a pagar</h2>
+            <p className="text-xs text-[var(--ink-mut)]">{itens.length} pendência(s) • {moeda(totalAberto)} em aberto</p>
           </div>
           {vencidos.length > 0 && (
             <button
@@ -1909,7 +2009,7 @@ function AlertaDaes({
             <button
               type="button"
               onClick={() => onFiltrar(deslocarData(1), deslocarData(7))}
-              className="rounded-lg border border-amber-300 bg-white px-3 py-2 text-left text-amber-800 shadow-sm"
+              className="rounded-lg border border-amber-300 bg-[var(--surface)] px-3 py-2 text-left text-amber-800 shadow-sm"
             >
               <span className="block text-[10px] font-bold uppercase">Próximos 7 dias</span>
               <span className="text-lg font-black">{proximos.length}</span>
@@ -1918,13 +2018,22 @@ function AlertaDaes({
           <button
             type="button"
             onClick={() => onFiltrar('', '')}
-            className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm"
+            className="rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm font-semibold text-[var(--ink)] shadow-sm"
           >
             Ver todos
+          </button>
+          <button
+            type="button"
+            onClick={alternarAberto}
+            title={aberto ? 'Minimizar lista' : 'Expandir lista'}
+            className="rounded-lg border border-amber-300 bg-[var(--surface)] px-3 py-2 text-sm font-semibold text-amber-800 shadow-sm hover:bg-amber-50"
+          >
+            {aberto ? '▾ Minimizar' : '▸ Expandir'}
           </button>
         </div>
       </div>
 
+      {aberto && (
       <div className="max-h-80 divide-y divide-amber-200 overflow-y-auto">
         {grupos.map(([dataGrupo, itensGrupo]) => {
           const diasGrupo = itensGrupo[0]?.dias ?? null;
@@ -1940,29 +2049,29 @@ function AlertaDaes({
                 : `Vence em ${diasGrupo} dia(s)`;
 
           return (
-            <div key={dataGrupo} className={vencido ? 'bg-red-50' : venceHoje ? 'bg-orange-50' : 'bg-white/70'}>
+            <div key={dataGrupo} className={vencido ? 'bg-red-50' : venceHoje ? 'bg-orange-50' : 'bg-[var(--surface-2)]'}>
               <button
                 type="button"
                 onClick={() => dataGrupo === 'SEM_DATA' ? onFiltrar('', '') : onFiltrar(dataGrupo, dataGrupo)}
                 className="flex w-full flex-wrap items-center gap-3 px-4 py-2 text-left hover:bg-black/[0.03]"
               >
-                <span className="font-bold text-slate-800">
+                <span className="font-bold text-[var(--ink)]">
                   {dataGrupo === 'SEM_DATA' ? 'Sem vencimento informado' : data(`${dataGrupo}T12:00:00`)}
                 </span>
                 <Badge tone={vencido ? 'red' : venceHoje ? 'orange' : 'amber'}>{rotuloPrazo}</Badge>
-                <span className="ml-auto text-sm font-bold text-slate-700">
+                <span className="ml-auto text-sm font-bold text-[var(--ink)]">
                   {itensGrupo.length} DAE(s) • {moeda(valorGrupo)}
                 </span>
               </button>
               <div className="grid gap-2 px-4 pb-3 md:grid-cols-2">
                 {itensGrupo.map((item) => (
-                  <div key={item.id} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs shadow-sm">
+                  <div key={item.id} className="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-xs shadow-sm">
                     <div className="flex items-center gap-2">
-                      <strong className="text-slate-800">NF {item.nota.numero || item.numeroNota || '—'}</strong>
+                      <strong className="text-[var(--ink)]">NF {item.nota.numero || item.numeroNota || '—'}</strong>
                       <Badge tone="indigo">{item.classificacao}</Badge>
-                      <strong className="ml-auto text-slate-800">{moeda(item.lancamento?.valorAberto ?? null)}</strong>
+                      <strong className="ml-auto text-[var(--ink)]">{moeda(item.lancamento?.valorAberto ?? null)}</strong>
                     </div>
-                    <p className="mt-1 truncate text-slate-500" title={item.nota.emitenteNome || ''}>
+                    <p className="mt-1 truncate text-[var(--ink-mut)]" title={item.nota.emitenteNome || ''}>
                       {item.nota.emitenteNome || 'Emitente não informado'}
                     </p>
                   </div>
@@ -1972,6 +2081,7 @@ function AlertaDaes({
           );
         })}
       </div>
+      )}
     </section>
   );
 }
@@ -2001,7 +2111,7 @@ function CompactFragmentNota({
       <tr className={`cursor-pointer transition ${aberta ? 'bg-[var(--accent-soft)]/60' : 'hover:bg-[var(--surface-2)]'}`} onClick={onToggle}>
         <td className="px-3 py-3 align-top" onClick={(e) => e.stopPropagation()}>
           <div className="flex items-center gap-2">
-            <span className="text-slate-400 text-sm">{aberta ? 'v' : '>'}</span>
+            <span className="text-[var(--ink-mut)] text-sm">{aberta ? 'v' : '>'}</span>
             {selecionavel && (
               <input
                 type="checkbox"
@@ -2013,8 +2123,8 @@ function CompactFragmentNota({
           </div>
         </td>
         <td className="px-3 py-3 align-top">
-          <p className="font-medium text-slate-700 whitespace-nowrap">{data(nota.emitidaEm)}</p>
-          <p className="text-xs text-slate-400">NF {nota.numero || dae.numeroNota || '-'}</p>
+          <p className="font-medium text-[var(--ink)] whitespace-nowrap">{data(nota.emitidaEm)}</p>
+          <p className="text-xs text-[var(--ink-mut)]">NF {nota.numero || dae.numeroNota || '-'}</p>
           {nota.tipoOperacao && (
             <div className="mt-1">
               <Badge tone={nota.tipoOperacao === 'Entrada' ? 'sky' : 'orange'}>{nota.tipoOperacao}</Badge>
@@ -2022,24 +2132,24 @@ function CompactFragmentNota({
           )}
         </td>
         <td className="px-3 py-3 align-top min-w-0">
-          <p className="font-medium text-slate-800 leading-snug line-clamp-2" title={nota.emitenteNome || ''}>
+          <p className="font-medium text-[var(--ink)] leading-snug line-clamp-2" title={nota.emitenteNome || ''}>
             {nota.emitenteNome || '-'}
           </p>
-          <p className="text-xs text-slate-400 font-mono truncate">{formatarCnpj(nota.emitenteCnpj)}</p>
-          <p className="text-xs text-slate-400 truncate">{nota.naturezaOp || ''}</p>
+          <p className="text-xs text-[var(--ink-mut)] font-mono truncate">{formatarCnpj(nota.emitenteCnpj)}</p>
+          <p className="text-xs text-[var(--ink-mut)] truncate">{nota.naturezaOp || ''}</p>
         </td>
         <td className="px-3 py-3 align-top text-right">
-          <p className="font-semibold text-slate-800 whitespace-nowrap">{moeda(nota.valorTotal)}</p>
-          <p className="text-xs text-slate-500 whitespace-nowrap">Frete {moeda(nota.valorFrete)}</p>
-          <p className="text-xs text-slate-400">{nota.qtdItens ?? '-'} item(ns)</p>
+          <p className="font-semibold text-[var(--ink)] whitespace-nowrap">{moeda(nota.valorTotal)}</p>
+          <p className="text-xs text-[var(--ink-mut)] whitespace-nowrap">Frete {moeda(nota.valorFrete)}</p>
+          <p className="text-xs text-[var(--ink-mut)]">{nota.qtdItens ?? '-'} item(ns)</p>
         </td>
         <td className="px-3 py-3 align-top min-w-0">
-          <p className="text-slate-700 truncate" title={nota.transportadoraNome || nota.modalidadeFrete || ''}>
+          <p className="text-[var(--ink)] truncate" title={nota.transportadoraNome || nota.modalidadeFrete || ''}>
             {nota.transportadoraNome || nota.modalidadeFrete || '-'}
           </p>
-          <p className="text-xs text-slate-400 truncate">{nota.modalidadeFrete || '-'}</p>
+          <p className="text-xs text-[var(--ink-mut)] truncate">{nota.modalidadeFrete || '-'}</p>
           {nota.transportadoraCnpj && (
-            <p className="text-xs text-slate-400 font-mono truncate">{formatarCnpj(nota.transportadoraCnpj)}</p>
+            <p className="text-xs text-[var(--ink-mut)] font-mono truncate">{formatarCnpj(nota.transportadoraCnpj)}</p>
           )}
         </td>
         <td className="px-3 py-3 align-top">
@@ -2057,19 +2167,19 @@ function CompactFragmentNota({
           </div>
           {lancamentoDestaque ? (
             <div className="mt-1">
-              <p className="text-xs font-medium text-slate-600">
+              <p className="text-xs font-medium text-[var(--ink-mut)]">
                 {statusDae === 'PAGO' ? 'Pago' : 'A pagar'}{' '}
                 {moeda(statusDae === 'PAGO' ? lancamentoDestaque.valorPago : lancamentoDestaque.valorAberto)}
               </p>
               {lancamentoDestaque.vencimento && (
-                <p className={`text-xs ${!lancamentoDestaque.pago && diasParaVencer !== null && diasParaVencer < 0 ? 'font-semibold text-red-600' : 'text-slate-400'}`}>
+                <p className={`text-xs ${!lancamentoDestaque.pago && diasParaVencer !== null && diasParaVencer < 0 ? 'font-semibold text-red-600' : 'text-[var(--ink-mut)]'}`}>
                   Vence {data(lancamentoDestaque.vencimento)}
                   {!lancamentoDestaque.pago && diasParaVencer !== null && diasParaVencer < 0 ? ' • VENCIDO' : ''}
                 </p>
               )}
             </div>
           ) : nota.sitramSituacao && (
-            <p className="mt-1 text-xs text-slate-400 truncate" title={nota.sitramSituacao}>{nota.sitramSituacao}</p>
+            <p className="mt-1 text-xs text-[var(--ink-mut)] truncate" title={nota.sitramSituacao}>{nota.sitramSituacao}</p>
           )}
         </td>
         <td className="px-3 py-3 align-top">
@@ -2123,34 +2233,34 @@ function FragmentNota({
             />
           )}
         </td>
-        <td className="py-3 text-slate-400 text-center">{aberta ? '▾' : '▸'}</td>
-        <td className="py-3 whitespace-nowrap text-slate-600">{data(nota.emitidaEm)}</td>
+        <td className="py-3 text-[var(--ink-mut)] text-center">{aberta ? '▾' : '▸'}</td>
+        <td className="py-3 whitespace-nowrap text-[var(--ink-mut)]">{data(nota.emitidaEm)}</td>
         <td className="py-3">
           {nota.tipoOperacao && (
             <Badge tone={nota.tipoOperacao === 'Entrada' ? 'sky' : 'orange'}>{nota.tipoOperacao}</Badge>
           )}
         </td>
         <td className="py-3">
-          <p className="font-medium text-slate-800 truncate max-w-[260px]">{nota.emitenteNome || '—'}</p>
-          <p className="text-xs text-slate-400 font-mono">{formatarCnpj(nota.emitenteCnpj)}</p>
+          <p className="font-medium text-[var(--ink)] truncate max-w-[260px]">{nota.emitenteNome || '—'}</p>
+          <p className="text-xs text-[var(--ink-mut)] font-mono">{formatarCnpj(nota.emitenteCnpj)}</p>
         </td>
-        <td className="py-3 text-right whitespace-nowrap font-semibold text-slate-800">{moeda(nota.valorTotal)}</td>
-        <td className="py-3 text-right whitespace-nowrap text-slate-600">{moeda(nota.valorFrete)}</td>
+        <td className="py-3 text-right whitespace-nowrap font-semibold text-[var(--ink)]">{moeda(nota.valorTotal)}</td>
+        <td className="py-3 text-right whitespace-nowrap text-[var(--ink-mut)]">{moeda(nota.valorFrete)}</td>
         <td className="py-3">
           {nota.transportadoraNome || nota.modalidadeFrete ? (
             <div className="max-w-[220px]">
-              <p className="text-slate-700 truncate" title={nota.transportadoraNome || nota.modalidadeFrete || ''}>
+              <p className="text-[var(--ink)] truncate" title={nota.transportadoraNome || nota.modalidadeFrete || ''}>
                 {nota.transportadoraNome || nota.modalidadeFrete}
               </p>
               {nota.transportadoraCnpj && (
-                <p className="text-xs text-slate-400 font-mono">{formatarCnpj(nota.transportadoraCnpj)}</p>
+                <p className="text-xs text-[var(--ink-mut)] font-mono">{formatarCnpj(nota.transportadoraCnpj)}</p>
               )}
             </div>
           ) : (
             <span className="text-slate-300">â€”</span>
           )}
         </td>
-        <td className="py-3 text-right whitespace-nowrap text-slate-600">{nota.qtdItens ?? '—'}</td>
+        <td className="py-3 text-right whitespace-nowrap text-[var(--ink-mut)]">{nota.qtdItens ?? '—'}</td>
         <td className="py-3">
           {tags.length > 0 ? (
             <div className="flex flex-wrap gap-1">
@@ -2176,7 +2286,7 @@ function FragmentNota({
             <div className="flex flex-col gap-1 max-w-[180px]">
               <Badge tone={toneSelagemSitram(nota)}>{textoSelagemSitram(nota)}</Badge>
               {nota.sitramSituacao && (
-                <span className="text-[11px] text-slate-400 truncate" title={nota.sitramSituacao}>
+                <span className="text-[11px] text-[var(--ink-mut)] truncate" title={nota.sitramSituacao}>
                   {nota.sitramSituacao}
                 </span>
               )}
@@ -2190,7 +2300,7 @@ function FragmentNota({
             <div className="flex flex-col gap-1 max-w-[180px]">
               <Badge tone={toneDaeSitram(statusDae)}>{textoDaeSitram(statusDae)}</Badge>
               {nota.sitramDaeResumo && (
-                <span className="text-[11px] text-slate-400 truncate" title={nota.sitramDaeResumo}>
+                <span className="text-[11px] text-[var(--ink-mut)] truncate" title={nota.sitramDaeResumo}>
                   {nota.sitramDaeResumo}
                 </span>
               )}
@@ -2298,13 +2408,13 @@ function DetalheNota({ nota }: { nota: NotaComCnpj }) {
 
   return (
     <div>
-      <div className="flex gap-1 mb-4 bg-slate-100 p-1 rounded-lg w-fit">
+      <div className="flex gap-1 mb-4 bg-[var(--surface-2)] p-1 rounded-lg w-fit">
         {(['dados', 'danfe', 'itens', 'anexos'] as Aba[]).map((a) => (
           <button
             key={a}
             onClick={() => setAba(a)}
             className={`px-4 py-1.5 text-sm font-medium rounded-md transition ${
-              aba === a ? 'bg-white text-[var(--accent)] shadow-sm' : 'text-slate-500 hover:text-slate-700'
+              aba === a ? 'bg-[var(--surface)] text-[var(--accent)] shadow-sm' : 'text-[var(--ink-mut)] hover:text-[var(--ink)]'
             }`}
           >
             {a === 'dados' ? 'Dados' : a === 'danfe' ? 'DANFE' : a === 'itens' ? 'Itens' : 'Anexos'}
@@ -2314,11 +2424,11 @@ function DetalheNota({ nota }: { nota: NotaComCnpj }) {
 
       {aba === 'dados' && (
         <div className="space-y-4">
-          <section className="rounded-xl border border-slate-200 bg-white p-4">
-            <div className="mb-3 flex flex-wrap items-center gap-2 border-b border-slate-100 pb-3">
-              <h3 className="font-bold text-slate-800">Nota Fiscal</h3>
+          <section className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
+            <div className="mb-3 flex flex-wrap items-center gap-2 border-b border-[var(--border)] pb-3">
+              <h3 className="font-bold text-[var(--ink)]">Nota Fiscal</h3>
               <Badge tone={nota.status === 'COMPLETA' ? 'green' : 'blue'}>{nota.status}</Badge>
-              <span className="ml-auto text-sm font-semibold text-slate-600">
+              <span className="ml-auto text-sm font-semibold text-[var(--ink-mut)]">
                 NF {nota.numero || '—'} / Série {nota.serie || '—'}
               </span>
             </div>
@@ -2338,8 +2448,8 @@ function DetalheNota({ nota }: { nota: NotaComCnpj }) {
           {nota.sitramConsultadaEm && <ResumoDaeVisual nota={nota} />}
 
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-            <section className="rounded-xl border border-slate-200 bg-white p-4">
-              <h3 className="mb-3 border-b border-slate-100 pb-3 font-bold text-slate-800">Transporte</h3>
+            <section className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
+              <h3 className="mb-3 border-b border-[var(--border)] pb-3 font-bold text-[var(--ink)]">Transporte</h3>
               <div className="grid grid-cols-1 gap-x-6 gap-y-3 text-sm md:grid-cols-2">
                 <Campo rotulo="Modalidade do frete" valor={nota.modalidadeFrete || '—'} />
                 <Campo rotulo="Valor do frete" valor={moeda(nota.valorFrete)} />
@@ -2350,33 +2460,33 @@ function DetalheNota({ nota }: { nota: NotaComCnpj }) {
               </div>
             </section>
 
-            <section className="rounded-xl border border-slate-200 bg-white p-4">
-              <h3 className="mb-3 border-b border-slate-100 pb-3 font-bold text-slate-800">Valores da NF</h3>
+            <section className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
+              <h3 className="mb-3 border-b border-[var(--border)] pb-3 font-bold text-[var(--ink)]">Valores da NF</h3>
               <div className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm">
                 <Campo rotulo="Produtos" valor={moeda(nota.valorProdutos)} />
                 <Campo rotulo="ICMS da NF" valor={moeda(nota.valorIcms)} />
                 <Campo rotulo="Frete" valor={moeda(nota.valorFrete)} />
                 <Campo rotulo="Desconto" valor={moeda(nota.valorDesconto)} />
-                <div className="col-span-2 rounded-lg bg-slate-100 p-3">
+                <div className="col-span-2 rounded-lg bg-[var(--surface-2)] p-3">
                   <Campo rotulo="Valor total" valor={moeda(nota.valorTotal)} />
                 </div>
               </div>
             </section>
           </div>
 
-          <section className="rounded-xl border border-slate-200 bg-white p-4">
+          <section className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
             <div className="grid grid-cols-1 gap-3 text-sm md:grid-cols-2">
               <Campo rotulo="NSU" valor={nota.nsu ? String(Number(nota.nsu)) : '—'} />
               <Campo rotulo="MDF-e SITRAM" valor={nota.sitramChaveManifesto || '—'} />
             </div>
-            <div className="mt-4 border-t border-slate-100 pt-3">
-              <p className="mb-1 text-xs text-slate-400">Chave de Acesso</p>
-              <p className="break-all font-mono text-sm tracking-wide text-slate-700 select-all">{nota.chave}</p>
+            <div className="mt-4 border-t border-[var(--border)] pt-3">
+              <p className="mb-1 text-xs text-[var(--ink-mut)]">Chave de Acesso</p>
+              <p className="break-all font-mono text-sm tracking-wide text-[var(--ink)] select-all">{nota.chave}</p>
             </div>
           </section>
 
-          <section className="rounded-xl border border-slate-200 bg-white p-4">
-            <p className="text-xs text-slate-400 mb-2">Etiquetas (pode marcar mais de uma)</p>
+          <section className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
+            <p className="text-xs text-[var(--ink-mut)] mb-2">Etiquetas (pode marcar mais de uma)</p>
             <div className="flex flex-wrap gap-1.5 max-w-md">
               {ETIQUETAS_PRESET.map((tag) => {
                 const ativa = tagsAtuais.includes(tag);
@@ -2389,7 +2499,7 @@ function DetalheNota({ nota }: { nota: NotaComCnpj }) {
                     className={`px-3 py-1.5 rounded-lg text-sm font-medium border transition disabled:opacity-50 ${
                       ativa
                         ? 'bg-[var(--accent)] border-[var(--accent)] text-white'
-                        : 'bg-white border-slate-300 text-slate-600 hover:border-[var(--border-strong)] hover:bg-[var(--accent-soft)]'
+                        : 'bg-[var(--surface)] border-[var(--border-strong)] text-[var(--ink-mut)] hover:border-[var(--border-strong)] hover:bg-[var(--accent-soft)]'
                     }`}
                   >
                     {ativa ? '✓ ' : ''}{tag}
@@ -2416,7 +2526,7 @@ function DetalheNota({ nota }: { nota: NotaComCnpj }) {
         <div>
           {ehResumo && <BannerManifestar />}
           {!ehResumo && carregando && (
-            <p className="text-sm text-slate-400 py-6 text-center">Carregando XML…</p>
+            <p className="text-sm text-[var(--ink-mut)] py-6 text-center">Carregando XML…</p>
           )}
           {!ehResumo && erro && (
             <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-3">{erro}</p>
@@ -2433,7 +2543,7 @@ function DetalheNota({ nota }: { nota: NotaComCnpj }) {
                   Abrir / Imprimir (PDF) ↗
                 </a>
               </div>
-              <div className="border border-slate-200 rounded-xl p-4 bg-white overflow-x-auto">
+              <div className="border border-[var(--border)] rounded-xl p-4 bg-[var(--surface)] overflow-x-auto">
                 <DanfeView danfe={danfe} />
               </div>
             </div>
@@ -2539,13 +2649,13 @@ function AnexosView({ nota }: { nota: NotaComCnpj }) {
 
   return (
     <div className="space-y-4">
-      <section className="rounded-xl border border-slate-200 bg-white p-4">
-        <h3 className="mb-3 border-b border-slate-100 pb-3 font-bold text-slate-800">
+      <section className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
+        <h3 className="mb-3 border-b border-[var(--border)] pb-3 font-bold text-[var(--ink)]">
           Enviar anexo
         </h3>
         <form onSubmit={handleEnviar} className="space-y-3">
-          <div className="grid gap-2 rounded-xl border border-slate-200 bg-[var(--surface-2)] p-3 text-sm">
-            <label className="flex items-center gap-2 text-slate-700">
+          <div className="grid gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-3 text-sm">
+            <label className="flex items-center gap-2 text-[var(--ink)]">
               <input
                 type="radio"
                 name={`anexo-escopo-${nota.id}`}
@@ -2554,7 +2664,7 @@ function AnexosView({ nota }: { nota: NotaComCnpj }) {
               />
               Anexo só desta NF
             </label>
-            <label className={`flex items-center gap-2 ${opcoesDae.length === 0 ? 'text-slate-400' : 'text-slate-700'}`}>
+            <label className={`flex items-center gap-2 ${opcoesDae.length === 0 ? 'text-[var(--ink-mut)]' : 'text-[var(--ink)]'}`}>
               <input
                 type="radio"
                 name={`anexo-escopo-${nota.id}`}
@@ -2565,16 +2675,16 @@ function AnexosView({ nota }: { nota: NotaComCnpj }) {
               Compartilhar com todas as NF do mesmo DAE
             </label>
             {opcoesDae.length === 0 ? (
-              <p className="text-xs text-slate-500">
+              <p className="text-xs text-[var(--ink-mut)]">
                 Esta NF ainda não tem DAE do SITRAM identificado para compartilhamento.
               </p>
             ) : escopo === 'dae' ? (
               <div>
-                <label className="mb-1 block text-xs font-medium text-slate-500">DAE compartilhado</label>
+                <label className="mb-1 block text-xs font-medium text-[var(--ink-mut)]">DAE compartilhado</label>
                 <select
                   value={daeChave}
                   onChange={(e) => setDaeChave(e.target.value)}
-                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-[var(--accent)] focus:outline-none"
+                  className="w-full rounded-lg border border-[var(--border-strong)] px-3 py-2 text-sm focus:border-[var(--accent)] focus:outline-none"
                 >
                   {opcoesDae.map((item) => (
                     <option key={item.chave} value={item.chave}>
@@ -2588,23 +2698,23 @@ function AnexosView({ nota }: { nota: NotaComCnpj }) {
 
           <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
             <div className="flex-1">
-            <label className="mb-1 block text-xs text-slate-400">Nome / descrição (opcional)</label>
+            <label className="mb-1 block text-xs text-[var(--ink-mut)]">Nome / descrição (opcional)</label>
             <input
               type="text"
               value={nome}
               onChange={(e) => setNome(e.target.value)}
               placeholder="Ex.: Comprovante DAE, Foto da NF…"
-              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-[var(--accent)] focus:outline-none"
+              className="w-full rounded-lg border border-[var(--border-strong)] px-3 py-2 text-sm focus:border-[var(--accent)] focus:outline-none"
             />
           </div>
           <div className="flex-1">
-            <label className="mb-1 block text-xs text-slate-400">Arquivo (PDF, imagem ou planilha)</label>
+            <label className="mb-1 block text-xs text-[var(--ink-mut)]">Arquivo (PDF, imagem ou planilha)</label>
             <input
               id={`anexo-file-${nota.id}`}
               type="file"
               accept={ACCEPT_ANEXOS}
               onChange={(e) => setArquivo(e.target.files?.[0] ?? null)}
-              className="w-full text-sm text-slate-600 file:mr-3 file:rounded-lg file:border-0 file:bg-[var(--accent-soft)] file:px-3 file:py-2 file:text-sm file:font-medium file:text-[var(--accent)] hover:file:bg-[var(--accent-soft)]"
+              className="w-full text-sm text-[var(--ink-mut)] file:mr-3 file:rounded-lg file:border-0 file:bg-[var(--accent-soft)] file:px-3 file:py-2 file:text-sm file:font-medium file:text-[var(--accent)] hover:file:bg-[var(--accent-soft)]"
             />
           </div>
           <button
@@ -2621,16 +2731,16 @@ function AnexosView({ nota }: { nota: NotaComCnpj }) {
         )}
       </section>
 
-      <section className="rounded-xl border border-slate-200 bg-white p-4">
-        <h3 className="mb-3 border-b border-slate-100 pb-3 font-bold text-slate-800">
+      <section className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
+        <h3 className="mb-3 border-b border-[var(--border)] pb-3 font-bold text-[var(--ink)]">
           Anexos ({anexos.length})
         </h3>
         {carregando ? (
-          <p className="py-6 text-center text-sm text-slate-400">Carregando…</p>
+          <p className="py-6 text-center text-sm text-[var(--ink-mut)]">Carregando…</p>
         ) : anexos.length === 0 ? (
-          <p className="py-6 text-center text-sm text-slate-400">Nenhum anexo ainda.</p>
+          <p className="py-6 text-center text-sm text-[var(--ink-mut)]">Nenhum anexo ainda.</p>
         ) : (
-          <ul className="divide-y divide-slate-100">
+          <ul className="divide-y divide-[var(--border)]">
             {anexos.map((a) => {
               const base = `/danfe/${nota.chave}/anexo/${a.id}`;
               return (
@@ -2638,15 +2748,15 @@ function AnexosView({ nota }: { nota: NotaComCnpj }) {
                   <span className="text-xl">{iconeAnexo(a.mime)}</span>
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
-                      <p className="truncate font-medium text-slate-700">{a.nome}</p>
-                      <span className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${a.escopo === 'dae' ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-600'}`}>
+                      <p className="truncate font-medium text-[var(--ink)]">{a.nome}</p>
+                      <span className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${a.escopo === 'dae' ? 'bg-amber-100 text-amber-800' : 'bg-[var(--surface-2)] text-[var(--ink-mut)]'}`}>
                         {a.escopo === 'dae' ? 'DAE compartilhado' : 'NF'}
                       </span>
                     </div>
                     {a.dae && (
                       <p className="truncate text-xs text-amber-700">{a.dae.titulo}</p>
                     )}
-                    <p className="truncate text-xs text-slate-400">
+                    <p className="truncate text-xs text-[var(--ink-mut)]">
                       {a.arquivoNome} · {formatarTamanho(a.tamanho)}
                       {a.criadoPor ? ` · ${a.criadoPor}` : ''} ·{' '}
                       {new Date(a.createdAt).toLocaleString('pt-BR')}
@@ -2699,7 +2809,7 @@ function ResumoDaeVisual({ nota }: { nota: NotaComCnpj }) {
   });
 
   return (
-    <section className={`overflow-hidden rounded-xl border bg-white ${vencidos.length > 0 ? 'border-red-300' : status === 'EM_ABERTO' ? 'border-amber-300' : 'border-slate-200'}`}>
+    <section className={`overflow-hidden rounded-xl border bg-[var(--surface)] ${vencidos.length > 0 ? 'border-red-300' : status === 'EM_ABERTO' ? 'border-amber-300' : 'border-[var(--border)]'}`}>
       {(vencidos.length > 0 || proximos.length > 0) && (
         <div className={`px-4 py-3 text-sm font-bold ${vencidos.length > 0 ? 'bg-red-600 text-white' : 'bg-amber-400 text-amber-950'}`}>
           {vencidos.length > 0
@@ -2709,10 +2819,10 @@ function ResumoDaeVisual({ nota }: { nota: NotaComCnpj }) {
       )}
 
       <div className="p-4">
-        <div className="mb-4 flex flex-wrap items-center gap-2 border-b border-slate-100 pb-3">
+        <div className="mb-4 flex flex-wrap items-center gap-2 border-b border-[var(--border)] pb-3">
           <div>
-            <p className="text-xs font-bold uppercase tracking-wide text-slate-400">SITRAM / DAE</p>
-            <h3 className="text-lg font-black text-slate-900">NF {nota.numero || resumo.numeroNota || '—'} — {resumo.classificacao}</h3>
+            <p className="text-xs font-bold uppercase tracking-wide text-[var(--ink-mut)]">SITRAM / DAE</p>
+            <h3 className="text-lg font-black text-[var(--ink)]">NF {nota.numero || resumo.numeroNota || '—'} — {resumo.classificacao}</h3>
           </div>
           <div className="ml-auto flex flex-wrap gap-2">
             <Badge tone={resumo.classificacao === 'Sem ST' ? 'gray' : 'indigo'}>{resumo.classificacao}</Badge>
@@ -2745,10 +2855,10 @@ function ResumoDaeVisual({ nota }: { nota: NotaComCnpj }) {
                 <article key={`${lancamento.codigo ?? 'dae'}-${indice}`} className={`rounded-xl border p-4 ${vencido ? 'border-red-300 bg-red-50' : lancamento.pago ? 'border-emerald-200 bg-emerald-50/40' : 'border-amber-300 bg-amber-50/50'}`}>
                   <div className="mb-3 flex items-start gap-2 border-b border-black/5 pb-3">
                     <div className="min-w-0">
-                      <p className="font-black text-slate-900">
+                      <p className="font-black text-[var(--ink)]">
                         {lancamento.codigo ? `${lancamento.codigo} — ` : ''}{lancamento.descricao}
                       </p>
-                      <p className="text-xs text-slate-500">{lancamento.situacao || 'Situação não informada'}</p>
+                      <p className="text-xs text-[var(--ink-mut)]">{lancamento.situacao || 'Situação não informada'}</p>
                     </div>
                     <Badge tone={lancamento.pago ? 'green' : vencido ? 'red' : 'orange'}>
                       {lancamento.pago ? 'PAGO' : vencido ? 'VENCIDO' : 'A PAGAR'}
@@ -2766,7 +2876,7 @@ function ResumoDaeVisual({ nota }: { nota: NotaComCnpj }) {
                   </div>
 
                   {!lancamento.pago && dias !== null && (
-                    <p className={`mt-3 rounded-lg px-3 py-2 text-xs font-bold ${vencido ? 'bg-red-600 text-white' : venceHoje ? 'bg-orange-500 text-white' : dias <= 7 ? 'bg-amber-300 text-amber-950' : 'bg-slate-100 text-slate-600'}`}>
+                    <p className={`mt-3 rounded-lg px-3 py-2 text-xs font-bold ${vencido ? 'bg-red-600 text-white' : venceHoje ? 'bg-orange-500 text-white' : dias <= 7 ? 'bg-amber-300 text-amber-950' : 'bg-[var(--surface-2)] text-[var(--ink-mut)]'}`}>
                       {vencido
                         ? `Vencido há ${Math.abs(dias)} dia(s) — verificar multa antes de pagar.`
                         : venceHoje
@@ -2779,13 +2889,13 @@ function ResumoDaeVisual({ nota }: { nota: NotaComCnpj }) {
             })}
           </div>
         ) : (
-          <div className="mt-4 rounded-xl border border-slate-200 bg-[var(--surface-2)] p-4 text-sm text-slate-600">
+          <div className="mt-4 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-4 text-sm text-[var(--ink-mut)]">
             <strong>{resumo.classificacao}</strong> — nenhum lançamento de DAE foi retornado pelo SITRAM.
           </div>
         )}
 
         {nota.sitramDaeResumo && (
-          <details className="mt-4 text-xs text-slate-500">
+          <details className="mt-4 text-xs text-[var(--ink-mut)]">
             <summary className="cursor-pointer font-medium">Ver texto original do SITRAM</summary>
             <p className="mt-2 rounded-lg bg-[var(--surface-2)] p-3 leading-relaxed">{nota.sitramDaeResumo}</p>
           </details>
@@ -2798,8 +2908,8 @@ function ResumoDaeVisual({ nota }: { nota: NotaComCnpj }) {
 function Campo({ rotulo, valor }: { rotulo: string; valor: string }) {
   return (
     <div>
-      <p className="text-xs text-slate-400">{rotulo}</p>
-      <p className="font-medium text-slate-700 break-words">{valor}</p>
+      <p className="text-xs text-[var(--ink-mut)]">{rotulo}</p>
+      <p className="font-medium text-[var(--ink)] break-words">{valor}</p>
     </div>
   );
 }
