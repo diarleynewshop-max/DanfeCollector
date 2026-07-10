@@ -1,39 +1,56 @@
 import { prisma } from '@/lib/prisma';
-import { obterUsuarioAtual } from '@/lib/usuarios/auth';
 import { lerArquivo } from '@/lib/anexos/storage';
+import { opcoesCompartilhadasDae } from '@/lib/sitram/dae';
+import { obterUsuarioAtual } from '@/lib/usuarios/auth';
 
-// Serve um anexo de forma autenticada. Valida sessão e confere que o anexo
-// pertence à nota informada na URL (impede acesso por id avulso).
-// ?download=1 força "salvar como"; sem ele, abre inline (PDF/imagem no navegador).
 export async function GET(
   req: Request,
   { params }: { params: Promise<{ chave: string; anexoId: string }> }
 ) {
   const usuario = await obterUsuarioAtual();
-  if (!usuario) return new Response('Não autenticado.', { status: 401 });
+  if (!usuario) return new Response('Nao autenticado.', { status: 401 });
 
   const { chave, anexoId } = await params;
   const id = Number(anexoId);
-  if (!Number.isInteger(id)) return new Response('Anexo inválido.', { status: 400 });
+  if (!Number.isInteger(id)) return new Response('Anexo invalido.', { status: 400 });
 
-  const anexo = await prisma.anexo.findUnique({
-    where: { id },
-    include: { nota: { select: { chave: true } } },
-  });
-  if (!anexo || anexo.nota.chave !== chave) {
-    return new Response('Anexo não encontrado.', { status: 404 });
+  const [anexo, nota] = await Promise.all([
+    prisma.anexo.findUnique({
+      where: { id },
+      include: {
+        nota: { select: { chave: true } },
+        daeCompartilhado: { select: { chave: true } },
+      },
+    }),
+    prisma.notaFiscal.findUnique({
+      where: { chave },
+      select: {
+        sitramDaeStatus: true,
+        sitramDaeResumo: true,
+        sitramDetalhe: true,
+      },
+    }),
+  ]);
+
+  const chavesDae = nota
+    ? new Set(opcoesCompartilhadasDae(nota).map((item) => item.chave))
+    : new Set<string>();
+  const pertenceNota = anexo?.nota?.chave === chave;
+  const pertenceDae = !!anexo?.daeCompartilhado?.chave && chavesDae.has(anexo.daeCompartilhado.chave);
+
+  if (!anexo || (!pertenceNota && !pertenceDae)) {
+    return new Response('Anexo nao encontrado.', { status: 404 });
   }
 
   let bytes: Buffer;
   try {
     bytes = lerArquivo(anexo.caminho);
   } catch {
-    return new Response('Arquivo do anexo não está mais no disco.', { status: 404 });
+    return new Response('Arquivo do anexo nao esta mais no disco.', { status: 404 });
   }
 
   const baixar = new URL(req.url).searchParams.get('download') === '1';
   const disposicao = baixar ? 'attachment' : 'inline';
-  // Nome de download: usa o nome original, sanitizado para o header.
   const nomeArquivo = anexo.arquivoNome.replace(/[\r\n"]/g, '_');
 
   return new Response(new Uint8Array(bytes), {

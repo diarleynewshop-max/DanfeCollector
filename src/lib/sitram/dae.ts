@@ -2,6 +2,7 @@ export type TipoTributoDae = 'ST' | 'ANTECIPACAO' | 'OUTRO';
 
 export interface LancamentoDaeNormalizado {
   codigo: string | null;
+  identificador: string | null;
   descricao: string;
   tipo: TipoTributoDae;
   valor: number | null;
@@ -21,6 +22,16 @@ export interface ResumoDaeNormalizado {
   postoFiscal: string | null;
   acaoFiscal: string | null;
   lancamentos: LancamentoDaeNormalizado[];
+}
+
+export interface DaeCompartilhadoInfo {
+  chave: string;
+  titulo: string;
+  identificador: string | null;
+  codigo: string | null;
+  descricao: string;
+  vencimento: string | null;
+  valor: number | null;
 }
 
 export interface NotaComDadosDae {
@@ -77,6 +88,7 @@ function tipoTributo(raw: Registro): TipoTributoDae {
 function normalizarLancamento(valorBruto: unknown): LancamentoDaeNormalizado {
   const raw = registro(valorBruto);
   const codigo = primeiroTexto(raw.codigo, raw.codReceita);
+  const identificador = primeiroTexto(raw.identificadorUnico);
   const descricao = [
     primeiroTexto(raw.descricaoAbreviada),
     primeiroTexto(raw.descricao, raw.descricaoRec),
@@ -102,6 +114,7 @@ function normalizarLancamento(valorBruto: unknown): LancamentoDaeNormalizado {
 
   return {
     codigo,
+    identificador,
     descricao,
     tipo: tipoTributo(raw),
     valor,
@@ -111,6 +124,61 @@ function normalizarLancamento(valorBruto: unknown): LancamentoDaeNormalizado {
     situacao,
     pago,
   };
+}
+
+function valorChaveCompartilhada(valor: number | null): string {
+  return valor === null ? 'sem-valor' : valor.toFixed(2);
+}
+
+function normalizarTextoChave(valor: string | null | undefined): string {
+  return semAcentos(valor)
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '') || 'sem-texto';
+}
+
+export function chaveCompartilhadaDae(lancamento: LancamentoDaeNormalizado): string {
+  if (lancamento.identificador) {
+    return `sitram:${normalizarTextoChave(lancamento.identificador)}`;
+  }
+
+  return [
+    'composto',
+    normalizarTextoChave(lancamento.codigo),
+    normalizarTextoChave(lancamento.descricao),
+    normalizarTextoChave(chaveDataLocal(lancamento.vencimento)),
+    valorChaveCompartilhada(lancamento.valor),
+  ].join(':');
+}
+
+function tituloCompartilhadoDae(lancamento: LancamentoDaeNormalizado): string {
+  const partes = [
+    lancamento.codigo ? `${lancamento.codigo} - ${lancamento.descricao}` : lancamento.descricao,
+    lancamento.vencimento ? `venc. ${new Date(lancamento.vencimento).toLocaleDateString('pt-BR')}` : null,
+    lancamento.valor !== null
+      ? `R$ ${lancamento.valor.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+      : null,
+  ].filter(Boolean);
+  return partes.join(' | ');
+}
+
+export function opcoesCompartilhadasDae(nota: NotaComDadosDae): DaeCompartilhadoInfo[] {
+  const mapa = new Map<string, DaeCompartilhadoInfo>();
+
+  for (const lancamento of extrairResumoDae(nota).lancamentos) {
+    const chave = chaveCompartilhadaDae(lancamento);
+    if (mapa.has(chave)) continue;
+    mapa.set(chave, {
+      chave,
+      titulo: tituloCompartilhadoDae(lancamento),
+      identificador: lancamento.identificador,
+      codigo: lancamento.codigo,
+      descricao: lancamento.descricao,
+      vencimento: lancamento.vencimento,
+      valor: lancamento.valor,
+    });
+  }
+
+  return [...mapa.values()];
 }
 
 function classificacaoTributo(notaFiscal: Registro, lancamentos: LancamentoDaeNormalizado[]): string {

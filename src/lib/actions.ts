@@ -717,27 +717,31 @@ export async function importarXmlsDaPasta(
   };
 }
 
-export async function listarNotas() {
+export async function listarNotas(pagina = 1, porPagina = 50) {
   await exigirUsuario();
   const include = { cnpj: { select: { cnpj: true, razaoSocial: true } } } as const;
-  const [recentes, notasComSitram] = await Promise.all([
-    prisma.notaFiscal.findMany({
-      orderBy: { emitidaEm: 'desc' },
-      take: 2000,
-      include,
-    }),
-    prisma.notaFiscal.findMany({
-      where: { sitramConsultadaEm: { not: null } },
-      orderBy: { emitidaEm: 'desc' },
-      include,
-    }),
-  ]);
+  const paginaSegura = Math.max(1, Math.trunc(Number(pagina) || 1));
+  const limiteSeguro = Math.max(1, Math.min(100, Math.trunc(Number(porPagina) || 50)));
 
   // Mantém as 2000 recentes e inclui qualquer DAE antigo, para nenhum
   // vencimento desaparecer do painel de alertas.
-  const unicas = new Map(recentes.map((nota) => [nota.id, nota]));
-  for (const nota of notasComSitram) unicas.set(nota.id, nota);
-  return [...unicas.values()].sort((a, b) => b.emitidaEm.getTime() - a.emitidaEm.getTime());
+  return prisma.notaFiscal.findMany({
+    orderBy: { emitidaEm: 'desc' },
+    skip: (paginaSegura - 1) * limiteSeguro,
+    take: limiteSeguro,
+    include,
+  });
+}
+
+export async function listarNotasAlertaDae() {
+  await exigirUsuario();
+  return prisma.notaFiscal.findMany({
+    where: {
+      sitramDaeStatus: { in: ['EM_ABERTO', 'LIBERADA_PARA_GERAR'] },
+    },
+    orderBy: { emitidaEm: 'desc' },
+    include: { cnpj: { select: { cnpj: true, razaoSocial: true } } },
+  });
 }
 
 /**

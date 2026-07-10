@@ -32,6 +32,7 @@ import {
   chaveDataLocal,
   diasAteVencimento,
   extrairResumoDae,
+  type DaeCompartilhadoInfo,
   statusDaeEfetivo,
   type LancamentoDaeNormalizado,
 } from '@/lib/sitram/dae';
@@ -57,9 +58,17 @@ interface DashboardProps {
   usuario: UsuarioLogado;
   cnpjs: CnpjComContagem[];
   notas: NotaComCnpj[];
+  notasAlerta: NotaComCnpj[];
   anosDisponiveis: number[];
   totalNotas: number;
+  paginaAtual: number;
+  porPagina: number;
 }
+
+const CACHE_DANFE_PREFIX = 'danfe-cache:';
+const CACHE_DANFE_INDEX = 'danfe-cache:index';
+const CACHE_DANFE_MAX = 12;
+const cacheDanfeMemoria = new Map<number, DanfeData>();
 
 function formatarCnpj(cnpj: string | null): string {
   if (!cnpj) return '—';
@@ -84,6 +93,43 @@ function dataHora(d: Date | string | null | undefined): string {
     hour: '2-digit',
     minute: '2-digit',
   });
+}
+
+function lerDanfeCacheLocal(notaId: number): DanfeData | null {
+  const memoria = cacheDanfeMemoria.get(notaId);
+  if (memoria) return memoria;
+  if (typeof window === 'undefined') return null;
+
+  try {
+    const bruto = window.localStorage.getItem(`${CACHE_DANFE_PREFIX}${notaId}`);
+    if (!bruto) return null;
+    const danfe = JSON.parse(bruto) as DanfeData;
+    cacheDanfeMemoria.set(notaId, danfe);
+    return danfe;
+  } catch {
+    return null;
+  }
+}
+
+function salvarDanfeCacheLocal(notaId: number, danfe: DanfeData) {
+  cacheDanfeMemoria.set(notaId, danfe);
+  if (typeof window === 'undefined') return;
+
+  try {
+    const chave = `${CACHE_DANFE_PREFIX}${notaId}`;
+    const indexAtual = JSON.parse(window.localStorage.getItem(CACHE_DANFE_INDEX) ?? '[]') as number[];
+    const novoIndex = [notaId, ...indexAtual.filter((id) => id !== notaId)].slice(0, CACHE_DANFE_MAX);
+
+    window.localStorage.setItem(chave, JSON.stringify(danfe));
+    for (const antigoId of indexAtual) {
+      if (!novoIndex.includes(antigoId)) {
+        window.localStorage.removeItem(`${CACHE_DANFE_PREFIX}${antigoId}`);
+      }
+    }
+    window.localStorage.setItem(CACHE_DANFE_INDEX, JSON.stringify(novoIndex));
+  } catch {
+    // Cache local eh opcional.
+  }
 }
 
 // Etiquetas prontas para marcar com um clique, sem precisar digitar
@@ -142,7 +188,16 @@ function notaForaCeMais15DiasSemDaeOuPagamento(nota: NotaComCnpj, referencia = n
   return statusDae !== 'PAGO' && statusDae !== 'EM_ABERTO';
 }
 
-export default function Dashboard({ usuario, cnpjs, notas: notasIniciais, anosDisponiveis, totalNotas }: DashboardProps) {
+export default function Dashboard({
+  usuario,
+  cnpjs,
+  notas: notasIniciais,
+  notasAlerta: notasAlertaIniciais,
+  anosDisponiveis,
+  totalNotas,
+  paginaAtual,
+  porPagina,
+}: DashboardProps) {
   const router = useRouter();
   const podeAdministrar = usuario.admin;
   const [status, setStatus] = useState<{ success?: boolean; message: string }>({
@@ -150,6 +205,7 @@ export default function Dashboard({ usuario, cnpjs, notas: notasIniciais, anosDi
   });
   // Notas em memória — podem ser substituídas por um ano específico carregado do servidor
   const [notas, setNotas] = useState<NotaComCnpj[]>(notasIniciais);
+  const [notasAlerta, setNotasAlerta] = useState<NotaComCnpj[]>(notasAlertaIniciais);
   const [anoCarregado, setAnoCarregado] = useState<number | null>(null);
   const [carregandoAno, setCarregandoAno] = useState(false);
 
@@ -157,6 +213,9 @@ export default function Dashboard({ usuario, cnpjs, notas: notasIniciais, anosDi
   useEffect(() => {
     if (anoCarregado === null) setNotas(notasIniciais);
   }, [notasIniciais, anoCarregado]);
+  useEffect(() => {
+    if (anoCarregado === null) setNotasAlerta(notasAlertaIniciais);
+  }, [notasAlertaIniciais, anoCarregado]);
   const [mostrarForm, setMostrarForm] = useState(false);
   const [pending, startTransition] = useTransition();
 
@@ -356,6 +415,7 @@ export default function Dashboard({ usuario, cnpjs, notas: notasIniciais, anosDi
     setFiltroAnoState(ano);
     if (!ano) {
       setNotas(notasIniciais);
+      setNotasAlerta(notasAlertaIniciais);
       setAnoCarregado(null);
       return;
     }
@@ -364,6 +424,7 @@ export default function Dashboard({ usuario, cnpjs, notas: notasIniciais, anosDi
     setCarregandoAno(true);
     const resultado = await listarNotasPorAno(anoNum);
     setNotas(resultado as NotaComCnpj[]);
+    setNotasAlerta(resultado as NotaComCnpj[]);
     setAnoCarregado(anoNum);
     setCarregandoAno(false);
   }
@@ -458,6 +519,12 @@ export default function Dashboard({ usuario, cnpjs, notas: notasIniciais, anosDi
     filtroEtiquetas.length > 0 ? '1' : '',
     filtroExcluirEmitentes.length > 0 ? '1' : '',
   ].filter(Boolean).length;
+  const usandoPaginacaoServidor =
+    anoCarregado === null &&
+    filtroCnpjId === 'todos' &&
+    filtroStatus === 'todos' &&
+    filtrosAtivos === 0;
+  const totalPaginasServidor = Math.max(1, Math.ceil(totalNotas / porPagina));
 
   function limparFiltrosAvancados() {
     setFiltroEmitente('');
@@ -471,6 +538,7 @@ export default function Dashboard({ usuario, cnpjs, notas: notasIniciais, anosDi
     setFiltroMes('');
     setFiltroAnoState('');
     setNotas(notasIniciais);
+    setNotasAlerta(notasAlertaIniciais);
     setAnoCarregado(null);
     setFiltroSituacao('todas');
     setFiltroDaeSitram('todos');
@@ -643,6 +711,40 @@ export default function Dashboard({ usuario, cnpjs, notas: notasIniciais, anosDi
     filtroEtiquetas,
     filtroExcluirEmitentes,
   ]);
+
+  const [paginaCliente, setPaginaCliente] = useState(1);
+
+  useEffect(() => {
+    setPaginaCliente(1);
+  }, [
+    notas,
+    filtroCnpjId,
+    filtroStatus,
+    filtroEmitente,
+    filtroDestinatario,
+    filtroValorMin,
+    filtroValorMax,
+    filtroItensMin,
+    filtroItensMax,
+    filtroDataInicio,
+    filtroDataFim,
+    filtroMes,
+    filtroAno,
+    filtroSituacao,
+    filtroDaeSitram,
+    filtroDaeVencInicio,
+    filtroDaeVencFim,
+    filtroForaCe15SemDae,
+    filtroEtiquetas,
+    filtroExcluirEmitentes,
+  ]);
+
+  const totalPaginasCliente = Math.max(1, Math.ceil(notasFiltradas.length / porPagina));
+  const paginaClienteSegura = Math.min(paginaCliente, totalPaginasCliente);
+  const notasVisiveis = useMemo(() => {
+    const inicio = (paginaClienteSegura - 1) * porPagina;
+    return notasFiltradas.slice(inicio, inicio + porPagina);
+  }, [notasFiltradas, paginaClienteSegura, porPagina]);
   const totalFiltrado = useMemo(
     () => notasFiltradas.reduce((acc, n) => acc + (n.valorTotal ?? 0), 0),
     [notasFiltradas]
@@ -1161,7 +1263,7 @@ export default function Dashboard({ usuario, cnpjs, notas: notasIniciais, anosDi
           {/* Notas */}
           <div className="lg:col-span-3 bg-white p-5 rounded-2xl shadow-sm border border-slate-200">
             <AlertaDaes
-              notas={notas}
+              notas={notasAlerta}
               cnpjId={filtroCnpjId}
               onFiltrar={filtrarVencimentoDae}
             />
@@ -1479,8 +1581,8 @@ export default function Dashboard({ usuario, cnpjs, notas: notasIniciais, anosDi
               <div className="mb-3 flex items-center gap-3 bg-amber-50 border border-amber-200 rounded-xl px-4 py-2.5 text-sm text-amber-800">
                 <span>⚠️</span>
                 <span>
-                  Exibindo as <strong>{notas.length} notas mais recentes</strong> de <strong>{totalNotas} no total</strong>.
-                  Para ver notas mais antigas, selecione o <strong>Ano</strong> nos filtros avançados.
+                  Exibindo <strong>{notas.length} notas por página</strong> de <strong>{totalNotas} no total</strong>.
+                  Sem selecionar <strong>Ano</strong>, a busca e os filtros atuam só nesta página.
                 </span>
                 <button
                   onClick={() => { setMostrarFiltros(true); }}
@@ -1573,7 +1675,7 @@ export default function Dashboard({ usuario, cnpjs, notas: notasIniciais, anosDi
                       </td>
                     </tr>
                   )}
-                  {notasFiltradas.map((n) => (
+                  {notasVisiveis.map((n) => (
                     <CompactFragmentNota
                       key={n.id}
                       nota={n}
@@ -1586,6 +1688,54 @@ export default function Dashboard({ usuario, cnpjs, notas: notasIniciais, anosDi
                   ))}
                 </tbody>
               </table>
+            </div>
+
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-3 text-sm text-slate-500">
+              <span>
+                Mostrando {notasFiltradas.length === 0 ? 0 : (paginaClienteSegura - 1) * porPagina + 1}
+                {' '}a {Math.min(paginaClienteSegura * porPagina, notasFiltradas.length)} de {notasFiltradas.length}
+              </span>
+              {usandoPaginacaoServidor ? (
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => router.push(paginaAtual <= 2 ? '/' : `/?page=${paginaAtual - 1}`)}
+                    disabled={paginaAtual <= 1}
+                    className="rounded-lg border border-slate-300 px-3 py-1.5 text-slate-700 hover:bg-slate-100 disabled:opacity-40"
+                  >
+                    Anterior
+                  </button>
+                  <span>
+                    Página {paginaAtual} de {totalPaginasServidor}
+                  </span>
+                  <button
+                    onClick={() => router.push(`/?page=${paginaAtual + 1}`)}
+                    disabled={paginaAtual >= totalPaginasServidor}
+                    className="rounded-lg border border-slate-300 px-3 py-1.5 text-slate-700 hover:bg-slate-100 disabled:opacity-40"
+                  >
+                    Próxima
+                  </button>
+                </div>
+              ) : totalPaginasCliente > 1 ? (
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setPaginaCliente((p) => Math.max(1, p - 1))}
+                    disabled={paginaClienteSegura <= 1}
+                    className="rounded-lg border border-slate-300 px-3 py-1.5 text-slate-700 hover:bg-slate-100 disabled:opacity-40"
+                  >
+                    Anterior
+                  </button>
+                  <span>
+                    Página {paginaClienteSegura} de {totalPaginasCliente}
+                  </span>
+                  <button
+                    onClick={() => setPaginaCliente((p) => Math.min(totalPaginasCliente, p + 1))}
+                    disabled={paginaClienteSegura >= totalPaginasCliente}
+                    className="rounded-lg border border-slate-300 px-3 py-1.5 text-slate-700 hover:bg-slate-100 disabled:opacity-40"
+                  >
+                    Próxima
+                  </button>
+                </div>
+              ) : null}
             </div>
           </div>
         </div>
@@ -2075,10 +2225,17 @@ function DetalheNota({ nota }: { nota: NotaComCnpj }) {
   // Pré-carrega o DANFE assim que a nota é aberta (não espera o clique na aba)
   useEffect(() => {
     if (!ehResumo && !danfe && !erro && !carregando) {
+      const cache = lerDanfeCacheLocal(nota.id);
+      if (cache) {
+        setDanfe(cache);
+        return;
+      }
       setCarregando(true);
       obterDetalheNota(nota.id).then((res) => {
-        if (res.ok) setDanfe(res.danfe);
-        else setErro(res.message);
+        if (res.ok) {
+          setDanfe(res.danfe);
+          salvarDanfeCacheLocal(nota.id, res.danfe);
+        } else setErro(res.message);
         setCarregando(false);
       });
     }
@@ -2297,10 +2454,13 @@ function iconeAnexo(mime: string): string {
 
 function AnexosView({ nota }: { nota: NotaComCnpj }) {
   const [anexos, setAnexos] = useState<AnexoInfo[]>([]);
+  const [opcoesDae, setOpcoesDae] = useState<DaeCompartilhadoInfo[]>([]);
   const [viewer, setViewer] = useState<{ login: string; admin: boolean } | null>(null);
   const [carregando, setCarregando] = useState(true);
   const [nome, setNome] = useState('');
   const [arquivo, setArquivo] = useState<File | null>(null);
+  const [escopo, setEscopo] = useState<'nota' | 'dae'>('nota');
+  const [daeChave, setDaeChave] = useState('');
   const [enviando, setEnviando] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; texto: string } | null>(null);
   const [excluindo, setExcluindo] = useState<number | null>(null);
@@ -2309,7 +2469,13 @@ function AnexosView({ nota }: { nota: NotaComCnpj }) {
     const res = await listarAnexos(nota.id);
     if (res.ok) {
       setAnexos(res.anexos);
+      setOpcoesDae(res.opcoesDae);
       setViewer(res.viewer);
+      setDaeChave((atual) => {
+        if (atual && res.opcoesDae.some((item) => item.chave === atual)) return atual;
+        return res.opcoesDae[0]?.chave ?? '';
+      });
+      if (res.opcoesDae.length === 0) setEscopo('nota');
     }
     setCarregando(false);
   }
@@ -2325,11 +2491,17 @@ function AnexosView({ nota }: { nota: NotaComCnpj }) {
       setMsg({ ok: false, texto: 'Selecione um arquivo.' });
       return;
     }
+    if (escopo === 'dae' && !daeChave) {
+      setMsg({ ok: false, texto: 'Selecione o DAE que vai receber este anexo compartilhado.' });
+      return;
+    }
     setEnviando(true);
     setMsg(null);
     const fd = new FormData();
     fd.set('arquivo', arquivo);
     fd.set('nome', nome);
+    fd.set('escopo', escopo);
+    if (escopo === 'dae') fd.set('daeChave', daeChave);
     const res = await enviarAnexo(nota.id, fd);
     setMsg({ ok: res.success, texto: res.message });
     setEnviando(false);
@@ -2360,8 +2532,51 @@ function AnexosView({ nota }: { nota: NotaComCnpj }) {
         <h3 className="mb-3 border-b border-slate-100 pb-3 font-bold text-slate-800">
           Enviar anexo
         </h3>
-        <form onSubmit={handleEnviar} className="flex flex-col gap-3 sm:flex-row sm:items-end">
-          <div className="flex-1">
+        <form onSubmit={handleEnviar} className="space-y-3">
+          <div className="grid gap-2 rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm">
+            <label className="flex items-center gap-2 text-slate-700">
+              <input
+                type="radio"
+                name={`anexo-escopo-${nota.id}`}
+                checked={escopo === 'nota'}
+                onChange={() => setEscopo('nota')}
+              />
+              Anexo só desta NF
+            </label>
+            <label className={`flex items-center gap-2 ${opcoesDae.length === 0 ? 'text-slate-400' : 'text-slate-700'}`}>
+              <input
+                type="radio"
+                name={`anexo-escopo-${nota.id}`}
+                checked={escopo === 'dae'}
+                onChange={() => opcoesDae.length > 0 && setEscopo('dae')}
+                disabled={opcoesDae.length === 0}
+              />
+              Compartilhar com todas as NF do mesmo DAE
+            </label>
+            {opcoesDae.length === 0 ? (
+              <p className="text-xs text-slate-500">
+                Esta NF ainda não tem DAE do SITRAM identificado para compartilhamento.
+              </p>
+            ) : escopo === 'dae' ? (
+              <div>
+                <label className="mb-1 block text-xs font-medium text-slate-500">DAE compartilhado</label>
+                <select
+                  value={daeChave}
+                  onChange={(e) => setDaeChave(e.target.value)}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-indigo-400 focus:outline-none"
+                >
+                  {opcoesDae.map((item) => (
+                    <option key={item.chave} value={item.chave}>
+                      {item.titulo}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ) : null}
+          </div>
+
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+            <div className="flex-1">
             <label className="mb-1 block text-xs text-slate-400">Nome / descrição (opcional)</label>
             <input
               type="text"
@@ -2383,11 +2598,12 @@ function AnexosView({ nota }: { nota: NotaComCnpj }) {
           </div>
           <button
             type="submit"
-            disabled={enviando}
+            disabled={enviando || (escopo === 'dae' && !daeChave)}
             className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
           >
             {enviando ? 'Enviando…' : 'Enviar'}
           </button>
+          </div>
         </form>
         {msg && (
           <p className={`mt-3 text-sm ${msg.ok ? 'text-emerald-700' : 'text-red-700'}`}>{msg.texto}</p>
@@ -2410,7 +2626,15 @@ function AnexosView({ nota }: { nota: NotaComCnpj }) {
                 <li key={a.id} className="flex flex-wrap items-center gap-3 py-3">
                   <span className="text-xl">{iconeAnexo(a.mime)}</span>
                   <div className="min-w-0 flex-1">
-                    <p className="truncate font-medium text-slate-700">{a.nome}</p>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="truncate font-medium text-slate-700">{a.nome}</p>
+                      <span className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${a.escopo === 'dae' ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-600'}`}>
+                        {a.escopo === 'dae' ? 'DAE compartilhado' : 'NF'}
+                      </span>
+                    </div>
+                    {a.dae && (
+                      <p className="truncate text-xs text-amber-700">{a.dae.titulo}</p>
+                    )}
                     <p className="truncate text-xs text-slate-400">
                       {a.arquivoNome} · {formatarTamanho(a.tamanho)}
                       {a.criadoPor ? ` · ${a.criadoPor}` : ''} ·{' '}

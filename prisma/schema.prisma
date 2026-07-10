@@ -92,6 +92,20 @@ model NotaFiscal {
   anexos        Anexo[]
 }
 
+model DaeCompartilhado {
+  id                   Int      @id @default(autoincrement())
+  chave                String   @unique
+  titulo               String
+  identificadorExterno String?
+  codigo               String?
+  descricao            String?
+  vencimento           String?
+  valor                Float?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  anexos               Anexo[]
+}
+
 // Anexos por nota (PDF do DAE, foto de comprovante, planilha, etc.)
 // O arquivo em si fica no disco (ANEXOS_PATH); aqui guardamos só os metadados.
 model Anexo {
@@ -103,8 +117,11 @@ model Anexo {
   caminho     String     // caminho relativo dentro de ANEXOS_PATH
   criadoPor   String?    // login de quem enviou
   createdAt   DateTime   @default(now())
-  notaId      Int
-  nota        NotaFiscal @relation(fields: [notaId], references: [id], onDelete: Cascade)
+  notaId      Int?
+  nota        NotaFiscal?       @relation(fields: [notaId], references: [id], onDelete: Cascade)
+  daeCompartilhadoId Int?
+  daeCompartilhado   DaeCompartilhado? @relation(fields: [daeCompartilhadoId], references: [id], onDelete: Cascade)
 
   @@index([notaId])
+  @@index([daeCompartilhadoId])
 }
