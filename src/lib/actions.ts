@@ -737,7 +737,7 @@ export async function listarNotasAlertaDae() {
   await exigirUsuario();
   return prisma.notaFiscal.findMany({
     where: {
-      sitramDaeStatus: { in: ['EM_ABERTO', 'LIBERADA_PARA_GERAR'] },
+      sitramConsultadaEm: { not: null },
     },
     orderBy: { emitidaEm: 'desc' },
     include: { cnpj: { select: { cnpj: true, razaoSocial: true } } },

@@ -32,6 +32,7 @@ import {
   chaveDataLocal,
   diasAteVencimento,
   extrairResumoDae,
+  lancamentosVisiveisDae,
   type DaeCompartilhadoInfo,
   statusDaeEfetivo,
   type LancamentoDaeNormalizado,
@@ -817,29 +818,30 @@ export default function Dashboard({
   }
 
   return (
-    <div className="min-h-screen p-3 md:p-5 bg-slate-50">
+    <div className="min-h-screen p-3 md:p-5 bg-[var(--ground)]">
       <div className="max-w-[1800px] mx-auto">
         {/* Header */}
-        <header className="rounded-xl bg-indigo-700 px-5 py-4 mb-4 shadow-sm flex flex-wrap gap-4 justify-between items-center">
-          <div className="flex items-center gap-3 text-white">
-            <div className="w-12 h-12 rounded-xl bg-white/15 grid place-items-center text-2xl backdrop-blur">
-              🧾
+        <header className="rounded-xl bg-[var(--surface)] border border-[var(--border)] px-5 py-3.5 mb-4 shadow-sm flex flex-wrap gap-4 justify-between items-center">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-[10px] grid place-items-center text-white text-lg font-bold"
+              style={{ background: 'linear-gradient(140deg,#2a251c,#4a4234)' }}>
+              D
             </div>
             <div>
-              <h1 className="text-2xl font-bold tracking-tight">DanfeCollector</h1>
-              <p className="text-indigo-100 text-sm">Sincronização direta com a SEFAZ · custo zero</p>
+              <h1 className="text-lg font-bold tracking-tight text-[var(--ink)]">DanfeCollector</h1>
+              <p className="text-[var(--ink-mut)] text-xs">Sincronização direta com a SEFAZ</p>
             </div>
           </div>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <button
               onClick={() => setMostrarImport((v) => !v)}
-              className="bg-white/15 hover:bg-white/25 text-white px-4 py-2 rounded-lg text-sm font-medium transition backdrop-blur"
+              className="px-3.5 py-2 rounded-lg text-sm font-medium border border-[var(--border-strong)] bg-[var(--surface)] text-[var(--ink)] hover:bg-[var(--surface-2)] transition"
             >
-              📥 Importar chaves
+              Importar chaves
             </button>
             <button
               onClick={() => setMostrarSitram((v) => !v)}
-              className="bg-white/15 hover:bg-white/25 text-white px-4 py-2 rounded-lg text-sm font-medium transition backdrop-blur"
+              className="px-3.5 py-2 rounded-lg text-sm font-medium border border-[var(--border-strong)] bg-[var(--surface)] text-[var(--ink)] hover:bg-[var(--surface-2)] transition"
             >
               SITRAM
             </button>
@@ -848,26 +850,32 @@ export default function Dashboard({
             <button
               onClick={abrirCertificados}
               disabled={carregandoCerts}
-              className="bg-white/15 hover:bg-white/25 text-white px-4 py-2 rounded-lg text-sm font-medium transition disabled:opacity-50 backdrop-blur"
+              className="px-3.5 py-2 rounded-lg text-sm font-medium border border-[var(--border-strong)] bg-[var(--surface)] text-[var(--ink)] hover:bg-[var(--surface-2)] transition disabled:opacity-50"
             >
-              {carregandoCerts ? 'Lendo…' : certs ? 'Fechar certificados' : '🔐 Certificados do PC'}
+              {carregandoCerts ? 'Lendo…' : certs ? 'Fechar certificados' : 'Certificados do PC'}
             </button>
             <button
               onClick={() => executar(verificarCertificado)}
               disabled={pending}
-              className="bg-white text-indigo-700 hover:bg-indigo-50 px-4 py-2 rounded-lg text-sm font-semibold transition disabled:opacity-50"
+              className="px-3.5 py-2 rounded-lg text-sm font-semibold bg-[var(--accent)] text-[var(--accent-ink)] hover:brightness-150 transition disabled:opacity-50"
             >
-              Verificar Certificado
+              Verificar certificado
             </button>
               </>
             )}
-            <form action={sairUsuario} className="flex items-center gap-2">
-              <span className="rounded-lg bg-white/10 px-3 py-2 text-sm text-white">
-                {usuario.nome} {usuario.admin ? '(admin)' : '(operacao)'}
-              </span>
+            <form action={sairUsuario} className="flex items-center gap-2 pl-1">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-full bg-[var(--accent)] text-white grid place-items-center text-xs font-bold">
+                  {usuario.nome.slice(0, 2).toUpperCase()}
+                </div>
+                <div className="leading-tight">
+                  <div className="text-xs font-semibold text-[var(--ink)]">{usuario.nome}</div>
+                  <div className="text-[11px] text-[var(--ink-mut)]">{usuario.admin ? 'admin' : 'operação'}</div>
+                </div>
+              </div>
               <button
                 type="submit"
-                className="bg-white/15 hover:bg-white/25 text-white px-3 py-2 rounded-lg text-sm font-medium transition"
+                className="px-3 py-2 rounded-lg text-sm font-medium border border-[var(--border-strong)] bg-[var(--surface)] text-[var(--ink)] hover:bg-[var(--surface-2)] transition"
               >
                 Sair
               </button>
@@ -877,15 +885,15 @@ export default function Dashboard({
 
         {/* KPIs */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
-          <KpiCard label="Empresas" value={String(cnpjs.length)} icon="🏢" accent="bg-indigo-100 text-indigo-700" />
+          <KpiCard label="Empresas" value={String(cnpjs.length)} sub="cadastradas" tone="neu" />
           <KpiCard
             label="Notas fiscais"
-            value={anoCarregado ? `${notas.length} (${anoCarregado})` : totalNotas > notas.length ? `${notas.length} de ${totalNotas}` : String(notas.length)}
-            icon="🧾"
-            accent="bg-sky-100 text-sky-700"
+            value={anoCarregado ? `${notas.length}` : String(notas.length)}
+            sub={anoCarregado ? `ano ${anoCarregado}` : totalNotas > notas.length ? `de ${totalNotas} no total` : 'no total'}
+            tone="neu"
           />
-          <KpiCard label="Valor total" value={moeda(valorGeral)} icon="💰" accent="bg-emerald-100 text-emerald-700" />
-          <KpiCard label="A manifestar" value={String(pendentes)} icon="⏳" accent="bg-amber-100 text-amber-700" />
+          <KpiCard label="Valor movimentado" value={moeda(valorGeral)} sub="notas carregadas" tone="good" />
+          <KpiCard label="A manifestar" value={String(pendentes)} sub="resumos pendentes" tone="warn" />
         </div>
 
         {/* Painel de importação por chave */}
@@ -902,7 +910,7 @@ export default function Dashboard({
               <select
                 value={importCnpjId}
                 onChange={(e) => setImportCnpjId(e.target.value ? Number(e.target.value) : '')}
-                className="border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white text-slate-700 focus:ring-2 focus:ring-indigo-200 outline-none"
+                className="border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white text-slate-700 focus:ring-2 focus:ring-[var(--border-strong)] outline-none"
               >
                 <option value="">Empresa destinatária das notas…</option>
                 {cnpjs.map((c) => (
@@ -924,13 +932,13 @@ export default function Dashboard({
               onChange={(e) => setImportTexto(e.target.value)}
               placeholder="Cole aqui as chaves de acesso (uma por linha ou coladas do Excel)…"
               rows={5}
-              className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm font-mono bg-white text-slate-900 placeholder-slate-400 focus:ring-2 focus:ring-indigo-200 outline-none"
+              className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm font-mono bg-white text-slate-900 placeholder-slate-400 focus:ring-2 focus:ring-[var(--border-strong)] outline-none"
             />
             <div className="flex items-center gap-3 mt-3">
               <button
                 onClick={handleImportar}
                 disabled={!!importProgresso && importProgresso.feito < importProgresso.total}
-                className="bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2 rounded-lg text-sm font-medium disabled:opacity-50"
+                className="bg-[var(--accent)] hover:bg-[var(--accent)] text-white px-5 py-2 rounded-lg text-sm font-medium disabled:opacity-50"
               >
                 {importProgresso && importProgresso.feito < importProgresso.total
                   ? `Importando… ${importProgresso.feito}/${importProgresso.total}`
@@ -945,7 +953,7 @@ export default function Dashboard({
               <div className="mt-3">
                 <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
                   <div
-                    className="bg-indigo-500 h-2 transition-all"
+                    className="bg-[var(--accent)] h-2 transition-all"
                     style={{ width: `${(importProgresso.feito / importProgresso.total) * 100}%` }}
                   />
                 </div>
@@ -974,7 +982,7 @@ export default function Dashboard({
                   value={pastaXml}
                   onChange={(e) => setPastaXml(e.target.value)}
                   placeholder="Ex.: C:\Users\diarl\Documents\XMLs-Contador"
-                  className="flex-1 border border-slate-300 rounded-lg px-3 py-2 text-sm font-mono bg-white text-slate-900 placeholder-slate-400 focus:ring-2 focus:ring-indigo-200 outline-none"
+                  className="flex-1 border border-slate-300 rounded-lg px-3 py-2 text-sm font-mono bg-white text-slate-900 placeholder-slate-400 focus:ring-2 focus:ring-[var(--border-strong)] outline-none"
                 />
                 <button
                   onClick={handleImportarPasta}
@@ -1005,13 +1013,13 @@ export default function Dashboard({
               onChange={(e) => setSitramTexto(e.target.value)}
               placeholder="Cole aqui uma ou mais chaves de NF-e ou MDF-e..."
               rows={4}
-              className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm font-mono bg-white text-slate-900 placeholder-slate-400 focus:ring-2 focus:ring-indigo-200 outline-none"
+              className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm font-mono bg-white text-slate-900 placeholder-slate-400 focus:ring-2 focus:ring-[var(--border-strong)] outline-none"
             />
             <div className="flex items-center gap-3 mt-3">
               <button
                 onClick={handleSitram}
                 disabled={pending}
-                className="bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2 rounded-lg text-sm font-medium disabled:opacity-50"
+                className="bg-[var(--accent)] hover:bg-[var(--accent)] text-white px-5 py-2 rounded-lg text-sm font-medium disabled:opacity-50"
               >
                 {pending ? 'Consultando...' : 'Consultar SITRAM'}
               </button>
@@ -1032,7 +1040,7 @@ export default function Dashboard({
                       value={sitramAno}
                       onChange={(e) => setSitramAno(e.target.value)}
                       disabled={sitramConsultandoTudo}
-                      className="ml-2 border border-slate-300 rounded-lg px-3 py-1 text-sm bg-white text-slate-700 focus:ring-2 focus:ring-indigo-200 outline-none disabled:opacity-50"
+                      className="ml-2 border border-slate-300 rounded-lg px-3 py-1 text-sm bg-white text-slate-700 focus:ring-2 focus:ring-[var(--border-strong)] outline-none disabled:opacity-50"
                     >
                       {anosDisponiveis.map((ano) => (
                         <option key={ano} value={String(ano)}>{ano}</option>
@@ -1063,7 +1071,7 @@ export default function Dashboard({
               </div>
             </div>
             {sitramProgresso && (
-              <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+              <div className="mt-3 rounded-xl border border-slate-200 bg-[var(--surface-2)] p-3">
                 <div className="mb-2 flex items-center justify-between gap-3 text-xs text-slate-600">
                   <span>{sitramProgresso.feito} de {sitramProgresso.total} consultada(s)</span>
                   <span>{sitramProgresso.atualizadas} atualizada(s) • {sitramProgresso.erros} erro(s)</span>
@@ -1105,7 +1113,7 @@ export default function Dashboard({
               <button
                 onClick={handleVincularCerts}
                 disabled={pending}
-                className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50"
+                className="bg-[var(--accent)] hover:bg-[var(--accent)] text-white px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50"
               >
                 Cadastrar / vincular todas
               </button>
@@ -1126,7 +1134,7 @@ export default function Dashboard({
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {certs.map((c) => (
-                      <tr key={c.thumbprint} className="hover:bg-slate-50">
+                      <tr key={c.thumbprint} className="hover:bg-[var(--surface-2)]">
                         <td className="py-2.5 font-medium text-slate-700">{c.razaoSocial}</td>
                         <td className="py-2.5 font-mono text-xs text-slate-500">{formatarCnpj(c.cnpj)}</td>
                         <td className="py-2.5">{c.uf}</td>
@@ -1186,7 +1194,7 @@ export default function Dashboard({
                   ? new Date(c.bloqueadoAte).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
                   : '';
                 return (
-                  <li key={c.id} className="rounded-xl border border-slate-100 p-3 hover:border-slate-200 hover:bg-slate-50/60 transition">
+                  <li key={c.id} className="rounded-xl border border-slate-100 p-3 hover:border-slate-200 hover:bg-[var(--surface-2)]/60 transition">
                     <div className="flex justify-between items-start gap-2">
                       <div className="min-w-0">
                         <p className="font-semibold text-sm text-slate-800 truncate">{c.razaoSocial || 'Sem nome'}</p>
@@ -1236,14 +1244,14 @@ export default function Dashboard({
             {podeAdministrar && (mostrarForm ? (
               <form action={handleAdicionarCnpj} className="mt-4 space-y-2 border-t border-slate-100 pt-4">
                 <input name="cnpj" placeholder="CNPJ (somente números)" required
-                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white text-slate-900 placeholder-slate-400 focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400 outline-none" />
+                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white text-slate-900 placeholder-slate-400 focus:ring-2 focus:ring-[var(--border-strong)] focus:border-[var(--accent)] outline-none" />
                 <input name="razaoSocial" placeholder="Razão Social (opcional)"
-                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white text-slate-900 placeholder-slate-400 focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400 outline-none" />
+                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white text-slate-900 placeholder-slate-400 focus:ring-2 focus:ring-[var(--border-strong)] focus:border-[var(--accent)] outline-none" />
                 <input name="uf" placeholder="UF (ex.: CE)" required maxLength={2}
-                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm uppercase bg-white text-slate-900 placeholder-slate-400 focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400 outline-none" />
+                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm uppercase bg-white text-slate-900 placeholder-slate-400 focus:ring-2 focus:ring-[var(--border-strong)] focus:border-[var(--accent)] outline-none" />
                 <div className="flex gap-2">
                   <button type="submit" disabled={pending}
-                    className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white py-2 rounded-lg text-sm font-medium disabled:opacity-50">
+                    className="flex-1 bg-[var(--accent)] hover:bg-[var(--accent)] text-white py-2 rounded-lg text-sm font-medium disabled:opacity-50">
                     Salvar
                   </button>
                   <button type="button" onClick={() => setMostrarForm(false)}
@@ -1254,7 +1262,7 @@ export default function Dashboard({
               </form>
             ) : (
               <button onClick={() => setMostrarForm(true)}
-                className="mt-4 w-full border border-dashed border-slate-300 text-indigo-600 text-sm font-medium hover:bg-indigo-50 hover:border-indigo-300 rounded-lg py-2 transition">
+                className="mt-4 w-full border border-dashed border-slate-300 text-[var(--accent)] text-sm font-medium hover:bg-[var(--accent-soft)] hover:border-[var(--border-strong)] rounded-lg py-2 transition">
                 + Adicionar CNPJ
               </button>
             ))}
@@ -1272,7 +1280,7 @@ export default function Dashboard({
               <select
                 value={filtroCnpjId}
                 onChange={(e) => setFiltroCnpjId(e.target.value === 'todos' ? 'todos' : Number(e.target.value))}
-                className="border border-slate-300 rounded-lg px-3 py-1.5 text-sm bg-white text-slate-700 focus:ring-2 focus:ring-indigo-200 outline-none"
+                className="border border-slate-300 rounded-lg px-3 py-1.5 text-sm bg-white text-slate-700 focus:ring-2 focus:ring-[var(--border-strong)] outline-none"
               >
                 <option value="todos">Todas as empresas</option>
                 {cnpjs.map((c) => (
@@ -1282,7 +1290,7 @@ export default function Dashboard({
               <select
                 value={filtroStatus}
                 onChange={(e) => setFiltroStatus(e.target.value as typeof filtroStatus)}
-                className="border border-slate-300 rounded-lg px-3 py-1.5 text-sm bg-white text-slate-700 focus:ring-2 focus:ring-indigo-200 outline-none"
+                className="border border-slate-300 rounded-lg px-3 py-1.5 text-sm bg-white text-slate-700 focus:ring-2 focus:ring-[var(--border-strong)] outline-none"
               >
                 <option value="todos">Todos os status</option>
                 <option value="RESUMO">Resumo</option>
@@ -1317,8 +1325,8 @@ export default function Dashboard({
                 onClick={() => setMostrarFiltros((v) => !v)}
                 className={`px-3 py-1.5 rounded-lg text-sm font-medium border transition ${
                   mostrarFiltros || filtrosAtivos > 0
-                    ? 'bg-indigo-50 border-indigo-200 text-indigo-700'
-                    : 'border-slate-300 text-slate-600 hover:bg-slate-50'
+                    ? 'bg-[var(--accent-soft)] border-[var(--border-strong)] text-[var(--accent)]'
+                    : 'border-slate-300 text-slate-600 hover:bg-[var(--surface-2)]'
                 }`}
               >
                 🔍 Filtros{filtrosAtivos > 0 ? ` (${filtrosAtivos})` : ''}
@@ -1326,7 +1334,7 @@ export default function Dashboard({
             </div>
 
             {mostrarFiltros && (
-              <div className="mb-4 p-4 bg-slate-50 border border-slate-200 rounded-xl grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+              <div className="mb-4 p-4 bg-[var(--surface-2)] border border-slate-200 rounded-xl grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
                 <div>
                   <label className="block text-xs font-medium text-slate-500 mb-1">Emitente (nome ou CNPJ)</label>
                   <input
@@ -1334,7 +1342,7 @@ export default function Dashboard({
                     onChange={(e) => setFiltroEmitente(e.target.value)}
                     placeholder="Buscar emitente…"
                     list="sugestoes-emitente"
-                    className="w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm bg-white text-slate-900 placeholder-slate-400 focus:ring-2 focus:ring-indigo-200 outline-none"
+                    className="w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm bg-white text-slate-900 placeholder-slate-400 focus:ring-2 focus:ring-[var(--border-strong)] outline-none"
                   />
                   <datalist id="sugestoes-emitente">
                     {sugestoesEmitente.map((s) => (
@@ -1349,7 +1357,7 @@ export default function Dashboard({
                     onChange={(e) => setFiltroDestinatario(e.target.value)}
                     placeholder="Buscar destinatário…"
                     list="sugestoes-destinatario"
-                    className="w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm bg-white text-slate-900 placeholder-slate-400 focus:ring-2 focus:ring-indigo-200 outline-none"
+                    className="w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm bg-white text-slate-900 placeholder-slate-400 focus:ring-2 focus:ring-[var(--border-strong)] outline-none"
                   />
                   <datalist id="sugestoes-destinatario">
                     {sugestoesDestinatario.map((s) => (
@@ -1365,8 +1373,8 @@ export default function Dashboard({
                       onClick={() => toggleFiltroEtiqueta('sem-etiqueta')}
                       className={`px-2.5 py-1 rounded-full text-xs font-medium border transition ${
                         filtroEtiquetas.includes('sem-etiqueta')
-                          ? 'bg-indigo-600 border-indigo-600 text-white'
-                          : 'bg-white border-slate-300 text-slate-600 hover:border-indigo-300 hover:bg-indigo-50'
+                          ? 'bg-[var(--accent)] border-[var(--accent)] text-white'
+                          : 'bg-white border-slate-300 text-slate-600 hover:border-[var(--border-strong)] hover:bg-[var(--accent-soft)]'
                       }`}
                     >
                       Sem etiqueta
@@ -1378,8 +1386,8 @@ export default function Dashboard({
                         onClick={() => toggleFiltroEtiqueta(tag)}
                         className={`px-2.5 py-1 rounded-full text-xs font-medium border transition ${
                           filtroEtiquetas.includes(tag)
-                            ? 'bg-indigo-600 border-indigo-600 text-white'
-                            : 'bg-white border-slate-300 text-slate-600 hover:border-indigo-300 hover:bg-indigo-50'
+                            ? 'bg-[var(--accent)] border-[var(--accent)] text-white'
+                            : 'bg-white border-slate-300 text-slate-600 hover:border-[var(--border-strong)] hover:bg-[var(--accent-soft)]'
                         }`}
                       >
                         {tag}
@@ -1395,14 +1403,14 @@ export default function Dashboard({
                       value={filtroValorMin}
                       onChange={(e) => setFiltroValorMin(e.target.value)}
                       placeholder="Mín."
-                      className="w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm bg-white text-slate-900 placeholder-slate-400 focus:ring-2 focus:ring-indigo-200 outline-none"
+                      className="w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm bg-white text-slate-900 placeholder-slate-400 focus:ring-2 focus:ring-[var(--border-strong)] outline-none"
                     />
                     <input
                       type="number"
                       value={filtroValorMax}
                       onChange={(e) => setFiltroValorMax(e.target.value)}
                       placeholder="Máx."
-                      className="w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm bg-white text-slate-900 placeholder-slate-400 focus:ring-2 focus:ring-indigo-200 outline-none"
+                      className="w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm bg-white text-slate-900 placeholder-slate-400 focus:ring-2 focus:ring-[var(--border-strong)] outline-none"
                     />
                   </div>
                 </div>
@@ -1415,7 +1423,7 @@ export default function Dashboard({
                       value={filtroItensMin}
                       onChange={(e) => setFiltroItensMin(e.target.value)}
                       placeholder="Mín."
-                      className="w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm bg-white text-slate-900 placeholder-slate-400 focus:ring-2 focus:ring-indigo-200 outline-none"
+                      className="w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm bg-white text-slate-900 placeholder-slate-400 focus:ring-2 focus:ring-[var(--border-strong)] outline-none"
                     />
                     <input
                       type="number"
@@ -1423,7 +1431,7 @@ export default function Dashboard({
                       value={filtroItensMax}
                       onChange={(e) => setFiltroItensMax(e.target.value)}
                       placeholder="Máx."
-                      className="w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm bg-white text-slate-900 placeholder-slate-400 focus:ring-2 focus:ring-indigo-200 outline-none"
+                      className="w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm bg-white text-slate-900 placeholder-slate-400 focus:ring-2 focus:ring-[var(--border-strong)] outline-none"
                     />
                   </div>
                   <p className="text-[11px] text-slate-400 mt-1">Disponível apenas para notas COMPLETA.</p>
@@ -1435,13 +1443,13 @@ export default function Dashboard({
                       type="date"
                       value={filtroDataInicio}
                       onChange={(e) => setFiltroDataInicio(e.target.value)}
-                      className="w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm bg-white text-slate-900 focus:ring-2 focus:ring-indigo-200 outline-none"
+                      className="w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm bg-white text-slate-900 focus:ring-2 focus:ring-[var(--border-strong)] outline-none"
                     />
                     <input
                       type="date"
                       value={filtroDataFim}
                       onChange={(e) => setFiltroDataFim(e.target.value)}
-                      className="w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm bg-white text-slate-900 focus:ring-2 focus:ring-indigo-200 outline-none"
+                      className="w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm bg-white text-slate-900 focus:ring-2 focus:ring-[var(--border-strong)] outline-none"
                     />
                   </div>
                 </div>
@@ -1451,7 +1459,7 @@ export default function Dashboard({
                     <select
                       value={filtroMes}
                       onChange={(e) => setFiltroMes(e.target.value)}
-                      className="w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm bg-white text-slate-700 focus:ring-2 focus:ring-indigo-200 outline-none"
+                      className="w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm bg-white text-slate-700 focus:ring-2 focus:ring-[var(--border-strong)] outline-none"
                     >
                       <option value="">Todos os meses</option>
                       {['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'].map((m, i) => (
@@ -1462,14 +1470,14 @@ export default function Dashboard({
                       value={filtroAno}
                       onChange={(e) => setFiltroAno(e.target.value)}
                       disabled={carregandoAno}
-                      className="w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm bg-white text-slate-700 focus:ring-2 focus:ring-indigo-200 outline-none disabled:opacity-60"
+                      className="w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm bg-white text-slate-700 focus:ring-2 focus:ring-[var(--border-strong)] outline-none disabled:opacity-60"
                     >
                       <option value="">Todos (2000 recentes)</option>
                       {anosDisponiveis.map((ano) => (
                         <option key={ano} value={String(ano)}>{ano}{anoCarregado === ano ? ' ✓' : ''}</option>
                       ))}
                     </select>
-                    {carregandoAno && <p className="text-xs text-indigo-600 mt-1">Carregando notas de {filtroAno}…</p>}
+                    {carregandoAno && <p className="text-xs text-[var(--accent)] mt-1">Carregando notas de {filtroAno}…</p>}
                   </div>
                 </div>
                 <div>
@@ -1477,7 +1485,7 @@ export default function Dashboard({
                   <select
                     value={filtroSituacao}
                     onChange={(e) => setFiltroSituacao(e.target.value as typeof filtroSituacao)}
-                    className="w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm bg-white text-slate-700 focus:ring-2 focus:ring-indigo-200 outline-none"
+                    className="w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm bg-white text-slate-700 focus:ring-2 focus:ring-[var(--border-strong)] outline-none"
                   >
                     <option value="todas">Todas</option>
                     <option value="AUTORIZADA">Autorizada</option>
@@ -1490,7 +1498,7 @@ export default function Dashboard({
                   <select
                     value={filtroDaeSitram}
                     onChange={(e) => setFiltroDaeSitram(e.target.value as FiltroDaeSitram)}
-                    className="w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm bg-white text-slate-700 focus:ring-2 focus:ring-indigo-200 outline-none"
+                    className="w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm bg-white text-slate-700 focus:ring-2 focus:ring-[var(--border-strong)] outline-none"
                   >
                     <option value="todos">Todos</option>
                     <option value="consultado">Consultado</option>
@@ -1509,13 +1517,13 @@ export default function Dashboard({
                       type="date"
                       value={filtroDaeVencInicio}
                       onChange={(e) => setFiltroDaeVencInicio(e.target.value)}
-                      className="w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm bg-white text-slate-900 focus:ring-2 focus:ring-indigo-200 outline-none"
+                      className="w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm bg-white text-slate-900 focus:ring-2 focus:ring-[var(--border-strong)] outline-none"
                     />
                     <input
                       type="date"
                       value={filtroDaeVencFim}
                       onChange={(e) => setFiltroDaeVencFim(e.target.value)}
-                      className="w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm bg-white text-slate-900 focus:ring-2 focus:ring-indigo-200 outline-none"
+                      className="w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm bg-white text-slate-900 focus:ring-2 focus:ring-[var(--border-strong)] outline-none"
                     />
                   </div>
                 </div>
@@ -1533,7 +1541,7 @@ export default function Dashboard({
                       }}
                       placeholder="Não mostrar notas deste emitente…"
                       list="sugestoes-emitente"
-                      className="w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm bg-white text-slate-900 placeholder-slate-400 focus:ring-2 focus:ring-indigo-200 outline-none"
+                      className="w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm bg-white text-slate-900 placeholder-slate-400 focus:ring-2 focus:ring-[var(--border-strong)] outline-none"
                     />
                     <button
                       type="button"
@@ -1657,7 +1665,7 @@ export default function Dashboard({
                   <col className="w-[160px]" />
                 </colgroup>
                 <thead>
-                  <tr className="bg-slate-50 text-slate-500 text-xs uppercase tracking-wide border-b border-slate-200">
+                  <tr className="bg-[var(--surface-2)] text-slate-500 text-xs uppercase tracking-wide border-b border-slate-200">
                     <th className="px-3 py-2 font-medium"></th>
                     <th className="px-3 py-2 font-medium">NF</th>
                     <th className="px-3 py-2 font-medium">Emitente</th>
@@ -1748,14 +1756,15 @@ export default function Dashboard({
   );
 }
 
-function KpiCard({ label, value, icon, accent }: { label: string; value: string; icon: string; accent: string }) {
+function KpiCard({ label, value, sub, tone = 'neu' }: { label: string; value: string; sub?: string; tone?: 'neu' | 'good' | 'warn' | 'crit' }) {
+  const stripe = { neu: 'var(--accent)', good: 'var(--good)', warn: 'var(--warn)', crit: 'var(--crit)' }[tone];
+  const valColor = tone === 'crit' ? 'var(--crit)' : tone === 'warn' ? 'var(--warn)' : 'var(--ink)';
   return (
-    <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm flex items-center gap-3">
-      <div className={`w-11 h-11 rounded-xl grid place-items-center text-xl ${accent}`}>{icon}</div>
-      <div className="min-w-0">
-        <p className="text-xs text-slate-400 font-medium">{label}</p>
-        <p className="text-lg font-bold text-slate-800 truncate">{value}</p>
-      </div>
+    <div className="relative overflow-hidden bg-[var(--surface)] rounded-xl border border-[var(--border)] p-4 shadow-sm">
+      <div className="absolute left-0 top-0 bottom-0 w-[3px]" style={{ background: stripe }} />
+      <p className="text-[11px] uppercase tracking-wider text-[var(--ink-mut)] font-semibold">{label}</p>
+      <p className="text-2xl font-bold tracking-tight truncate mt-1.5" style={{ color: valColor, fontVariantNumeric: 'tabular-nums' }}>{value}</p>
+      {sub && <p className="text-xs text-[var(--ink-mut)] mt-0.5 truncate">{sub}</p>}
     </div>
   );
 }
@@ -1765,7 +1774,7 @@ function Badge({ tone, children }: { tone: 'green' | 'amber' | 'gray' | 'blue' |
     green: 'bg-emerald-100 text-emerald-700',
     amber: 'bg-amber-100 text-amber-700',
     gray: 'bg-slate-200 text-slate-500',
-    blue: 'bg-indigo-100 text-indigo-700',
+    blue: 'bg-[var(--accent-soft)] text-[var(--accent)]',
     sky: 'bg-sky-100 text-sky-700',
     orange: 'bg-orange-100 text-orange-700',
     indigo: 'bg-violet-100 text-violet-700',
@@ -1813,7 +1822,9 @@ function AlertaDaes({
       if (!DAE_A_PAGAR.includes(status)) continue;
 
       const resumo = extrairResumoDae(nota);
-      const pendentes = resumo.lancamentos.filter((lancamento) => !lancamento.pago);
+      const lancamentosRelevantes = lancamentosVisiveisDae(resumo.lancamentos);
+      if (resumo.lancamentos.length > 0 && lancamentosRelevantes.length === 0) continue;
+      const pendentes = lancamentosRelevantes.filter((lancamento) => !lancamento.pago);
       if (pendentes.length === 0) {
         resultado.push({
           id: `${nota.id}-sem-data`,
@@ -1987,7 +1998,7 @@ function CompactFragmentNota({
   const diasParaVencer = diasAteVencimento(lancamentoDestaque?.vencimento);
   return (
     <>
-      <tr className={`cursor-pointer transition ${aberta ? 'bg-indigo-50/60' : 'hover:bg-slate-50'}`} onClick={onToggle}>
+      <tr className={`cursor-pointer transition ${aberta ? 'bg-[var(--accent-soft)]/60' : 'hover:bg-[var(--surface-2)]'}`} onClick={onToggle}>
         <td className="px-3 py-3 align-top" onClick={(e) => e.stopPropagation()}>
           <div className="flex items-center gap-2">
             <span className="text-slate-400 text-sm">{aberta ? 'v' : '>'}</span>
@@ -2072,7 +2083,7 @@ function CompactFragmentNota({
         </td>
       </tr>
       {aberta && (
-        <tr className="bg-slate-50/70">
+        <tr className="bg-[var(--surface-2)]/70">
           <td colSpan={7} className="px-4 py-4">
             <DetalheNota nota={nota} />
           </td>
@@ -2101,7 +2112,7 @@ function FragmentNota({
   const statusDae = statusDaeEfetivo(nota);
   return (
     <>
-      <tr className={`cursor-pointer transition ${aberta ? 'bg-indigo-50/50' : 'hover:bg-slate-50'}`} onClick={onToggle}>
+      <tr className={`cursor-pointer transition ${aberta ? 'bg-[var(--accent-soft)]/50' : 'hover:bg-[var(--surface-2)]'}`} onClick={onToggle}>
         <td className="py-3 text-center" onClick={(e) => e.stopPropagation()}>
           {selecionavel && (
             <input
@@ -2190,7 +2201,7 @@ function FragmentNota({
         </td>
       </tr>
       {aberta && (
-        <tr className="bg-slate-50/70">
+        <tr className="bg-[var(--surface-2)]/70">
           <td colSpan={13} className="px-4 py-4">
             <DetalheNota nota={nota} />
           </td>
@@ -2293,7 +2304,7 @@ function DetalheNota({ nota }: { nota: NotaComCnpj }) {
             key={a}
             onClick={() => setAba(a)}
             className={`px-4 py-1.5 text-sm font-medium rounded-md transition ${
-              aba === a ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+              aba === a ? 'bg-white text-[var(--accent)] shadow-sm' : 'text-slate-500 hover:text-slate-700'
             }`}
           >
             {a === 'dados' ? 'Dados' : a === 'danfe' ? 'DANFE' : a === 'itens' ? 'Itens' : 'Anexos'}
@@ -2377,8 +2388,8 @@ function DetalheNota({ nota }: { nota: NotaComCnpj }) {
                     disabled={salvandoEtiqueta}
                     className={`px-3 py-1.5 rounded-lg text-sm font-medium border transition disabled:opacity-50 ${
                       ativa
-                        ? 'bg-indigo-600 border-indigo-600 text-white'
-                        : 'bg-white border-slate-300 text-slate-600 hover:border-indigo-300 hover:bg-indigo-50'
+                        ? 'bg-[var(--accent)] border-[var(--accent)] text-white'
+                        : 'bg-white border-slate-300 text-slate-600 hover:border-[var(--border-strong)] hover:bg-[var(--accent-soft)]'
                     }`}
                   >
                     {ativa ? '✓ ' : ''}{tag}
@@ -2391,7 +2402,7 @@ function DetalheNota({ nota }: { nota: NotaComCnpj }) {
                   type="button"
                   onClick={(e) => { e.stopPropagation(); handleClicarEtiqueta(tag); }}
                   disabled={salvandoEtiqueta}
-                  className="px-3 py-1.5 rounded-lg text-sm font-medium border border-indigo-600 bg-indigo-600 text-white transition disabled:opacity-50"
+                  className="px-3 py-1.5 rounded-lg text-sm font-medium border border-[var(--accent)] bg-[var(--accent)] text-white transition disabled:opacity-50"
                 >
                   ✓ {tag}
                 </button>
@@ -2418,7 +2429,7 @@ function DetalheNota({ nota }: { nota: NotaComCnpj }) {
                   DANFE oficial (MeuDanfe) ↗
                 </a>
                 <a href={`/danfe/${nota.chave}`} target="_blank" rel="noopener noreferrer"
-                  className="text-indigo-600 text-sm hover:underline">
+                  className="text-[var(--accent)] text-sm hover:underline">
                   Abrir / Imprimir (PDF) ↗
                 </a>
               </div>
@@ -2533,7 +2544,7 @@ function AnexosView({ nota }: { nota: NotaComCnpj }) {
           Enviar anexo
         </h3>
         <form onSubmit={handleEnviar} className="space-y-3">
-          <div className="grid gap-2 rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm">
+          <div className="grid gap-2 rounded-xl border border-slate-200 bg-[var(--surface-2)] p-3 text-sm">
             <label className="flex items-center gap-2 text-slate-700">
               <input
                 type="radio"
@@ -2563,7 +2574,7 @@ function AnexosView({ nota }: { nota: NotaComCnpj }) {
                 <select
                   value={daeChave}
                   onChange={(e) => setDaeChave(e.target.value)}
-                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-indigo-400 focus:outline-none"
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-[var(--accent)] focus:outline-none"
                 >
                   {opcoesDae.map((item) => (
                     <option key={item.chave} value={item.chave}>
@@ -2583,7 +2594,7 @@ function AnexosView({ nota }: { nota: NotaComCnpj }) {
               value={nome}
               onChange={(e) => setNome(e.target.value)}
               placeholder="Ex.: Comprovante DAE, Foto da NF…"
-              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-indigo-400 focus:outline-none"
+              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-[var(--accent)] focus:outline-none"
             />
           </div>
           <div className="flex-1">
@@ -2593,13 +2604,13 @@ function AnexosView({ nota }: { nota: NotaComCnpj }) {
               type="file"
               accept={ACCEPT_ANEXOS}
               onChange={(e) => setArquivo(e.target.files?.[0] ?? null)}
-              className="w-full text-sm text-slate-600 file:mr-3 file:rounded-lg file:border-0 file:bg-indigo-50 file:px-3 file:py-2 file:text-sm file:font-medium file:text-indigo-700 hover:file:bg-indigo-100"
+              className="w-full text-sm text-slate-600 file:mr-3 file:rounded-lg file:border-0 file:bg-[var(--accent-soft)] file:px-3 file:py-2 file:text-sm file:font-medium file:text-[var(--accent)] hover:file:bg-[var(--accent-soft)]"
             />
           </div>
           <button
             type="submit"
             disabled={enviando || (escopo === 'dae' && !daeChave)}
-            className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
+            className="rounded-lg bg-[var(--accent)] px-4 py-2 text-sm font-medium text-white hover:bg-[var(--accent)] disabled:opacity-50"
           >
             {enviando ? 'Enviando…' : 'Enviar'}
           </button>
@@ -2645,7 +2656,7 @@ function AnexosView({ nota }: { nota: NotaComCnpj }) {
                     href={base}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="text-sm font-medium text-indigo-600 hover:underline"
+                    className="text-sm font-medium text-[var(--accent)] hover:underline"
                   >
                     Ver
                   </a>
@@ -2676,12 +2687,13 @@ function AnexosView({ nota }: { nota: NotaComCnpj }) {
 
 function ResumoDaeVisual({ nota }: { nota: NotaComCnpj }) {
   const resumo = extrairResumoDae(nota);
+  const lancamentosVisiveis = lancamentosVisiveisDae(resumo.lancamentos);
   const status = statusDaeEfetivo(nota);
-  const vencidos = resumo.lancamentos.filter((lancamento) => {
+  const vencidos = lancamentosVisiveis.filter((lancamento) => {
     const dias = diasAteVencimento(lancamento.vencimento);
     return !lancamento.pago && dias !== null && dias < 0;
   });
-  const proximos = resumo.lancamentos.filter((lancamento) => {
+  const proximos = lancamentosVisiveis.filter((lancamento) => {
     const dias = diasAteVencimento(lancamento.vencimento);
     return !lancamento.pago && dias !== null && dias >= 0 && dias <= 7;
   });
@@ -2710,16 +2722,16 @@ function ResumoDaeVisual({ nota }: { nota: NotaComCnpj }) {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 gap-3 rounded-xl bg-slate-50 p-3 text-sm md:grid-cols-2 lg:grid-cols-4">
+        <div className="grid grid-cols-1 gap-3 rounded-xl bg-[var(--surface-2)] p-3 text-sm md:grid-cols-2 lg:grid-cols-4">
           <Campo rotulo="Documento gerado" valor={dataHora(resumo.documentoGeradoEm)} />
           <Campo rotulo="Passou pelo posto fiscal" valor={dataHora(resumo.passouPostoEm)} />
           <Campo rotulo="Posto fiscal" valor={resumo.postoFiscal || '—'} />
           <Campo rotulo="Ação fiscal" valor={resumo.acaoFiscal || '—'} />
         </div>
 
-        {resumo.lancamentos.length > 0 ? (
+        {lancamentosVisiveis.length > 0 ? (
           <div className="mt-4 grid gap-3 lg:grid-cols-2">
-            {resumo.lancamentos.map((lancamento, indice) => {
+            {lancamentosVisiveis.map((lancamento, indice) => {
               const dias = diasAteVencimento(lancamento.vencimento);
               const vencido = !lancamento.pago && dias !== null && dias < 0;
               const venceHoje = !lancamento.pago && dias === 0;
@@ -2767,7 +2779,7 @@ function ResumoDaeVisual({ nota }: { nota: NotaComCnpj }) {
             })}
           </div>
         ) : (
-          <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
+          <div className="mt-4 rounded-xl border border-slate-200 bg-[var(--surface-2)] p-4 text-sm text-slate-600">
             <strong>{resumo.classificacao}</strong> — nenhum lançamento de DAE foi retornado pelo SITRAM.
           </div>
         )}
@@ -2775,7 +2787,7 @@ function ResumoDaeVisual({ nota }: { nota: NotaComCnpj }) {
         {nota.sitramDaeResumo && (
           <details className="mt-4 text-xs text-slate-500">
             <summary className="cursor-pointer font-medium">Ver texto original do SITRAM</summary>
-            <p className="mt-2 rounded-lg bg-slate-50 p-3 leading-relaxed">{nota.sitramDaeResumo}</p>
+            <p className="mt-2 rounded-lg bg-[var(--surface-2)] p-3 leading-relaxed">{nota.sitramDaeResumo}</p>
           </details>
         )}
       </div>

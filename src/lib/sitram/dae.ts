@@ -34,6 +34,15 @@ export interface DaeCompartilhadoInfo {
   valor: number | null;
 }
 
+export function ehLancamentoFecop2020(lancamento: Pick<LancamentoDaeNormalizado, 'codigo' | 'descricao'>): boolean {
+  const alvo = semAcentos(`${lancamento.codigo ?? ''} ${lancamento.descricao ?? ''}`);
+  return /\b2020\b/.test(alvo) && /\bfecop\b/.test(alvo);
+}
+
+export function lancamentosVisiveisDae(lancamentos: LancamentoDaeNormalizado[]): LancamentoDaeNormalizado[] {
+  return lancamentos.filter((lancamento) => !ehLancamentoFecop2020(lancamento));
+}
+
 export interface NotaComDadosDae {
   sitramDaeStatus?: string | null;
   sitramDaeResumo?: string | null;

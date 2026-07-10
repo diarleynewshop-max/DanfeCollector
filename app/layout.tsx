@@ -1,8 +1,13 @@
 import type { Metadata } from "next";
-import { Inter } from "next/font/google";
+import { Poppins } from "next/font/google";
 import "./globals.css";
 
-const inter = Inter({ subsets: ["latin"], display: "swap" });
+// Fonte fina e arredondada, com curvas mais encorpadas nos pesos altos.
+const poppins = Poppins({
+  subsets: ["latin"],
+  weight: ["300", "400", "500", "600", "700"],
+  display: "swap",
+});
 
 export const metadata: Metadata = {
   title: "DanfeCollector",
@@ -16,7 +21,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="pt-BR">
-      <body className={`${inter.className} bg-slate-50 text-slate-800 antialiased`}>{children}</body>
+      <body className={`${poppins.className} bg-[var(--ground)] text-[var(--ink)] antialiased`}>{children}</body>
     </html>
   );
 }

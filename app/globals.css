@@ -1,14 +1,30 @@
 @import "tailwindcss";
 
-/* Interface clara fixa — sem variação por prefers-color-scheme,
-   pois os cards usam fundo branco e o texto precisa ser sempre escuro. */
+/* Interface clara fixa (bege) — sem variação por prefers-color-scheme.
+   Fundo bege, cards brancos, texto preto quente; preto é a cor de ação. */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --ground: #ece5d6;        /* bege claro (fundo da página) */
+  --surface: #ffffff;       /* cards / destaques em branco */
+  --surface-2: #f7f3ea;     /* insets e zebra (branco quente) */
+  --border: #e3dbc9;
+  --border-strong: #d3c8b1;
+  --ink: #1c1813;           /* preto quente */
+  --ink-mut: #756b5b;       /* texto secundário */
+  --accent: #211d16;        /* preto = cor de ação */
+  --accent-soft: #ebe4d3;   /* realce quente (abas/pills neutras) */
+  --accent-ink: #ffffff;
+  --good: #3f7d53; --good-soft: #e4efe1;
+  --warn: #a9701a; --warn-soft: #f3e8d0;
+  --crit: #b23a2c; --crit-soft: #f3e0d8;
+
+  /* compat com nomes antigos */
+  --background: var(--ground);
+  --foreground: var(--ink);
 }
 
 body {
-  color: var(--foreground);
+  color: var(--ink);
+  background: var(--ground);
 }
 
 /* Impressão da DANFE: esconde tudo menos a área da nota */

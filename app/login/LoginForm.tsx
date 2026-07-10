@@ -16,7 +16,7 @@ export default function LoginForm() {
           name="login"
           autoFocus
           autoComplete="username"
-          className="w-full rounded-lg border border-slate-300 px-3 py-2 text-slate-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+          className="w-full rounded-lg border border-[var(--border-strong)] px-3 py-2 text-[var(--ink)] outline-none focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--border-strong)]"
         />
       </div>
       <div>
@@ -25,7 +25,7 @@ export default function LoginForm() {
           name="senha"
           type="password"
           autoComplete="current-password"
-          className="w-full rounded-lg border border-slate-300 px-3 py-2 text-slate-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+          className="w-full rounded-lg border border-[var(--border-strong)] px-3 py-2 text-[var(--ink)] outline-none focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--border-strong)]"
         />
       </div>
       {state.erro && (
@@ -36,7 +36,7 @@ export default function LoginForm() {
       <button
         type="submit"
         disabled={pending}
-        className="w-full rounded-lg bg-indigo-700 px-4 py-2.5 text-sm font-semibold text-white hover:bg-indigo-800 disabled:opacity-50"
+        className="w-full rounded-lg bg-[var(--accent)] px-4 py-2.5 text-sm font-semibold text-[var(--accent-ink)] hover:brightness-150 disabled:opacity-50"
       >
         {pending ? 'Entrando...' : 'Entrar'}
       </button>
