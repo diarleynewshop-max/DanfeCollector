@@ -1,24 +1,33 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { prisma } from '@/lib/prisma';
+import { resolverXmlPath } from '@/lib/xmlpath';
+import { obterUsuarioAtual } from '@/lib/usuarios/auth';
 
 // API gratuita do MeuDanfe: recebe o XML (texto puro) e devolve o PDF em base64.
 const MEUDANFE_URL = 'https://ws.meudanfe.com/api/v1/get/nfe/xmltodanfepdf/API';
 
 export async function GET(_req: Request, { params }: { params: Promise<{ chave: string }> }) {
+  const usuario = await obterUsuarioAtual();
+  if (!usuario) {
+    return new Response('Nao autenticado.', { status: 401 });
+  }
+
   const { chave } = await params;
 
   const nota = await prisma.notaFiscal.findUnique({ where: { chave } });
-  if (!nota || nota.status !== 'COMPLETA' || !nota.xmlPath || !fs.existsSync(nota.xmlPath)) {
+  const xmlPath = nota && nota.status === 'COMPLETA' ? resolverXmlPath(nota.xmlPath) : null;
+  if (!nota || !xmlPath) {
     return new Response('Nota completa não encontrada.', { status: 404 });
   }
 
   // Se já geramos o PDF antes, serve do disco (evita reenviar à MeuDanfe)
-  if (nota.pdfPath && fs.existsSync(nota.pdfPath)) {
-    return servirPdf(fs.readFileSync(nota.pdfPath), chave);
+  const pdfExistente = resolverXmlPath(nota.pdfPath);
+  if (pdfExistente) {
+    return servirPdf(fs.readFileSync(pdfExistente), chave);
   }
 
-  const xml = fs.readFileSync(nota.xmlPath, 'utf8');
+  const xml = fs.readFileSync(xmlPath, 'utf8');
 
   let resp: Response;
   try {
@@ -45,7 +54,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ chave: 
   }
 
   // Persiste ao lado do XML para reuso
-  const pdfPath = path.join(path.dirname(nota.xmlPath), `${chave}-danfe.pdf`);
+  const pdfPath = path.join(path.dirname(xmlPath), `${chave}-danfe.pdf`);
   fs.writeFileSync(pdfPath, pdf);
   await prisma.notaFiscal.update({ where: { id: nota.id }, data: { pdfPath } });
 

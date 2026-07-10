@@ -1,20 +1,26 @@
-import { notFound } from 'next/navigation';
+import { notFound, redirect } from 'next/navigation';
 import * as fs from 'fs';
 import { prisma } from '@/lib/prisma';
 import { parseDanfe } from '@/lib/sefaz/detalhe';
+import { resolverXmlPath } from '@/lib/xmlpath';
+import { obterUsuarioAtual } from '@/lib/usuarios/auth';
 import DanfeView from '../../components/DanfeView';
 import BotaoImprimir from './BotaoImprimir';
 
 export const dynamic = 'force-dynamic';
 
 export default async function DanfePage({ params }: { params: Promise<{ chave: string }> }) {
+  const usuario = await obterUsuarioAtual();
+  if (!usuario) redirect('/login');
+
   const { chave } = await params;
   const nota = await prisma.notaFiscal.findUnique({ where: { chave } });
-  if (!nota || nota.status !== 'COMPLETA' || !nota.xmlPath || !fs.existsSync(nota.xmlPath)) {
+  const xmlPath = nota && nota.status === 'COMPLETA' ? resolverXmlPath(nota.xmlPath) : null;
+  if (!xmlPath) {
     notFound();
   }
 
-  const danfe = parseDanfe(fs.readFileSync(nota.xmlPath, 'utf8'));
+  const danfe = parseDanfe(fs.readFileSync(xmlPath, 'utf8'));
   if (!danfe) notFound();
 
   return (

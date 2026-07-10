@@ -3,7 +3,7 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
@@ -54,9 +54,32 @@ model NotaFiscal {
   valorFrete    Float?
   valorDesconto Float?
   valorIcms     Float?
+  modalidadeFrete         String?
+  transportadoraNome      String?
+  transportadoraCnpj      String?
+  transportadoraIe        String?
+  transportadoraUf        String?
+  transportadoraMunicipio String?
+
+  // Quantidade de itens (det) — só disponível em notas COMPLETA
+  qtdItens      Int?
+  // Etiqueta livre definida pelo usuário, para organização e filtro
+  etiqueta      String?
 
   // RESUMO (resNFe — aguardando manifestação) ou COMPLETA (procNFe — XML integral)
   status        String   @default("RESUMO")
+  // AUTORIZADA (padrão) | CANCELADA (evento 110111) | DENEGADA (cStat 110 na autorização)
+  situacaoSefaz String   @default("AUTORIZADA")
+  // Dados vindos do SITRAM/SEFAZ-CE (consulta por MDF-e)
+  sitramConsultadaEm   DateTime?
+  sitramChaveManifesto String?
+  sitramAcaoFiscal     String?
+  sitramSelada         Boolean?
+  sitramSituacao       String?
+  sitramDaeStatus      String?
+  sitramDaeResumo      String?
+  sitramDaeUrl         String?
+  sitramDetalhe        String?
   // Data da Ciência da Operação (evento 210210) já registrada para esta nota.
   // Quando preenchida, NÃO se deve manifestar de novo (SEFAZ só aceita 1x).
   manifestadaEm DateTime?

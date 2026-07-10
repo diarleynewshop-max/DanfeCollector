@@ -22,8 +22,26 @@ export interface NotaExtraida {
   valorFrete?: number;
   valorDesconto?: number;
   valorIcms?: number;
+  modalidadeFrete?: string;
+  transportadoraNome?: string;
+  transportadoraCnpj?: string;
+  transportadoraIe?: string;
+  transportadoraUf?: string;
+  transportadoraMunicipio?: string;
+  qtdItens?: number;
   status: 'RESUMO' | 'COMPLETA';
+  situacaoSefaz: 'AUTORIZADA' | 'DENEGADA';
   xmlPath: string;
+}
+
+export interface TransporteExtraido {
+  valorFrete?: number;
+  modalidadeFrete?: string;
+  transportadoraNome?: string;
+  transportadoraCnpj?: string;
+  transportadoraIe?: string;
+  transportadoraUf?: string;
+  transportadoraMunicipio?: string;
 }
 
 const parser = new XMLParser({
@@ -58,6 +76,50 @@ function str(v: unknown): string | undefined {
   return String(v);
 }
 
+function obj(v: unknown): Record<string, unknown> {
+  return v && typeof v === 'object' ? (v as Record<string, unknown>) : {};
+}
+
+const MOD_FRETE: Record<string, string> = {
+  '0': '0 - Por conta do emitente',
+  '1': '1 - Por conta do destinatario',
+  '2': '2 - Por conta de terceiros',
+  '3': '3 - Transporte proprio (remetente)',
+  '4': '4 - Transporte proprio (destinatario)',
+  '9': '9 - Sem frete',
+};
+
+function modalidadeFrete(v: unknown): string | undefined {
+  const codigo = str(v);
+  if (!codigo) return undefined;
+  return MOD_FRETE[codigo] ?? codigo;
+}
+
+function extrairTransporteInf(inf: Record<string, unknown>): TransporteExtraido {
+  const transp = obj(inf.transp);
+  const transporta = obj(transp.transporta);
+
+  return {
+    valorFrete: num(obj(obj(inf.total).ICMSTot).vFrete),
+    modalidadeFrete: modalidadeFrete(transp.modFrete),
+    transportadoraNome: str(transporta.xNome),
+    transportadoraCnpj: str(transporta.CNPJ ?? transporta.CPF),
+    transportadoraIe: str(transporta.IE),
+    transportadoraUf: str(transporta.UF),
+    transportadoraMunicipio: str(transporta.xMun),
+  };
+}
+
+export function extrairTransporteXml(xml: string): TransporteExtraido | null {
+  const json = parser.parse(xml);
+  const inf =
+    obj(obj(obj(json).nfeProc).NFe).infNFe ??
+    obj(obj(json).NFe).infNFe;
+  const infObj = obj(inf);
+  if (Object.keys(infObj).length === 0) return null;
+  return extrairTransporteInf(infObj);
+}
+
 /**
  * Detecta um evento de Ciência da Operação (tpEvento 210210) num documento da
  * Distribuição DFe. Retorna a chave da NF-e e o CNPJ de quem manifestou, para
@@ -73,6 +135,23 @@ export function interpretarEventoCiencia(
   return {
     chave: String(inf.chNFe ?? ''),
     cnpjAutor: String(inf.CNPJ ?? ''),
+    dhEvento: String(inf.dhEvento ?? ''),
+  };
+}
+
+/**
+ * Detecta um evento de cancelamento (tpEvento 110111) num documento da
+ * Distribuição DFe. Retorna a chave da NF-e para marcar como CANCELADA.
+ */
+export function interpretarEventoCancelamento(
+  xml: string
+): { chave: string; dhEvento: string } | null {
+  if (!xml.includes('110111')) return null;
+  const json = parser.parse(xml);
+  const inf = json?.procEventoNFe?.evento?.infEvento ?? json?.evento?.infEvento;
+  if (!inf || String(inf.tpEvento) !== '110111') return null;
+  return {
+    chave: String(inf.chNFe ?? ''),
     dhEvento: String(inf.dhEvento ?? ''),
   };
 }
@@ -104,6 +183,7 @@ export function processarDocumento(doc: DocumentoDFe, cnpjInteressado: string): 
       emitenteIe: str(res.IE),
       valorTotal: num(res.vNF),
       status: 'RESUMO',
+      situacaoSefaz: 'AUTORIZADA',
       xmlPath,
     };
   }
@@ -122,6 +202,12 @@ export function processarDocumento(doc: DocumentoDFe, cnpjInteressado: string): 
 
     const dest = inf.dest ?? {};
     const tot = inf.total?.ICMSTot ?? {};
+    const transporte = extrairTransporteInf(inf);
+    const detRaw = inf.det ?? [];
+    const qtdItens = Array.isArray(detRaw) ? detRaw.length : detRaw ? 1 : 0;
+    // cStat 110 = Uso Denegado (nota DENEGADA pela SEFAZ, não autorizada)
+    const cStatProt = Number(json.nfeProc?.protNFe?.infProt?.cStat ?? 100);
+    const situacaoSefaz: 'AUTORIZADA' | 'DENEGADA' = cStatProt === 110 ? 'DENEGADA' : 'AUTORIZADA';
 
     return {
       chave,
@@ -139,10 +225,18 @@ export function processarDocumento(doc: DocumentoDFe, cnpjInteressado: string): 
       destCnpj: str(dest.CNPJ ?? dest.CPF),
       valorTotal: num(tot.vNF),
       valorProdutos: num(tot.vProd),
-      valorFrete: num(tot.vFrete),
+      valorFrete: transporte.valorFrete,
       valorDesconto: num(tot.vDesc),
       valorIcms: num(tot.vICMS),
+      modalidadeFrete: transporte.modalidadeFrete,
+      transportadoraNome: transporte.transportadoraNome,
+      transportadoraCnpj: transporte.transportadoraCnpj,
+      transportadoraIe: transporte.transportadoraIe,
+      transportadoraUf: transporte.transportadoraUf,
+      transportadoraMunicipio: transporte.transportadoraMunicipio,
+      qtdItens,
       status: 'COMPLETA',
+      situacaoSefaz,
       xmlPath,
     };
   }
