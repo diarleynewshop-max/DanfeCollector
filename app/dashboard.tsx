@@ -37,6 +37,12 @@ import {
 } from '@/lib/sitram/dae';
 import type { UsuarioLogado } from '@/lib/usuarios/auth';
 import { sairUsuario } from '@/lib/usuarios/actions';
+import {
+  listarAnexos,
+  enviarAnexo,
+  excluirAnexo,
+  type AnexoInfo,
+} from '@/lib/anexos/actions';
 import DanfeView from './components/DanfeView';
 import ItensView from './components/ItensView';
 
@@ -2044,7 +2050,7 @@ function FragmentNota({
   );
 }
 
-type Aba = 'dados' | 'danfe' | 'itens';
+type Aba = 'dados' | 'danfe' | 'itens' | 'anexos';
 
 function DetalheNota({ nota }: { nota: NotaComCnpj }) {
   const router = useRouter();
@@ -2125,7 +2131,7 @@ function DetalheNota({ nota }: { nota: NotaComCnpj }) {
   return (
     <div>
       <div className="flex gap-1 mb-4 bg-slate-100 p-1 rounded-lg w-fit">
-        {(['dados', 'danfe', 'itens'] as Aba[]).map((a) => (
+        {(['dados', 'danfe', 'itens', 'anexos'] as Aba[]).map((a) => (
           <button
             key={a}
             onClick={() => setAba(a)}
@@ -2133,7 +2139,7 @@ function DetalheNota({ nota }: { nota: NotaComCnpj }) {
               aba === a ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'
             }`}
           >
-            {a === 'dados' ? 'Dados' : a === 'danfe' ? 'DANFE' : 'Itens'}
+            {a === 'dados' ? 'Dados' : a === 'danfe' ? 'DANFE' : a === 'itens' ? 'Itens' : 'Anexos'}
           </button>
         ))}
       </div>
@@ -2267,6 +2273,179 @@ function DetalheNota({ nota }: { nota: NotaComCnpj }) {
           {danfe && aba === 'itens' && <ItensView danfe={danfe} />}
         </div>
       )}
+
+      {aba === 'anexos' && <AnexosView nota={nota} />}
+    </div>
+  );
+}
+
+const ACCEPT_ANEXOS =
+  '.pdf,.jpg,.jpeg,.png,.webp,.heic,.gif,.xlsx,.xls,.csv,application/pdf,image/*';
+
+function formatarTamanho(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function iconeAnexo(mime: string): string {
+  if (mime === 'application/pdf') return '📄';
+  if (mime.startsWith('image/')) return '🖼️';
+  if (mime.includes('sheet') || mime.includes('excel') || mime.includes('csv')) return '📊';
+  return '📎';
+}
+
+function AnexosView({ nota }: { nota: NotaComCnpj }) {
+  const [anexos, setAnexos] = useState<AnexoInfo[]>([]);
+  const [viewer, setViewer] = useState<{ login: string; admin: boolean } | null>(null);
+  const [carregando, setCarregando] = useState(true);
+  const [nome, setNome] = useState('');
+  const [arquivo, setArquivo] = useState<File | null>(null);
+  const [enviando, setEnviando] = useState(false);
+  const [msg, setMsg] = useState<{ ok: boolean; texto: string } | null>(null);
+  const [excluindo, setExcluindo] = useState<number | null>(null);
+
+  async function recarregar() {
+    const res = await listarAnexos(nota.id);
+    if (res.ok) {
+      setAnexos(res.anexos);
+      setViewer(res.viewer);
+    }
+    setCarregando(false);
+  }
+
+  useEffect(() => {
+    recarregar();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nota.id]);
+
+  async function handleEnviar(e: React.FormEvent) {
+    e.preventDefault();
+    if (!arquivo) {
+      setMsg({ ok: false, texto: 'Selecione um arquivo.' });
+      return;
+    }
+    setEnviando(true);
+    setMsg(null);
+    const fd = new FormData();
+    fd.set('arquivo', arquivo);
+    fd.set('nome', nome);
+    const res = await enviarAnexo(nota.id, fd);
+    setMsg({ ok: res.success, texto: res.message });
+    setEnviando(false);
+    if (res.success) {
+      setNome('');
+      setArquivo(null);
+      const input = document.getElementById(`anexo-file-${nota.id}`) as HTMLInputElement | null;
+      if (input) input.value = '';
+      await recarregar();
+    }
+  }
+
+  async function handleExcluir(id: number) {
+    if (!confirm('Excluir este anexo? Esta ação não pode ser desfeita.')) return;
+    setExcluindo(id);
+    const res = await excluirAnexo(id);
+    setMsg({ ok: res.success, texto: res.message });
+    setExcluindo(null);
+    if (res.success) await recarregar();
+  }
+
+  const podeExcluir = (a: AnexoInfo) =>
+    !!viewer && (viewer.admin || a.criadoPor === viewer.login);
+
+  return (
+    <div className="space-y-4">
+      <section className="rounded-xl border border-slate-200 bg-white p-4">
+        <h3 className="mb-3 border-b border-slate-100 pb-3 font-bold text-slate-800">
+          Enviar anexo
+        </h3>
+        <form onSubmit={handleEnviar} className="flex flex-col gap-3 sm:flex-row sm:items-end">
+          <div className="flex-1">
+            <label className="mb-1 block text-xs text-slate-400">Nome / descrição (opcional)</label>
+            <input
+              type="text"
+              value={nome}
+              onChange={(e) => setNome(e.target.value)}
+              placeholder="Ex.: Comprovante DAE, Foto da NF…"
+              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-indigo-400 focus:outline-none"
+            />
+          </div>
+          <div className="flex-1">
+            <label className="mb-1 block text-xs text-slate-400">Arquivo (PDF, imagem ou planilha)</label>
+            <input
+              id={`anexo-file-${nota.id}`}
+              type="file"
+              accept={ACCEPT_ANEXOS}
+              onChange={(e) => setArquivo(e.target.files?.[0] ?? null)}
+              className="w-full text-sm text-slate-600 file:mr-3 file:rounded-lg file:border-0 file:bg-indigo-50 file:px-3 file:py-2 file:text-sm file:font-medium file:text-indigo-700 hover:file:bg-indigo-100"
+            />
+          </div>
+          <button
+            type="submit"
+            disabled={enviando}
+            className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
+          >
+            {enviando ? 'Enviando…' : 'Enviar'}
+          </button>
+        </form>
+        {msg && (
+          <p className={`mt-3 text-sm ${msg.ok ? 'text-emerald-700' : 'text-red-700'}`}>{msg.texto}</p>
+        )}
+      </section>
+
+      <section className="rounded-xl border border-slate-200 bg-white p-4">
+        <h3 className="mb-3 border-b border-slate-100 pb-3 font-bold text-slate-800">
+          Anexos ({anexos.length})
+        </h3>
+        {carregando ? (
+          <p className="py-6 text-center text-sm text-slate-400">Carregando…</p>
+        ) : anexos.length === 0 ? (
+          <p className="py-6 text-center text-sm text-slate-400">Nenhum anexo ainda.</p>
+        ) : (
+          <ul className="divide-y divide-slate-100">
+            {anexos.map((a) => {
+              const base = `/danfe/${nota.chave}/anexo/${a.id}`;
+              return (
+                <li key={a.id} className="flex flex-wrap items-center gap-3 py-3">
+                  <span className="text-xl">{iconeAnexo(a.mime)}</span>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate font-medium text-slate-700">{a.nome}</p>
+                    <p className="truncate text-xs text-slate-400">
+                      {a.arquivoNome} · {formatarTamanho(a.tamanho)}
+                      {a.criadoPor ? ` · ${a.criadoPor}` : ''} ·{' '}
+                      {new Date(a.createdAt).toLocaleString('pt-BR')}
+                    </p>
+                  </div>
+                  <a
+                    href={base}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-sm font-medium text-indigo-600 hover:underline"
+                  >
+                    Ver
+                  </a>
+                  <a
+                    href={`${base}?download=1`}
+                    className="text-sm font-medium text-emerald-600 hover:underline"
+                  >
+                    Baixar
+                  </a>
+                  {podeExcluir(a) && (
+                    <button
+                      onClick={() => handleExcluir(a.id)}
+                      disabled={excluindo === a.id}
+                      className="text-sm font-medium text-red-600 hover:underline disabled:opacity-50"
+                    >
+                      {excluindo === a.id ? 'Excluindo…' : 'Excluir'}
+                    </button>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </section>
     </div>
   );
 }

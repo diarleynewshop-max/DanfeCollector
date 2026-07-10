@@ -89,4 +89,22 @@ model NotaFiscal {
   updatedAt     DateTime @updatedAt
   cnpjId        Int
   cnpj          Cnpj     @relation(fields: [cnpjId], references: [id])
+  anexos        Anexo[]
+}
+
+// Anexos por nota (PDF do DAE, foto de comprovante, planilha, etc.)
+// O arquivo em si fica no disco (ANEXOS_PATH); aqui guardamos só os metadados.
+model Anexo {
+  id          Int        @id @default(autoincrement())
+  nome        String     // nome/descrição dado pelo usuário
+  arquivoNome String     // nome original do arquivo enviado
+  mime        String     // content-type
+  tamanho     Int        // bytes
+  caminho     String     // caminho relativo dentro de ANEXOS_PATH
+  criadoPor   String?    // login de quem enviou
+  createdAt   DateTime   @default(now())
+  notaId      Int
+  nota        NotaFiscal @relation(fields: [notaId], references: [id], onDelete: Cascade)
+
+  @@index([notaId])
 }

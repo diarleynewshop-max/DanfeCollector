@@ -30,10 +30,10 @@ No Git Bash, a partir da pasta do projeto, gerar o pacote no scratchpad (usar ca
 tar czf "<SCRATCHPAD>/danfe.tgz" \
   --exclude=node_modules --exclude=.next --exclude=.git --exclude='*.log' \
   --exclude=prisma/dev.db --exclude='prisma/dev.db-journal' --exclude=downloads \
-  --exclude=.env --exclude=certs .
+  --exclude=./anexos --exclude=.env --exclude=certs .
 ```
 > ⚠️ O pacote **só leva código**. Dados, segredos e config vivem **só na VPS** e nunca são sobrescritos por deploy:
-> - `prisma/dev.db` / `downloads/` — dados de produção (o banco agora é PostgreSQL, ver seção abaixo; o `dev.db` é só legado)
+> - `prisma/dev.db` / `downloads/` / `anexos/` — dados de produção (o banco agora é PostgreSQL, ver seção abaixo; o `dev.db` é só legado)
 > - `.env` — a VPS tem o seu próprio (com a `DATABASE_URL` do Postgres). O `.env` local é para desenvolvimento e **não** vai no deploy.
 > - `certs/` — o certificado A1 já está na VPS e raramente muda.
 > Se recriar a VPS do zero, subir `.env` e `certs/` manualmente uma vez.
@@ -100,7 +100,7 @@ Desde jul/2026 o banco é **PostgreSQL 16**, rodando na própria VPS num cluster
 - O antigo `prisma/dev.db` (SQLite) ficou como **legado**; não é mais lido pelo app.
 
 ## Backups
-- **Automático:** cron do usuário `danfe`, **domingo 03:00**, script `/home/danfe/backup-danfe.sh`. Gera `.tgz` (dump do banco + `downloads/` + `.env` + cert) em `/home/danfe/backups/`, mantém as 8 semanas mais recentes. Log em `/home/danfe/backups/backup.log`.
+- **Automático:** cron do usuário `danfe`, **domingo 03:00**, script `/home/danfe/backup-danfe.sh`. Gera `.tgz` (dump do banco + `downloads/` + `anexos/` + `.env` + cert) em `/home/danfe/backups/`, mantém as 8 semanas mais recentes. Log em `/home/danfe/backups/backup.log`.
 - **Baixar pro PC:** `.\scripts\baixar-backup.ps1` (use `-Novo` para gerar um backup fresco antes de baixar).
 - **Backup manual do banco (agora):** `sudo -u danfe bash /home/danfe/backup-danfe.sh`.
 - **Restaurar o banco de um backup:** extrair `danfe-pg.sql` do `.tgz` e `psql "$DATABASE_URL_sem_?schema" < danfe-pg.sql` (num banco vazio).

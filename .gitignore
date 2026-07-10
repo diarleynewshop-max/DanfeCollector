@@ -36,6 +36,9 @@ prisma/dev.db-journal
 # downloads
 downloads/
 
+# anexos das notas (arquivos no disco, fora do banco) — só a pasta da raiz
+/anexos/
+
 # turbo
 .turbo
 
