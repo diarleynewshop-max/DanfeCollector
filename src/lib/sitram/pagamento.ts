@@ -48,3 +48,17 @@ export function parseRelacaoPagamentoSitram(texto: string): LancamentoRelacao[] 
 export function chaveCruzamento(cnpjEmitente: string | null, numero: string | null): string {
   return `${normalizarDigitos(cnpjEmitente)}-${normalizarDigitos(numero)}`;
 }
+
+/**
+ * Extrai CNPJ do emitente e número da NF da própria chave de acesso (44 díg.).
+ * Funciona mesmo em notas RESUMO (que não têm o campo `numero` preenchido).
+ * Layout NF-e: cUF(2) AAMM(4) CNPJ(14) mod(2) série(3) nNF(9) tpEmis(1) cNF(8) cDV(1).
+ */
+export function extrairDaChave(chave: string | null | undefined): { cnpj: string; numero: string } | null {
+  const c = String(chave ?? '').replace(/\D/g, '');
+  if (c.length !== 44) return null;
+  return {
+    cnpj: normalizarDigitos(c.slice(6, 20)),
+    numero: normalizarDigitos(c.slice(25, 34)),
+  };
+}

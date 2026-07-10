@@ -30,7 +30,7 @@ import {
   type SitramPortalNotaFiscal,
 } from './sitram/portal';
 import { classificarStatusDaePortal, extrairResumoDae, statusDaeEfetivo } from './sitram/dae';
-import { parseRelacaoPagamentoSitram, chaveCruzamento } from './sitram/pagamento';
+import { parseRelacaoPagamentoSitram, chaveCruzamento, extrairDaChave } from './sitram/pagamento';
 import { salvarArquivo, mimeAceito, TAMANHO_MAX } from './anexos/storage';
 
 export interface ActionResult {
@@ -1522,17 +1522,24 @@ export async function previewPagamentoSitram(formData: FormData): Promise<Previe
 
   const notas = await prisma.notaFiscal.findMany({
     select: {
-      id: true, numero: true, emitenteCnpj: true, emitenteNome: true,
+      id: true, chave: true, numero: true, emitenteCnpj: true, emitenteNome: true,
       sitramDaeStatus: true, sitramDaeResumo: true, sitramDetalhe: true, pagamentoManualEm: true,
     },
   });
 
+  // Indexa por (CNPJ emitente + número). Usa os campos gravados E os extraídos
+  // da chave de acesso — notas RESUMO não têm `numero`, mas têm a chave.
   const mapa = new Map<string, typeof notas>();
   for (const n of notas) {
-    const chave = chaveCruzamento(n.emitenteCnpj, n.numero);
-    const grupo = mapa.get(chave) ?? [];
-    grupo.push(n);
-    mapa.set(chave, grupo);
+    const chaves = new Set<string>();
+    if (n.numero) chaves.add(chaveCruzamento(n.emitenteCnpj, n.numero));
+    const daChave = extrairDaChave(n.chave);
+    if (daChave) chaves.add(`${daChave.cnpj}-${daChave.numero}`);
+    for (const k of chaves) {
+      const grupo = mapa.get(k) ?? [];
+      grupo.push(n);
+      mapa.set(k, grupo);
+    }
   }
 
   const encontradas: NotaPagamentoPreview[] = [];
@@ -1550,7 +1557,7 @@ export async function previewPagamentoSitram(formData: FormData): Promise<Previe
       idsVistos.add(n.id);
       encontradas.push({
         id: n.id,
-        numero: n.numero,
+        numero: n.numero ?? l.numeroNota,
         cnpj: n.emitenteCnpj ?? l.cnpjEmitente,
         emitente: n.emitenteNome,
         valorAberto: valorAbertoDae(n),
