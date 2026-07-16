@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import { prisma } from '@/lib/prisma';
 import { parseDanfe } from '@/lib/sefaz/detalhe';
 import { resolverXmlPath } from '@/lib/xmlpath';
-import { obterUsuarioAtual } from '@/lib/usuarios/auth';
+import { obterUsuarioAtual, usuarioPodeAcessarCnpj } from '@/lib/usuarios/auth';
 import DanfeView from '../../components/DanfeView';
 import BotaoImprimir from './BotaoImprimir';
 
@@ -15,6 +15,7 @@ export default async function DanfePage({ params }: { params: Promise<{ chave: s
 
   const { chave } = await params;
   const nota = await prisma.notaFiscal.findUnique({ where: { chave } });
+  if (nota && !usuarioPodeAcessarCnpj(usuario, nota.cnpjId)) notFound();
   const xmlPath = nota && nota.status === 'COMPLETA' ? resolverXmlPath(nota.xmlPath) : null;
   if (!xmlPath) {
     notFound();

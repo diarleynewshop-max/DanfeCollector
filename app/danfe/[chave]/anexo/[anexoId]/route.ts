@@ -1,7 +1,7 @@
 import { prisma } from '@/lib/prisma';
 import { lerArquivo } from '@/lib/anexos/storage';
 import { opcoesCompartilhadasDae } from '@/lib/sitram/dae';
-import { obterUsuarioAtual } from '@/lib/usuarios/auth';
+import { obterUsuarioAtual, usuarioPodeAcessarCnpj } from '@/lib/usuarios/auth';
 
 export async function GET(
   req: Request,
@@ -25,12 +25,17 @@ export async function GET(
     prisma.notaFiscal.findUnique({
       where: { chave },
       select: {
+        cnpjId: true,
         sitramDaeStatus: true,
         sitramDaeResumo: true,
         sitramDetalhe: true,
       },
     }),
   ]);
+
+  if (nota && !usuarioPodeAcessarCnpj(usuario, nota.cnpjId)) {
+    return new Response('Acesso negado.', { status: 403 });
+  }
 
   const chavesDae = nota
     ? new Set(opcoesCompartilhadasDae(nota).map((item) => item.chave))

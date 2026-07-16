@@ -27,6 +27,71 @@ body {
   background: var(--ground);
 }
 
+button,
+a,
+input,
+select {
+  transition: border-color 160ms ease, box-shadow 160ms ease, background-color 160ms ease, color 160ms ease, transform 160ms ease, opacity 160ms ease;
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+[role="button"]:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--accent) 25%, transparent);
+  outline-offset: 2px;
+}
+
+.report-shell {
+  animation: report-enter 280ms ease-out both;
+}
+
+.report-card {
+  transition: transform 180ms ease, box-shadow 180ms ease, border-color 180ms ease;
+}
+
+.report-card:hover {
+  border-color: var(--border-strong);
+  box-shadow: 0 12px 28px rgb(46 38 25 / 8%);
+  transform: translateY(-1px);
+}
+
+.bar-progress {
+  transform-origin: left;
+  animation: bar-grow 420ms ease-out both;
+}
+
+@keyframes report-enter {
+  from { opacity: 0; transform: translateY(7px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes bar-grow {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+
+@media (max-width: 640px) {
+  .report-shell input,
+  .report-shell select {
+    min-height: 42px;
+  }
+
+  .report-card:hover {
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+  }
+}
+
 /* Impressão da DANFE: esconde tudo menos a área da nota */
 @media print {
   .no-print {

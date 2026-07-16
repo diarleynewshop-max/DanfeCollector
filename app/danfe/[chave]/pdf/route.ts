@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { prisma } from '@/lib/prisma';
 import { resolverXmlPath } from '@/lib/xmlpath';
-import { obterUsuarioAtual } from '@/lib/usuarios/auth';
+import { obterUsuarioAtual, usuarioPodeAcessarCnpj } from '@/lib/usuarios/auth';
 
 // API gratuita do MeuDanfe: recebe o XML (texto puro) e devolve o PDF em base64.
 const MEUDANFE_URL = 'https://ws.meudanfe.com/api/v1/get/nfe/xmltodanfepdf/API';
@@ -16,6 +16,9 @@ export async function GET(_req: Request, { params }: { params: Promise<{ chave: 
   const { chave } = await params;
 
   const nota = await prisma.notaFiscal.findUnique({ where: { chave } });
+  if (nota && !usuarioPodeAcessarCnpj(usuario, nota.cnpjId)) {
+    return new Response('Acesso negado.', { status: 403 });
+  }
   const xmlPath = nota && nota.status === 'COMPLETA' ? resolverXmlPath(nota.xmlPath) : null;
   if (!nota || !xmlPath) {
     return new Response('Nota completa não encontrada.', { status: 404 });

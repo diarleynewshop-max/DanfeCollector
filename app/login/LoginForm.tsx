@@ -2,16 +2,29 @@
 
 import { useActionState } from 'react';
 import { entrarUsuario, type LoginState } from '@/lib/usuarios/actions';
+import { useIdioma } from '@/lib/i18n';
 
 const estadoInicial: LoginState = {};
 
 export default function LoginForm() {
   const [state, formAction, pending] = useActionState(entrarUsuario, estadoInicial);
+  const { idioma, setIdioma, t } = useIdioma();
 
   return (
     <form action={formAction} className="space-y-4">
+      <div className="flex justify-end">
+        <select
+          value={idioma}
+          onChange={(e) => setIdioma(e.target.value === 'zh-CN' ? 'zh-CN' : 'pt-BR')}
+          aria-label={t('language')}
+          className="rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-xs font-medium text-[var(--ink)]"
+        >
+          <option value="pt-BR">{t('portugueseBrazil')}</option>
+          <option value="zh-CN">{t('chineseSimplified')}</option>
+        </select>
+      </div>
       <div>
-        <label className="block text-sm font-medium text-slate-600 mb-1">Login</label>
+        <label className="block text-sm font-medium text-slate-600 mb-1">{t('login')}</label>
         <input
           name="login"
           autoFocus
@@ -20,7 +33,7 @@ export default function LoginForm() {
         />
       </div>
       <div>
-        <label className="block text-sm font-medium text-slate-600 mb-1">Senha</label>
+        <label className="block text-sm font-medium text-slate-600 mb-1">{t('password')}</label>
         <input
           name="senha"
           type="password"
@@ -38,7 +51,7 @@ export default function LoginForm() {
         disabled={pending}
         className="w-full rounded-lg bg-[var(--accent)] px-4 py-2.5 text-sm font-semibold text-[var(--accent-ink)] hover:brightness-150 disabled:opacity-50"
       >
-        {pending ? 'Entrando...' : 'Entrar'}
+        {pending ? t('signingIn') : t('signIn')}
       </button>
     </form>
   );

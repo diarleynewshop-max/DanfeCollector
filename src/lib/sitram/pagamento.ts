@@ -41,6 +41,18 @@ export function parseRelacaoPagamentoSitram(texto: string): LancamentoRelacao[] 
     vistos.add(chave);
     resultado.push({ cnpjEmitente, numeroNota });
   }
+
+  const regexDae = /NOTAS\s+FISCAIS\s*:\s*([0-9, .;/|-]+)/gi;
+  while ((m = regexDae.exec(limpo)) !== null) {
+    const numeros = (m[1].match(/\d{1,9}/g) ?? []).map(normalizarDigitos).filter(Boolean);
+    for (const numeroNota of numeros) {
+      const chave = `NF-${numeroNota}`;
+      if (vistos.has(chave)) continue;
+      vistos.add(chave);
+      resultado.push({ cnpjEmitente: '', numeroNota });
+    }
+  }
+
   return resultado;
 }
 

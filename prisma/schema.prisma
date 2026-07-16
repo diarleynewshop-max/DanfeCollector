@@ -26,6 +26,31 @@ model Cnpj {
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
   notas        NotaFiscal[]
+  usuarios     UsuarioCnpj[]
+}
+
+model Usuario {
+  id               Int           @id @default(autoincrement())
+  login            String        @unique
+  nome             String
+  senhaHash        String
+  perfil           String        @default("operador")
+  ativo            Boolean       @default(true)
+  acessoTodosCnpjs Boolean       @default(false)
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+  cnpjs            UsuarioCnpj[]
+}
+
+model UsuarioCnpj {
+  id        Int      @id @default(autoincrement())
+  usuarioId Int
+  cnpjId    Int
+  usuario   Usuario  @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  cnpj      Cnpj     @relation(fields: [cnpjId], references: [id], onDelete: Cascade)
+
+  @@unique([usuarioId, cnpjId])
+  @@index([cnpjId])
 }
 
 model NotaFiscal {

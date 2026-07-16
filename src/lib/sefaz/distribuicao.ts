@@ -1,7 +1,7 @@
 import * as https from 'https';
 import * as zlib from 'zlib';
 import { XMLParser } from 'fast-xml-parser';
-import { carregarCertificado } from './certificado';
+import { obterPemDoCertificado } from './assinatura';
 
 // Distribuição DFe é um serviço do Ambiente Nacional (AN), não da SEFAZ estadual.
 const ENDPOINT_PRODUCAO = 'https://www1.nfe.fazenda.gov.br/NFeDistribuicaoDFe/NFeDistribuicaoDFe.asmx';
@@ -55,8 +55,8 @@ function montarEnvelope(tpAmb: number, cUFAutor: number, cnpj: string, ultNSU: s
   );
 }
 
-function requisicaoSoap(url: string, body: string): Promise<string> {
-  const { pfx, passphrase } = carregarCertificado();
+function requisicaoSoap(url: string, body: string, cnpj: string): Promise<string> {
+  const { privateKeyPem, certificatePem } = obterPemDoCertificado(cnpj);
   const { hostname, pathname } = new URL(url);
 
   return new Promise((resolve, reject) => {
@@ -65,8 +65,8 @@ function requisicaoSoap(url: string, body: string): Promise<string> {
         hostname,
         path: pathname,
         method: 'POST',
-        pfx,
-        passphrase,
+        key: privateKeyPem,
+        cert: certificatePem,
         headers: {
           'Content-Type': 'application/soap+xml; charset=utf-8',
           'Content-Length': Buffer.byteLength(body),
@@ -114,7 +114,7 @@ export async function consultarDistribuicaoDFe(
   const endpoint = homologacao ? ENDPOINT_HOMOLOGACAO : ENDPOINT_PRODUCAO;
   const envelope = montarEnvelope(tpAmb, cUF, cnpj, ultNSU);
 
-  const respostaXml = await requisicaoSoap(endpoint, envelope);
+  const respostaXml = await requisicaoSoap(endpoint, envelope, cnpj);
   return parseRetorno(respostaXml, ultNSU);
 }
 
@@ -156,7 +156,7 @@ export async function consultarPorChave(
   const endpoint = homologacao ? ENDPOINT_HOMOLOGACAO : ENDPOINT_PRODUCAO;
   const envelope = montarEnvelopeChave(tpAmb, cUF, cnpj, chave);
 
-  const respostaXml = await requisicaoSoap(endpoint, envelope);
+  const respostaXml = await requisicaoSoap(endpoint, envelope, cnpj);
   return parseRetorno(respostaXml, '0');
 }
 

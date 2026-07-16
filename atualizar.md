@@ -28,15 +28,43 @@
 No Git Bash, a partir da pasta do projeto, gerar o pacote no scratchpad (usar caminho estilo `/c/...`, senão o `tar` confunde `C:` com host remoto):
 ```bash
 tar czf "<SCRATCHPAD>/danfe.tgz" \
-  --exclude=node_modules --exclude=.next --exclude=.git --exclude='*.log' \
+  --exclude=node_modules --exclude=.next --exclude=.next-dev --exclude=.git --exclude='*.log' \
   --exclude=prisma/dev.db --exclude='prisma/dev.db-journal' --exclude=downloads \
-  --exclude=./anexos --exclude=.env --exclude=certs .
+  --exclude=./anexos --exclude=.env --exclude=certs --exclude=tsconfig.tsbuildinfo .
 ```
 > ⚠️ O pacote **só leva código**. Dados, segredos e config vivem **só na VPS** e nunca são sobrescritos por deploy:
 > - `prisma/dev.db` / `downloads/` / `anexos/` — dados de produção (o banco agora é PostgreSQL, ver seção abaixo; o `dev.db` é só legado)
 > - `.env` — a VPS tem o seu próprio (com a `DATABASE_URL` do Postgres). O `.env` local é para desenvolvimento e **não** vai no deploy.
-> - `certs/` — o certificado A1 já está na VPS e raramente muda.
+> - `certs/` - os certificados A1 `.pfx` ja estao na VPS e raramente mudam.
 > Se recriar a VPS do zero, subir `.env` e `certs/` manualmente uma vez.
+>
+> **Certificados atuais:** o app escolhe o PFX por CNPJ/raiz. Newshop usa a raiz `45998339`;
+> Soye usa `62803717`; Facil usa `50767035`. Na VPS, manter os `.pfx` em `certs/`
+> ou configurar `CERT_PFX_PATH_<CNPJ>` / `CERT_PFX_PATH_RAIZ_<RAIZ>` no `.env`.
+
+### Subir certificado A1 para a VPS
+Use quando trocar/recriar certificado ou quando a VPS for recriada. Rode no
+PowerShell do PC, dentro da pasta do projeto. A senha sera pedida no prompt e o
+script atualiza o `.env` da VPS sem mostrar a senha no historico:
+
+```powershell
+npm run cert:vps -- -PfxPath "C:\CAMINHO\certificado.pfx" -RaizCnpj 45998339 -Restart
+```
+
+Troque a raiz conforme a empresa:
+- Newshop: `45998339`
+- Soye: `62803717`
+- Facil: `50767035`
+
+Para certificado de um CNPJ exato, use:
+
+```powershell
+npm run cert:vps -- -PfxPath "C:\CAMINHO\certificado.pfx" -Cnpj 45998339000100 -Restart
+```
+
+O script salva o arquivo em `/home/danfe/htdocs/danfe.newgrup.cloud/certs/`,
+grava `CERT_PFX_PATH_RAIZ_<RAIZ>` + `CERT_PFX_PASSWORD_RAIZ_<RAIZ>` no `.env`,
+aplica `chmod 600` e reinicia o `pm2` quando `-Restart` for informado.
 
 ### 2. 👤 VOCÊ envia o pacote (PowerShell do PC, janela NOVA — fora da sessão SSH)
 O Claude te entrega este comando já com o caminho certo. Espere aparecer `100% 12MB`:
@@ -45,14 +73,16 @@ scp -i $HOME\.ssh\newshop_vps "<CAMINHO_DO_danfe.tgz>" root@187.127.45.197:/tmp/
 ```
 
 ### 3. Extrair na VPS (Claude, via SSH)
-Antes de extrair, fazer backup do banco (o pacote não traz mais `dev.db`, então ele é preservado — mas o backup é rede de segurança):
+Antes de extrair, preservar o legado local caso o `prisma/dev.db` ainda exista:
 ```bash
 APP=/home/danfe/htdocs/danfe.newgrup.cloud
-cp -f "$APP/prisma/dev.db" "$APP/prisma/dev.db.bak-$(date +%Y%m%d-%H%M%S)"
+[ -f "$APP/prisma/dev.db" ] && cp -f "$APP/prisma/dev.db" "$APP/prisma/dev.db.bak-$(date +%Y%m%d-%H%M%S)"
 tar xzf /tmp/danfe.tgz -C "$APP"
 chown -R danfe:danfe "$APP"
 # Reaplicar permissões restritas nos arquivos sensíveis (o tar pode reabrir):
-chmod 600 "$APP/.env" "$APP/certs/matriz.pfx" "$APP/prisma/dev.db"
+chmod 600 "$APP/.env"
+find "$APP/certs" -type f -name '*.pfx' -exec chmod 600 {} \;
+[ -f "$APP/prisma/dev.db" ] && chmod 600 "$APP/prisma/dev.db"
 rm -f /tmp/danfe.tgz
 ```
 
@@ -76,6 +106,15 @@ curl -s -o /dev/null -w 'app local :3100 -> HTTP %{http_code}\n' http://127.0.0.
 curl -s -o /dev/null -w 'publico -> HTTP %{http_code}\n' https://danfe.newgrup.cloud       # do PC
 ```
 Esperado: **HTTP 200** nos dois. Se der 502, o app não subiu → ver `pm2 logs danfecollector --lines 40`.
+
+### 7. Verificação visual do dashboard/relatórios (Claude)
+Depois do `HTTP 200`, abrir `https://danfe.newgrup.cloud/login` e validar no navegador:
+
+- a tela `Relatórios` não pode puxar tudo de uma vez; a primeira carga vem paginada e deve existir ação para carregar mais;
+- a tabela do relatório deve crescer em blocos pequenos, sem travar a página;
+- o mapa de estados não deve ficar com área branca sobrando em volta;
+- os textos principais em português e chinês simplificado devem aparecer sem erro visível de ortografia;
+- a navegação e os cards do relatório precisam responder bem no mobile.
 
 ---
 

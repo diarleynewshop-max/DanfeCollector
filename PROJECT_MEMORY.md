@@ -44,6 +44,7 @@ Transformar a gestão manual de planilhas de NF-e (baseado no modelo `NOTA FISCA
 - [x] **Qtd. de Itens por nota (15/06/2026):** campo `qtdItens` (Int?) calculado a partir do array `det` no parser de `procNFe` (`documentos.ts`). Só preenchido em notas COMPLETA novas/re-sincronizadas; notas COMPLETA antigas mostram "—" até backfill (pendente, opcional).
 - [ ] **Exportação:** Opção para exportar os dados capturados de volta para Excel/CSV se necessário.
 - [ ] **API ConsultaDanfe/MeuDanfe por chave (PENDENTE):** sites de terceiros (consultadanfe.com, meudanfe.com.br) TÊM os XMLs antigos arquivados, mas o site é blindado por CAPTCHA+Cloudflare. A API oficial (token da área do cliente `app.consultadanfe.com`, possível plano grátis) seria o caminho automatizável. **Aguardando o usuário fornecer o token + doc de endpoints** para ligar no importador por chave.
+- [ ] **Fallback temporário via bot no MeuDanfe (uso interno):** criar automação de navegador só como quebra-galho para NF-e sem XML local. Fluxo: procurar XML/PDF no disco/banco, se não existir abrir o MeuDanfe, consultar pela chave, baixar XML/PDF e salvar localmente para nunca repetir a busca. Requisitos: fila, rate limit, logs por chave, flag para desligar rápido e zero dependência como fluxo principal. Risco assumido: solução frágil a mudança de layout/anti-bot/termos; usar apenas até existir integração definitiva.
 
 ### Fase 4: Automação
 - [ ] **Background Sync:** Criar uma tarefa agendada para buscar notas de hora em hora.
@@ -84,3 +85,26 @@ A versão de download livre do ACBrMonitorPLUS (fórum ACBr) é **travada em hom
 - ~~**Software Auxiliar:** ACBrMonitorPlus~~ (DEMO limitada a homologação — ver Descoberta Crítica acima).
 - **Certificado Digital:** A1 (recomendado) ou A3.
 - **Ambiente:** Node.js 20+, Windows.
+
+---
+
+## Backlog: Navegacao, Relatorios e Dashboard Gerencial
+
+- [ ] **Reorganizar menu por secoes:** Home, Nota Fiscal, Pagamento/SITRAM, Relatorios, Configuracao, Empresa e Usuario. Objetivo: tirar a cara de botoes soltos e deixar o app com estrutura de sistema.
+- [ ] **Dashboard executivo:** total de NF, valor total, notas novas, notas sem pagamento/DAE, notas por status SEFAZ, certificados perto de vencer e ultimas sincronizacoes.
+- [ ] **Mapa do Brasil por UF:** estado destacado por quantidade de NF e valor total emitido/recebido por UF. Comecar com `emitenteUf`; depois permitir alternar para `destUf`.
+- [ ] **Relatorio por Estado:** ranking de UF com quantidade, valor, ticket medio, maiores fornecedores e filtros por empresa, periodo, status, pagamento e SITRAM.
+- [ ] **Relatorio por Empresa/CNPJ:** comparar matriz/filiais por total de NF, valor, fornecedores, pendencias SEFAZ/SITRAM e certificados.
+- [ ] **Relatorio de Fornecedores:** top fornecedores por valor/quantidade, recorrencia mensal e notas canceladas/denegadas.
+- [ ] **Relatorio Financeiro/Fiscal:** DAE pago/em aberto, vencimentos, anexos/comprovantes, valores por mes e exportacao CSV/Excel/PDF.
+- [ ] **Configuracoes:** separar Empresa, Usuarios, Certificados, SEFAZ/SITRAM, Preferencias e Auditoria/Logs.
+
+---
+
+## Radar: divergencia ERP x SEFAZ no intervalo 09/07/2026 a 14/07/2026
+
+- [ ] **Investigar salto de datas no app:** usuario relatou que o DanfeCollector pula de 09/07/2026 para 14/07/2026, mas o ERP mostra NFs em 10/07, 12/07 e 13/07.
+- [ ] **Exemplos citados para conferencia:** Newshop Loja `45998339000167` NFs `1697`, `1699`, `1700`, `1701`, `1702`, `1703`, `1705`, `1706`-`1715`; Newshop CD `45998339000400` NFs `255`-`261`; fornecedores externos como ARTPEL `27020`, BIG FORTUNE `55394`, ROJEMAC `328913`, TECNO `157490`, LEHMOX `40460`.
+- [ ] **Hipoteses a validar:** ERP pode estar exibindo notas de entrada/recebimento ainda sem distribuicao completa na SEFAZ; app pode estar filtrando por ano/paginacao/data carregada; NSU pode ter pulado ou ficado preso apos consumo indevido 656; algumas NFs podem estar como emitidas contra filial diferente ou ainda so em resumo.
+- [ ] **Proximo diagnostico tecnico:** criar/rodar uma checagem por CNPJ + numero + data para procurar no banco local/VPS, comparar por `emitenteCnpj`, `destCnpj`, `numero`, `emitidaEm`, `chave`, `ultimoNSU` e status; se nao existir, testar consulta por chave/XML do ERP quando a chave estiver disponivel.
+- [ ] **Produto futuro:** tela de "Radar de lacunas" mostrando dias sem NF, sequencias faltantes por empresa/serie/numero, e comparacao ERP x SEFAZ quando houver importacao de relatorio do ERP.

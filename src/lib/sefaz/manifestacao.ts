@@ -1,7 +1,6 @@
 import * as https from 'https';
 import { XMLParser } from 'fast-xml-parser';
-import { carregarCertificado } from './certificado';
-import { assinarInfEvento } from './assinatura';
+import { assinarInfEvento, obterPemDoCertificado } from './assinatura';
 
 // Recepção de Eventos do Ambiente Nacional (manifestação do destinatário)
 const ENDPOINT_PRODUCAO =
@@ -75,8 +74,8 @@ function montarEvento(cnpj: string, chave: string, tpEvento: string, tpAmb: numb
   );
 }
 
-function postSoap(url: string, body: string): Promise<string> {
-  const { pfx, passphrase } = carregarCertificado();
+function postSoap(url: string, body: string, cnpj: string): Promise<string> {
+  const { privateKeyPem, certificatePem } = obterPemDoCertificado(cnpj);
   const { hostname, pathname } = new URL(url);
 
   return new Promise((resolve, reject) => {
@@ -85,8 +84,8 @@ function postSoap(url: string, body: string): Promise<string> {
         hostname,
         path: pathname,
         method: 'POST',
-        pfx,
-        passphrase,
+        key: privateKeyPem,
+        cert: certificatePem,
         minVersion: 'TLSv1.2',
         headers: {
           'Content-Type': 'application/soap+xml; charset=utf-8',
@@ -133,7 +132,7 @@ export async function manifestar(
   const tpAmb = homologacao ? 2 : 1;
   const endpoint = homologacao ? ENDPOINT_HOMOLOGACAO : ENDPOINT_PRODUCAO;
 
-  const eventoAssinado = assinarInfEvento(montarEvento(cnpj, chave, tpEvento, tpAmb));
+  const eventoAssinado = assinarInfEvento(montarEvento(cnpj, chave, tpEvento, tpAmb), cnpj);
   const envEvento = `<envEvento xmlns="${NS_NFE}" versao="1.00"><idLote>1</idLote>${eventoAssinado}</envEvento>`;
 
   const soap =
@@ -144,7 +143,7 @@ export async function manifestar(
     '</soap12:Body>' +
     '</soap12:Envelope>';
 
-  const respostaXml = await postSoap(endpoint, soap);
+  const respostaXml = await postSoap(endpoint, soap, cnpj);
   const json = parser.parse(respostaXml);
 
   const retEnv =

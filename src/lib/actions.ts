@@ -3,8 +3,14 @@
 import { revalidatePath } from 'next/cache';
 import * as tls from 'tls';
 import * as fs from 'fs';
+import * as path from 'path';
 import { prisma } from './prisma';
-import { carregarCertificado } from './sefaz/certificado';
+import {
+  carregarCertificado,
+  inspecionarCertificadoPfx,
+  limparCacheCertificados,
+} from './sefaz/certificado';
+import { limparCachePemCertificado, obterPemDePfx } from './sefaz/assinatura';
 import { consultarDistribuicaoDFe, consultarPorChave } from './sefaz/distribuicao';
 import {
   processarDocumento,
@@ -16,7 +22,7 @@ import { parseDanfe, type DanfeData } from './sefaz/detalhe';
 import { resolverXmlPath } from './xmlpath';
 import { manifestar } from './sefaz/manifestacao';
 import { listarCertificadosWindows, type CertificadoWindows } from './sefaz/certstore';
-import { exigirAdmin, exigirUsuario } from './usuarios/auth';
+import { exigirAdmin, exigirUsuario, usuarioPodeAcessarCnpj, whereCnpjPermitido, whereNotaPermitida } from './usuarios/auth';
 import {
   consultarManifestoCarga,
   type SitramLancamento,
@@ -29,7 +35,7 @@ import {
   type SitramPortalLancamento,
   type SitramPortalNotaFiscal,
 } from './sitram/portal';
-import { classificarStatusDaePortal, extrairResumoDae, statusDaeEfetivo } from './sitram/dae';
+import { classificarStatusDaePortal, extrairResumoDae, lancamentosVisiveisDae, statusDaeEfetivo } from './sitram/dae';
 import { parseRelacaoPagamentoSitram, chaveCruzamento, extrairDaChave } from './sitram/pagamento';
 import { salvarArquivo, mimeAceito, TAMANHO_MAX } from './anexos/storage';
 
@@ -38,6 +44,54 @@ export interface ActionResult {
   message: string;
   data?: string;
 }
+
+export type NotaRelatorio = {
+  id: number;
+  cnpjId: number;
+  chave: string;
+  numero: string | null;
+  serie: string | null;
+  emitidaEm: Date;
+  tipoOperacao: string | null;
+  naturezaOp: string | null;
+  emitenteUf: string | null;
+  emitenteNome: string | null;
+  emitenteCnpj: string | null;
+  destNome: string | null;
+  destCnpj: string | null;
+  valorTotal: number | null;
+  valorProdutos: number | null;
+  valorFrete: number | null;
+  valorDesconto: number | null;
+  valorIcms: number | null;
+  qtdItens: number | null;
+  status: string;
+  situacaoSefaz: string;
+  manifestadaEm: Date | null;
+  sitramConsultadaEm: Date | null;
+  sitramDaeStatus: string | null;
+  sitramDaeResumo: string | null;
+  pagamentoManualEm: Date | null;
+  pagamentoManualRef: string | null;
+  pagamentoManualValor: number | null;
+  daeVencimento: string | null;
+  daeValor: number | null;
+  daeValorAberto: number | null;
+  daeValorPago: number | null;
+  daeCodigo: string | null;
+  daeDescricao: string | null;
+  daeTipo: string | null;
+  daeClassificacao: string | null;
+  cnpj: { cnpj: string; razaoSocial: string | null };
+};
+
+export type PaginaNotasRelatorio = {
+  notas: NotaRelatorio[];
+  pagina: number;
+  porPagina: number;
+  total: number;
+  temMais: boolean;
+};
 
 async function checarAdminAction(): Promise<ActionResult | null> {
   try {
@@ -103,7 +157,8 @@ export async function verificarCertificado(): Promise<ActionResult> {
   try {
     const { pfx, passphrase } = carregarCertificado();
     // createSecureContext valida o PFX e a senha sem precisar de conexão
-    tls.createSecureContext({ pfx, passphrase });
+    const { privateKeyPem, certificatePem } = obterPemDePfx(pfx, passphrase);
+    tls.createSecureContext({ key: privateKeyPem, cert: certificatePem });
     return {
       success: true,
       message: 'Certificado A1 carregado e senha validada com sucesso.',
@@ -117,13 +172,190 @@ export async function verificarCertificado(): Promise<ActionResult> {
   }
 }
 
+function valorEnv(valor: string): string {
+  if (/^[A-Za-z0-9_./:@%+-]+$/.test(valor)) return valor;
+  return `"${valor.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
+
+function upsertEnv(arquivoEnv: string, chave: string, valor: string) {
+  const linhas = fs.existsSync(arquivoEnv)
+    ? fs.readFileSync(arquivoEnv, 'utf8').split(/\r?\n/)
+    : [];
+  let atualizou = false;
+  const novas = linhas.map((linha) => {
+    if (linha.startsWith(`${chave}=`)) {
+      atualizou = true;
+      return `${chave}=${valorEnv(valor)}`;
+    }
+    return linha;
+  });
+
+  if (!atualizou) novas.push(`${chave}=${valorEnv(valor)}`);
+  fs.writeFileSync(arquivoEnv, `${novas.join('\n').replace(/\n+$/, '')}\n`, { mode: 0o600 });
+  fs.chmodSync(arquivoEnv, 0o600);
+}
+
+function nomeArquivoCertificado(escopo: string, alvo: string): string {
+  return `cert-${escopo}-${alvo}.pfx`.replace(/[^A-Za-z0-9_.-]/g, '_');
+}
+
+function dadosCertificadoParaCnpj(cnpj: string): {
+  razaoSocial?: string | null;
+  certSerial?: string | null;
+  certVencimento?: Date;
+} | null {
+  try {
+    const cert = carregarCertificado(cnpj);
+    const info = inspecionarCertificadoPfx(cert.pfx, cert.passphrase);
+    if (info.cnpj.slice(0, 8) !== cnpj.slice(0, 8)) return null;
+
+    return {
+      razaoSocial: info.cnpj === cnpj ? info.razaoSocial : undefined,
+      certSerial: info.serial,
+      certVencimento: info.vencimento,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export async function enviarCertificadoVps(formData: FormData): Promise<ActionResult> {
+  const negado = await checarAdminAction();
+  if (negado) return negado;
+
+  const arquivo = formData.get('certificado');
+  const senha = String(formData.get('senha') ?? '');
+  const escopo = String(formData.get('escopo') ?? 'raiz');
+  const alvoInformado = limparCnpj(String(formData.get('alvo') ?? ''));
+
+  if (!(arquivo instanceof File) || arquivo.size === 0) {
+    return { success: false, message: 'Selecione um arquivo .pfx.' };
+  }
+  if (!arquivo.name.toLowerCase().endsWith('.pfx')) {
+    return { success: false, message: 'Envie o certificado A1 original em formato .pfx.' };
+  }
+  if (arquivo.size > 10 * 1024 * 1024) {
+    return { success: false, message: 'Certificado maior que 10 MB. Verifique o arquivo enviado.' };
+  }
+  if (!senha) {
+    return { success: false, message: 'Informe a senha do certificado.' };
+  }
+  if (!['raiz', 'cnpj', 'padrao'].includes(escopo)) {
+    return { success: false, message: 'Escopo do certificado invalido.' };
+  }
+
+  try {
+    const pfx = Buffer.from(await arquivo.arrayBuffer());
+    const { privateKeyPem, certificatePem } = obterPemDePfx(pfx, senha);
+    tls.createSecureContext({ key: privateKeyPem, cert: certificatePem });
+    const info = inspecionarCertificadoPfx(pfx, senha);
+    const raizCert = info.cnpj.slice(0, 8);
+
+    let pathKey = 'CERT_PFX_PATH';
+    let passKey = 'CERT_PFX_PASSWORD';
+    let alvo = 'padrao';
+    let whereCnpj: Parameters<typeof prisma.cnpj.updateMany>[0]['where'] = { cnpj: info.cnpj };
+
+    if (escopo === 'raiz') {
+      const raiz = alvoInformado || raizCert;
+      if (raiz.length !== 8) return { success: false, message: 'Informe uma raiz de CNPJ com 8 digitos.' };
+      if (raiz !== raizCert) {
+        return {
+          success: false,
+          message: `Este PFX e da raiz ${raizCert}. Nao vou vincular na raiz ${raiz}.`,
+        };
+      }
+      alvo = raiz;
+      pathKey = `CERT_PFX_PATH_RAIZ_${raiz}`;
+      passKey = `CERT_PFX_PASSWORD_RAIZ_${raiz}`;
+      whereCnpj = { cnpj: { startsWith: raiz } };
+    } else if (escopo === 'cnpj') {
+      const cnpj = alvoInformado || info.cnpj;
+      if (!validarCnpj(cnpj)) return { success: false, message: 'Informe um CNPJ valido para vincular.' };
+      if (cnpj.slice(0, 8) !== raizCert) {
+        return {
+          success: false,
+          message: `Este PFX e da raiz ${raizCert}. Nao vou vincular no CNPJ ${formatarCnpj(cnpj)}.`,
+        };
+      }
+      alvo = cnpj;
+      pathKey = `CERT_PFX_PATH_${cnpj}`;
+      passKey = `CERT_PFX_PASSWORD_${cnpj}`;
+      whereCnpj = { cnpj };
+    }
+
+    const certDir = path.resolve(process.cwd(), 'certs');
+    fs.mkdirSync(certDir, { recursive: true, mode: 0o700 });
+    const nomeArquivo = nomeArquivoCertificado(escopo, alvo);
+    const caminhoAbsoluto = path.join(certDir, nomeArquivo);
+    const caminhoRelativo = `./certs/${nomeArquivo}`;
+
+    fs.writeFileSync(caminhoAbsoluto, pfx, { mode: 0o600 });
+    fs.chmodSync(caminhoAbsoluto, 0o600);
+
+    const envPath = path.resolve(process.cwd(), '.env');
+    upsertEnv(envPath, pathKey, caminhoRelativo);
+    upsertEnv(envPath, passKey, senha);
+    process.env[pathKey] = caminhoRelativo;
+    process.env[passKey] = senha;
+
+    const atualizadas = await prisma.cnpj.updateMany({
+      where: whereCnpj,
+      data: {
+        certSerial: info.serial,
+        certVencimento: info.vencimento,
+      },
+    });
+
+    const existenteCert = await prisma.cnpj.findUnique({ where: { cnpj: info.cnpj } });
+    if (existenteCert) {
+      await prisma.cnpj.update({
+        where: { cnpj: info.cnpj },
+        data: {
+          razaoSocial: existenteCert.razaoSocial || info.razaoSocial,
+          certSerial: info.serial,
+          certVencimento: info.vencimento,
+        },
+      });
+    } else {
+      await prisma.cnpj.create({
+        data: {
+          cnpj: info.cnpj,
+          razaoSocial: info.razaoSocial,
+          uf: 'CE',
+          certSerial: info.serial,
+          certVencimento: info.vencimento,
+        },
+      });
+    }
+
+    limparCacheCertificados();
+    limparCachePemCertificado();
+    revalidatePath('/');
+
+    return {
+      success: true,
+      message:
+        `Certificado atualizado na VPS: ${formatarCnpj(info.cnpj)}, vence em ${info.vencimento.toLocaleDateString('pt-BR')}. ` +
+        `${atualizadas.count} empresa(s) da raiz atualizada(s).`,
+    };
+  } catch (error: unknown) {
+    const msg = (error as Error).message;
+    if (/mac verify failure|invalid password|pkcs12/i.test(msg)) {
+      return { success: false, message: 'Senha do certificado incorreta.' };
+    }
+    return { success: false, message: `Erro ao atualizar certificado: ${msg}` };
+  }
+}
+
 // ---------------------------------------------------------------------------
 // CRUD de CNPJs
 // ---------------------------------------------------------------------------
 
 export async function listarCnpjs() {
-  await exigirUsuario();
+  const usuario = await exigirUsuario();
   return prisma.cnpj.findMany({
+    where: whereCnpjPermitido(usuario),
     orderBy: { createdAt: 'asc' },
     include: { _count: { select: { notas: true } } },
   });
@@ -145,9 +377,23 @@ export async function adicionarCnpj(formData: FormData): Promise<ActionResult> {
   }
 
   try {
-    await prisma.cnpj.create({ data: { cnpj, razaoSocial, uf } });
+    const dadosCert = dadosCertificadoParaCnpj(cnpj);
+    await prisma.cnpj.create({
+      data: {
+        cnpj,
+        razaoSocial: razaoSocial || dadosCert?.razaoSocial || null,
+        uf,
+        certSerial: dadosCert?.certSerial,
+        certVencimento: dadosCert?.certVencimento,
+      },
+    });
     revalidatePath('/');
-    return { success: true, message: `CNPJ ${formatarCnpj(cnpj)} cadastrado com sucesso.` };
+    return {
+      success: true,
+      message: dadosCert
+        ? `CNPJ ${formatarCnpj(cnpj)} cadastrado e vinculado ao certificado da raiz.`
+        : `CNPJ ${formatarCnpj(cnpj)} cadastrado com sucesso.`,
+    };
   } catch (error: unknown) {
     if ((error as { code?: string }).code === 'P2002') {
       return { success: false, message: `O CNPJ ${formatarCnpj(cnpj)} já está cadastrado.` };
@@ -213,12 +459,17 @@ const MAX_LOTES_POR_SYNC = 50;
 const INTERVALO_MIN = 60;
 
 function hhmm(d: Date): string {
-  return d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  return d.toLocaleTimeString('pt-BR', {
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZone: 'America/Sao_Paulo',
+  });
 }
 
 export async function sincronizarNotas(cnpjId: number): Promise<ActionResult> {
-  const negado = await checarUsuarioAction();
-  if (negado) return negado;
+  const usuario = await exigirUsuario().catch(() => null);
+  if (!usuario) return { success: false, message: 'Sessao expirada. Faca login novamente.' };
+  if (!usuarioPodeAcessarCnpj(usuario, cnpjId)) return { success: false, message: 'Acesso negado para esta loja.' };
 
   const registro = await prisma.cnpj.findUnique({ where: { id: cnpjId } });
   if (!registro) return { success: false, message: 'CNPJ não encontrado.' };
@@ -720,7 +971,7 @@ export async function importarXmlsDaPasta(
 }
 
 export async function listarNotas(pagina = 1, porPagina = 50) {
-  await exigirUsuario();
+  const usuario = await exigirUsuario();
   const include = { cnpj: { select: { cnpj: true, razaoSocial: true } } } as const;
   const paginaSegura = Math.max(1, Math.trunc(Number(pagina) || 1));
   const limiteSeguro = Math.max(1, Math.min(100, Math.trunc(Number(porPagina) || 50)));
@@ -728,6 +979,7 @@ export async function listarNotas(pagina = 1, porPagina = 50) {
   // Mantém as 2000 recentes e inclui qualquer DAE antigo, para nenhum
   // vencimento desaparecer do painel de alertas.
   return prisma.notaFiscal.findMany({
+    where: whereNotaPermitida(usuario),
     orderBy: { emitidaEm: 'desc' },
     skip: (paginaSegura - 1) * limiteSeguro,
     take: limiteSeguro,
@@ -740,17 +992,99 @@ export async function listarNotas(pagina = 1, porPagina = 50) {
  * O volume é pequeno (poucos milhares) e a tela é interna.
  */
 export async function listarTodasNotas() {
-  await exigirUsuario();
+  const usuario = await exigirUsuario();
   return prisma.notaFiscal.findMany({
+    where: whereNotaPermitida(usuario),
     orderBy: { emitidaEm: 'desc' },
     include: { cnpj: { select: { cnpj: true, razaoSocial: true } } },
   });
 }
 
+/**
+ * Base leve e paginada para relatórios. Evita carregar o histórico inteiro,
+ * XML/SITRAM detalhado e anexos de uma vez na tela de BI.
+ */
+export async function listarNotasRelatorio(pagina = 1, porPagina = 120): Promise<PaginaNotasRelatorio> {
+  const usuario = await exigirUsuario();
+  const paginaSegura = Math.max(1, Math.floor(pagina));
+  const limiteSeguro = Math.min(200, Math.max(20, Math.floor(porPagina)));
+  const where = whereNotaPermitida(usuario);
+  const [total, notas] = await Promise.all([
+    prisma.notaFiscal.count({ where }),
+    prisma.notaFiscal.findMany({
+    where,
+    orderBy: { emitidaEm: 'desc' },
+    skip: (paginaSegura - 1) * limiteSeguro,
+    take: limiteSeguro,
+    select: {
+      id: true,
+      cnpjId: true,
+      chave: true,
+      numero: true,
+      serie: true,
+      emitidaEm: true,
+      tipoOperacao: true,
+      naturezaOp: true,
+      emitenteUf: true,
+      emitenteNome: true,
+      emitenteCnpj: true,
+      destNome: true,
+      destCnpj: true,
+      valorTotal: true,
+      valorProdutos: true,
+      valorFrete: true,
+      valorDesconto: true,
+      valorIcms: true,
+      qtdItens: true,
+      status: true,
+      situacaoSefaz: true,
+      manifestadaEm: true,
+      sitramConsultadaEm: true,
+      sitramDaeStatus: true,
+      sitramDaeResumo: true,
+      sitramDetalhe: true,
+      pagamentoManualEm: true,
+      pagamentoManualRef: true,
+      pagamentoManualValor: true,
+      cnpj: { select: { cnpj: true, razaoSocial: true } },
+    },
+  }),
+  ]);
+
+  const resultado = notas.map((nota) => {
+    const resumo = extrairResumoDae(nota);
+    const lancamento = lancamentosVisiveisDae(resumo.lancamentos).find((item) => !item.pago)
+      ?? lancamentosVisiveisDae(resumo.lancamentos)[0]
+      ?? null;
+    const { sitramDetalhe: _sitramDetalhe, ...base } = nota;
+
+    return {
+      ...base,
+      daeVencimento: lancamento?.vencimento ?? null,
+      daeValor: lancamento?.valor ?? null,
+      daeValorAberto: lancamento?.valorAberto ?? null,
+      daeValorPago: nota.pagamentoManualValor ?? lancamento?.valorPago ?? null,
+      daeCodigo: lancamento?.codigo ?? null,
+      daeDescricao: lancamento?.descricao ?? null,
+      daeTipo: lancamento?.tipo ?? null,
+      daeClassificacao: resumo.classificacao ?? null,
+    };
+  });
+
+  return {
+    notas: resultado,
+    pagina: paginaSegura,
+    porPagina: limiteSeguro,
+    total,
+    temMais: paginaSegura * limiteSeguro < total,
+  };
+}
+
 export async function listarNotasAlertaDae() {
-  await exigirUsuario();
+  const usuario = await exigirUsuario();
   return prisma.notaFiscal.findMany({
     where: {
+      ...whereNotaPermitida(usuario),
       sitramConsultadaEm: { not: null },
     },
     orderBy: { emitidaEm: 'desc' },
@@ -764,9 +1098,10 @@ export async function listarNotasAlertaDae() {
  * 2000 mais recentes também sejam encontradas.
  */
 export async function listarNotasPorAno(ano: number) {
-  await exigirUsuario();
+  const usuario = await exigirUsuario();
   return prisma.notaFiscal.findMany({
     where: {
+      ...whereNotaPermitida(usuario),
       emitidaEm: {
         gte: new Date(`${ano}-01-01T00:00:00`),
         lt: new Date(`${ano + 1}-01-01T00:00:00`),
@@ -781,8 +1116,9 @@ export async function listarNotasPorAno(ano: number) {
  * Retorna os anos distintos em que há notas no banco, para popular o seletor.
  */
 export async function listarAnosDisponiveis(): Promise<number[]> {
-  await exigirUsuario();
+  const usuario = await exigirUsuario();
   const notas = await prisma.notaFiscal.findMany({
+    where: whereNotaPermitida(usuario),
     select: { emitidaEm: true },
     orderBy: { emitidaEm: 'desc' },
   });
@@ -792,8 +1128,48 @@ export async function listarAnosDisponiveis(): Promise<number[]> {
 
 /** Retorna o total de notas no banco (rápido — só COUNT). */
 export async function contarNotasTotal(): Promise<number> {
-  await exigirUsuario();
-  return prisma.notaFiscal.count();
+  const usuario = await exigirUsuario();
+  return prisma.notaFiscal.count({ where: whereNotaPermitida(usuario) });
+}
+
+export async function sincronizarCnpjsAtivos(): Promise<ActionResult> {
+  const negado = await checarUsuarioAction();
+  if (negado) return negado;
+
+  const cnpjs = await prisma.cnpj.findMany({
+    where: { ativo: true },
+    orderBy: { createdAt: 'asc' },
+  });
+
+  if (cnpjs.length === 0) {
+    return { success: true, message: 'Nenhum CNPJ ativo para sincronizar.' };
+  }
+
+  let sucesso = 0;
+  let pulados = 0;
+  let erros = 0;
+  const detalhes: string[] = [];
+
+  for (const cnpj of cnpjs) {
+    if (cnpj.bloqueadoAte && cnpj.bloqueadoAte > new Date()) {
+      pulados++;
+      detalhes.push(`${formatarCnpj(cnpj.cnpj)} em dia ate ${hhmm(cnpj.bloqueadoAte)}`);
+      continue;
+    }
+
+    const res = await sincronizarNotas(cnpj.id);
+    if (res.success) sucesso++;
+    else erros++;
+    detalhes.push(`${formatarCnpj(cnpj.cnpj)}: ${res.message}`);
+  }
+
+  revalidatePath('/');
+  return {
+    success: erros === 0,
+    message:
+      `NF: ${sucesso} CNPJ(s) sincronizado(s), ${pulados} em intervalo, ${erros} erro(s). ` +
+      detalhes.slice(0, 3).join(' | '),
+  };
 }
 
 export async function atualizarTransporteNotasExistentes(limite = 10000): Promise<ActionResult> {
@@ -876,6 +1252,12 @@ export interface ResultadoSitramLote extends ActionResult {
 
 export interface ChavesSitramPendentes extends ActionResult {
   chaves: string[];
+}
+
+function inicioDoDiaLocal(): Date {
+  const data = new Date();
+  data.setHours(0, 0, 0, 0);
+  return data;
 }
 
 function textoSitramNota(nota: SitramNotaFiscal): string | null {
@@ -1134,7 +1516,7 @@ async function salvarRetornoSitramPorNfe(chaveNfe: string): Promise<ResultadoSit
   };
 }
 
-export async function listarChavesSitramSemConsulta(
+export async function listarChavesSitramParaAtualizacao(
   ano: number,
   cnpjId?: number
 ): Promise<ChavesSitramPendentes> {
@@ -1149,7 +1531,11 @@ export async function listarChavesSitramSemConsulta(
   const notas = await prisma.notaFiscal.findMany({
     where: {
       status: 'COMPLETA',
-      sitramConsultadaEm: null,
+      situacaoSefaz: { notIn: ['CANCELADA', 'DENEGADA'] },
+      OR: [
+        { sitramConsultadaEm: null },
+        { sitramConsultadaEm: { lt: inicioDoDiaLocal() } },
+      ],
       ...(cnpjId ? { cnpjId } : {}),
       emitidaEm: {
         gte: new Date(`${anoSeguro}-01-01T00:00:00-03:00`),
@@ -1158,7 +1544,10 @@ export async function listarChavesSitramSemConsulta(
       NOT: [{ emitenteUf: 'CE' }, { emitenteUf: null }],
     },
     select: { chave: true },
-    orderBy: { emitidaEm: 'asc' },
+    orderBy: [
+      { sitramConsultadaEm: 'asc' },
+      { emitidaEm: 'desc' },
+    ],
   });
 
   const chaves = notas
@@ -1168,10 +1557,17 @@ export async function listarChavesSitramSemConsulta(
   return {
     success: true,
     message: chaves.length
-      ? `${chaves.length} NF-e sem consulta SITRAM encontrada(s) em ${anoSeguro}.`
-      : `Nenhuma NF-e sem consulta SITRAM encontrada em ${anoSeguro}.`,
+      ? `${chaves.length} NF-e para atualizar no SITRAM em ${anoSeguro}.`
+      : `SITRAM ja foi atualizado hoje para as NF-e elegiveis de ${anoSeguro}.`,
     chaves,
   };
+}
+
+export async function listarChavesSitramSemConsulta(
+  ano: number,
+  cnpjId?: number
+): Promise<ChavesSitramPendentes> {
+  return listarChavesSitramParaAtualizacao(ano, cnpjId);
 }
 
 export async function consultarSitramNotasForaDoCe(
@@ -1500,24 +1896,26 @@ function valorAbertoDae(nota: {
 
 export async function previewPagamentoSitram(formData: FormData): Promise<PreviewPagamentoSitram> {
   await exigirUsuario();
-  const arquivo = formData.get('arquivo');
-  if (!(arquivo instanceof File) || arquivo.size === 0) {
+  const arquivos = formData.getAll('arquivo').filter((arquivo): arquivo is File => arquivo instanceof File && arquivo.size > 0);
+  if (arquivos.length === 0) {
     return { ok: false, message: 'Selecione o PDF da relação.', totalLancamentos: 0, encontradas: [], naoEncontradas: [] };
   }
-  if (arquivo.type && arquivo.type !== 'application/pdf') {
+  if (arquivos.some((arquivo) => arquivo.type && arquivo.type !== 'application/pdf')) {
     return { ok: false, message: 'Envie um arquivo PDF.', totalLancamentos: 0, encontradas: [], naoEncontradas: [] };
   }
 
-  let texto: string;
+  const textos: string[] = [];
   try {
-    texto = await extrairTextoPdf(Buffer.from(await arquivo.arrayBuffer()));
+    for (const arquivo of arquivos) {
+      textos.push(await extrairTextoPdf(Buffer.from(await arquivo.arrayBuffer())));
+    }
   } catch (e) {
     return { ok: false, message: `Falha ao ler o PDF: ${(e as Error).message}`, totalLancamentos: 0, encontradas: [], naoEncontradas: [] };
   }
 
-  const lancamentos = parseRelacaoPagamentoSitram(texto);
+  const lancamentos = textos.flatMap((texto) => parseRelacaoPagamentoSitram(texto));
   if (lancamentos.length === 0) {
-    return { ok: false, message: 'Não reconheci nenhum lançamento no PDF. Confira se é a Relação de Lançamentos do SITRAM.', totalLancamentos: 0, encontradas: [], naoEncontradas: [] };
+    return { ok: false, message: 'Não reconheci nenhum lançamento no PDF. Use a relação SITRAM ou DAE/boleto com NOTAS FISCAIS.', totalLancamentos: 0, encontradas: [], naoEncontradas: [] };
   }
 
   const notas = await prisma.notaFiscal.findMany({
@@ -1530,15 +1928,29 @@ export async function previewPagamentoSitram(formData: FormData): Promise<Previe
   // Indexa por (CNPJ emitente + número). Usa os campos gravados E os extraídos
   // da chave de acesso — notas RESUMO não têm `numero`, mas têm a chave.
   const mapa = new Map<string, typeof notas>();
+  const mapaPorNumero = new Map<string, typeof notas>();
   for (const n of notas) {
     const chaves = new Set<string>();
-    if (n.numero) chaves.add(chaveCruzamento(n.emitenteCnpj, n.numero));
+    const numeros = new Set<string>();
+    if (n.numero) {
+      chaves.add(chaveCruzamento(n.emitenteCnpj, n.numero));
+      numeros.add(String(Number(n.numero) || ''));
+    }
     const daChave = extrairDaChave(n.chave);
-    if (daChave) chaves.add(`${daChave.cnpj}-${daChave.numero}`);
+    if (daChave) {
+      chaves.add(`${daChave.cnpj}-${daChave.numero}`);
+      numeros.add(daChave.numero);
+    }
     for (const k of chaves) {
       const grupo = mapa.get(k) ?? [];
       grupo.push(n);
       mapa.set(k, grupo);
+    }
+    for (const numero of numeros) {
+      if (!numero) continue;
+      const grupo = mapaPorNumero.get(numero) ?? [];
+      grupo.push(n);
+      mapaPorNumero.set(numero, grupo);
     }
   }
 
@@ -1547,7 +1959,9 @@ export async function previewPagamentoSitram(formData: FormData): Promise<Previe
   const idsVistos = new Set<number>();
 
   for (const l of lancamentos) {
-    const grupo = mapa.get(`${l.cnpjEmitente}-${l.numeroNota}`);
+    const grupo = l.cnpjEmitente
+      ? mapa.get(`${l.cnpjEmitente}-${l.numeroNota}`)
+      : mapaPorNumero.get(l.numeroNota);
     if (!grupo || grupo.length === 0) {
       naoEncontradas.push({ cnpj: l.cnpjEmitente, numero: l.numeroNota });
       continue;

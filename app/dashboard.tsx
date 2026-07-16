@@ -1,11 +1,13 @@
 'use client';
 
-import { useState, useMemo, useEffect, useTransition } from 'react';
+import { useState, useMemo, useEffect, useTransition, useDeferredValue, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import type { Cnpj, NotaFiscal } from '@prisma/client';
 import {
   verificarCertificado,
+  enviarCertificadoVps,
   sincronizarNotas,
+  sincronizarCnpjsAtivos,
   adicionarCnpj,
   alternarAtivoCnpj,
   removerCnpj,
@@ -19,17 +21,19 @@ import {
   manifestarNotasLote,
   listarNotasPorAno,
   listarTodasNotas,
+  listarNotasRelatorio,
   previewPagamentoSitram,
   aplicarPagamentoSitram,
   anexarComprovanteLote,
   type PreviewPagamentoSitram,
   atualizarSitramPorChaves,
-  listarChavesSitramSemConsulta,
+  listarChavesSitramParaAtualizacao,
   atualizarTransporteNotasExistentes,
   type ActionResult,
   type CertificadoComStatus,
   type ResultadoImportChave,
   type ResultadoManifestoLote,
+  type NotaRelatorio,
   type ResultadoSitramManifesto,
 } from '@/lib/actions';
 import type { DanfeData } from '@/lib/sefaz/detalhe';
@@ -43,7 +47,12 @@ import {
   type LancamentoDaeNormalizado,
 } from '@/lib/sitram/dae';
 import type { UsuarioLogado } from '@/lib/usuarios/auth';
-import { sairUsuario } from '@/lib/usuarios/actions';
+import {
+  listarUsuariosAdmin,
+  sairUsuario,
+  salvarUsuarioAdmin,
+  type UsuarioAdminResumo,
+} from '@/lib/usuarios/actions';
 import {
   listarAnexos,
   enviarAnexo,
@@ -52,10 +61,13 @@ import {
 } from '@/lib/anexos/actions';
 import DanfeView from './components/DanfeView';
 import ItensView from './components/ItensView';
+import MapaBrasil, { nomeUf, type ValorUf } from './components/MapaBrasil';
+import { useIdioma } from '@/lib/i18n';
 
 type NotaComCnpj = NotaFiscal & { cnpj: { cnpj: string; razaoSocial: string | null }; situacaoSefaz?: string };
 type CnpjComContagem = Cnpj & { _count: { notas: number } };
 type FiltroDaeSitram = 'todos' | 'consultado' | 'com-dae' | 'a-pagar' | 'em-aberto' | 'pago' | 'sem-dae' | 'nao-encontrada';
+type SecaoApp = 'home' | 'notas' | 'relatorios' | 'empresas' | 'usuarios' | 'configuracao';
 
 // DAE "a pagar" = DAE em aberto ou ainda a gerar (imposto pendente de pagamento)
 const DAE_A_PAGAR = ['EM_ABERTO', 'LIBERADA_PARA_GERAR'];
@@ -99,6 +111,22 @@ function dataHora(d: Date | string | null | undefined): string {
     hour: '2-digit',
     minute: '2-digit',
   });
+}
+
+function nomeGrupoEmpresa(cnpj: string | null | undefined): string {
+  const raiz = (cnpj ?? '').replace(/\D/g, '').slice(0, 8);
+  if (raiz === '50767035' || raiz === '62803717') return 'GRUPO SF';
+  if (raiz === '45998339') return 'GRUPO NEWSHOP';
+  return 'OUTROS';
+}
+
+function nomeEmpresaCurta(nota: NotaComCnpj): string {
+  const cnpj = nota.cnpj.cnpj.replace(/\D/g, '');
+  if (cnpj === '50767035000129') return 'Facil';
+  if (cnpj === '50767035000200') return 'Facil Filial';
+  if (cnpj === '62803717000129') return 'Soye';
+  if (cnpj.startsWith('45998339')) return nota.cnpj.razaoSocial || 'Newshop';
+  return nota.cnpj.razaoSocial || formatarCnpj(nota.cnpj.cnpj);
 }
 
 function lerDanfeCacheLocal(notaId: number): DanfeData | null {
@@ -165,7 +193,7 @@ function textoDaeSitram(status: string | null | undefined): string {
     EM_ABERTO: 'Em aberto',
     SEM_DAE: 'Sem DAE',
     LIBERADA_PARA_GERAR: 'Gerar DAE',
-    NAO_ENCONTRADA: 'Nao achou',
+    NAO_ENCONTRADA: 'Não encontrada',
     CONSULTADO: 'Consultado',
   };
   return status ? labels[status] ?? status : '—';
@@ -205,13 +233,20 @@ export default function Dashboard({
   porPagina,
 }: DashboardProps) {
   const router = useRouter();
+  const { idioma, setIdioma, t } = useIdioma();
   const podeAdministrar = usuario.admin;
+  const [secaoAtual, setSecaoAtual] = useState<SecaoApp>('home');
   const [status, setStatus] = useState<{ success?: boolean; message: string }>({
     message: 'Pronto.',
   });
   // Notas em memória — podem ser substituídas por um ano específico carregado do servidor
   const [notas, setNotas] = useState<NotaComCnpj[]>(notasIniciais);
   const [notasAlerta, setNotasAlerta] = useState<NotaComCnpj[]>(notasAlertaIniciais);
+  const [notasRelatorio, setNotasRelatorio] = useState<NotaRelatorio[]>([]);
+  const [paginaRelatorio, setPaginaRelatorio] = useState(0);
+  const [totalRelatorio, setTotalRelatorio] = useState(0);
+  const [temMaisRelatorio, setTemMaisRelatorio] = useState(true);
+  const [carregandoRelatorio, setCarregandoRelatorio] = useState(false);
   const [anoCarregado, setAnoCarregado] = useState<number | null>(null);
   const [carregandoAno, setCarregandoAno] = useState(false);
 
@@ -227,6 +262,12 @@ export default function Dashboard({
 
   const [certs, setCerts] = useState<CertificadoComStatus[] | null>(null);
   const [carregandoCerts, setCarregandoCerts] = useState(false);
+  const [mostrarUploadCert, setMostrarUploadCert] = useState(false);
+  const [mostrarAdmin, setMostrarAdmin] = useState(false);
+  const [mostrarUsuarios, setMostrarUsuarios] = useState(false);
+  const [usuariosAdmin, setUsuariosAdmin] = useState<UsuarioAdminResumo[] | null>(null);
+  const [carregandoUsuarios, setCarregandoUsuarios] = useState(false);
+  const [usuarioEditando, setUsuarioEditando] = useState<UsuarioAdminResumo | null>(null);
 
   // Importação por chave
   const [mostrarImport, setMostrarImport] = useState(false);
@@ -243,6 +284,7 @@ export default function Dashboard({
   const [sitramResultados, setSitramResultados] = useState<ResultadoSitramManifesto[] | null>(null);
   const [sitramAno, setSitramAno] = useState(String(anosDisponiveis[0] ?? new Date().getFullYear()));
   const [sitramConsultandoTudo, setSitramConsultandoTudo] = useState(false);
+  const [rotinaMatinalRodando, setRotinaMatinalRodando] = useState(false);
   const [sitramProgresso, setSitramProgresso] = useState<{
     feito: number;
     total: number;
@@ -307,14 +349,14 @@ export default function Dashboard({
     });
   }
 
-  async function handleSitramTodasSemConsulta() {
+  async function handleSitramAtualizacaoDiaria() {
     const ano = Number(sitramAno);
     setSitramResultados(null);
     setSitramProgresso(null);
     setSitramConsultandoTudo(true);
 
     try {
-      const pendentes = await listarChavesSitramSemConsulta(
+      const pendentes = await listarChavesSitramParaAtualizacao(
         ano,
         filtroCnpjId === 'todos' ? undefined : filtroCnpjId
       );
@@ -379,11 +421,32 @@ export default function Dashboard({
 
       setStatus({
         success: erros === 0,
-        message: `SITRAM ${ano}: ${pendentes.chaves.length} NF-e consultada(s), ${atualizadas} atualizada(s), ${erros} erro(s).`,
+        message: `SITRAM ${ano}: ${pendentes.chaves.length} NF-e atualizada(s), ${atualizadas} registro(s), ${erros} erro(s).`,
       });
       router.refresh();
     } finally {
       setSitramConsultandoTudo(false);
+    }
+  }
+
+  async function handleRotinaMatinal(auto = false) {
+    if (rotinaMatinalRodando || sitramConsultandoTudo || pending) return;
+
+    setRotinaMatinalRodando(true);
+    try {
+      const nf = await sincronizarCnpjsAtivos();
+      setStatus(nf);
+      await handleSitramAtualizacaoDiaria();
+      if (auto && typeof window !== 'undefined') {
+        window.localStorage.setItem(`danfe-rotina-matinal:${new Date().toISOString().slice(0, 10)}`, 'ok');
+      }
+    } catch (error: unknown) {
+      if (auto && typeof window !== 'undefined') {
+        window.localStorage.removeItem(`danfe-rotina-matinal:${new Date().toISOString().slice(0, 10)}`);
+      }
+      setStatus({ success: false, message: (error as Error).message || 'Erro na rotina matinal.' });
+    } finally {
+      setRotinaMatinalRodando(false);
     }
   }
 
@@ -452,6 +515,20 @@ export default function Dashboard({
   const [filtroDaeVencFim, setFiltroDaeVencFim] = useState('');
   const [filtroForaCe15SemDae, setFiltroForaCe15SemDae] = useState(false);
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const agora = new Date();
+    if (agora.getHours() < 6 || agora.getHours() >= 12) return;
+
+    const chave = `danfe-rotina-matinal:${agora.toISOString().slice(0, 10)}`;
+    if (window.localStorage.getItem(chave)) return;
+
+    window.localStorage.setItem(chave, 'rodando');
+    void handleRotinaMatinal(true);
+    // A rotina deve rodar uma vez por abertura matinal; nao depende dos filtros da tela.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const daePorNota = useMemo(
     () => new Map(notas.map((nota) => [nota.id, extrairResumoDae(nota)])),
     [notas]
@@ -461,6 +538,22 @@ export default function Dashboard({
     () => notas.filter((nota) => notaForaCeMais15DiasSemDaeOuPagamento(nota)).length,
     [notas]
   );
+
+  const alertasCertificado = useMemo(() => {
+    const hoje = new Date();
+    hoje.setHours(0, 0, 0, 0);
+
+    return cnpjs
+      .filter((cnpj) => cnpj.ativo && cnpj.certVencimento)
+      .map((cnpj) => {
+        const vencimento = new Date(cnpj.certVencimento as Date);
+        vencimento.setHours(0, 0, 0, 0);
+        const dias = Math.ceil((vencimento.getTime() - hoje.getTime()) / 86400000);
+        return { cnpj, dias, vencimento };
+      })
+      .filter((item) => item.dias <= 30)
+      .sort((a, b) => a.dias - b.dias);
+  }, [cnpjs]);
 
   function alternarFiltroForaCe15SemDae() {
     if (filtroForaCe15SemDae) {
@@ -564,6 +657,34 @@ export default function Dashboard({
       .finally(() => setCarregandoTodas(false));
   }, [algumFiltroAtivo, todasCarregadas, carregandoTodas, anoCarregado]);
 
+  const carregarMaisRelatorio = useCallback(async () => {
+    if (carregandoRelatorio || !temMaisRelatorio) return;
+    setCarregandoRelatorio(true);
+    try {
+      const resultado = await listarNotasRelatorio(paginaRelatorio + 1, 120);
+      setNotasRelatorio((atuais) => {
+        const ids = new Set(atuais.map((nota) => nota.id));
+        return [...atuais, ...resultado.notas.filter((nota) => !ids.has(nota.id))];
+      });
+      setPaginaRelatorio(resultado.pagina);
+      setTotalRelatorio(resultado.total);
+      setTemMaisRelatorio(resultado.temMais);
+    } catch (error: unknown) {
+      setStatus({
+        success: false,
+        message: (error as Error).message || 'Erro ao carregar os relatórios.',
+      });
+    } finally {
+      setCarregandoRelatorio(false);
+    }
+  }, [carregandoRelatorio, temMaisRelatorio, paginaRelatorio]);
+
+  useEffect(() => {
+    if (secaoAtual === 'relatorios' && paginaRelatorio === 0 && !carregandoRelatorio) {
+      void carregarMaisRelatorio();
+    }
+  }, [secaoAtual, paginaRelatorio, carregandoRelatorio, carregarMaisRelatorio]);
+
   function limparFiltrosAvancados() {
     setFiltroNumero('');
     setFiltroEmitente('');
@@ -621,6 +742,42 @@ export default function Dashboard({
     });
   }
 
+  function handleEnviarCertificado(formData: FormData) {
+    startTransition(async () => {
+      const res = await enviarCertificadoVps(formData);
+      setStatus(res);
+      if (res.success) {
+        setMostrarUploadCert(false);
+        const r = await lerCertificados();
+        if (r.ok) setCerts(r.certificados);
+        router.refresh();
+      }
+    });
+  }
+
+  function abrirUsuariosAdmin() {
+    setSecaoAtual('usuarios');
+    setMostrarUsuarios(true);
+    if (usuariosAdmin) return;
+
+    setCarregandoUsuarios(true);
+    listarUsuariosAdmin()
+      .then((usuarios) => setUsuariosAdmin(usuarios))
+      .catch((error) => setStatus({ success: false, message: (error as Error).message || 'Erro ao listar usuarios.' }))
+      .finally(() => setCarregandoUsuarios(false));
+  }
+
+  function handleSalvarUsuario(formData: FormData) {
+    startTransition(async () => {
+      const res = await salvarUsuarioAdmin(formData);
+      setStatus(res);
+      if (res.success) {
+        setUsuarioEditando(null);
+        setUsuariosAdmin(await listarUsuariosAdmin());
+      }
+    });
+  }
+
   function executar(acao: () => Promise<ActionResult>) {
     startTransition(async () => setStatus(await acao()));
   }
@@ -633,41 +790,75 @@ export default function Dashboard({
     });
   }
 
+  const filtroNumeroBusca = useDeferredValue(filtroNumero);
+  const filtroEmitenteBusca = useDeferredValue(filtroEmitente);
+  const filtroDestinatarioBusca = useDeferredValue(filtroDestinatario);
+  const filtroValorMinBusca = useDeferredValue(filtroValorMin);
+  const filtroValorMaxBusca = useDeferredValue(filtroValorMax);
+  const filtroItensMinBusca = useDeferredValue(filtroItensMin);
+  const filtroItensMaxBusca = useDeferredValue(filtroItensMax);
+  const filtroDataInicioBusca = useDeferredValue(filtroDataInicio);
+  const filtroDataFimBusca = useDeferredValue(filtroDataFim);
+  const filtroAtualizando =
+    filtroNumeroBusca !== filtroNumero ||
+    filtroEmitenteBusca !== filtroEmitente ||
+    filtroDestinatarioBusca !== filtroDestinatario ||
+    filtroValorMinBusca !== filtroValorMin ||
+    filtroValorMaxBusca !== filtroValorMax ||
+    filtroItensMinBusca !== filtroItensMin ||
+    filtroItensMaxBusca !== filtroItensMax ||
+    filtroDataInicioBusca !== filtroDataInicio ||
+    filtroDataFimBusca !== filtroDataFim;
+  const notasBuscaIndex = useMemo(() => new Map(notas.map((n) => [
+    n.id,
+    {
+      numero: String(Number(n.numero ?? '') || ''),
+      emitenteNome: (n.emitenteNome ?? '').toLowerCase(),
+      emitenteCnpj: n.emitenteCnpj ?? '',
+      destNome: (n.destNome ?? '').toLowerCase(),
+      destCnpj: n.destCnpj ?? '',
+      emitidaEm: new Date(n.emitidaEm),
+      etiquetas: parseEtiquetas(n.etiqueta),
+      dae: statusDaeEfetivo(n),
+    },
+  ])), [notas]);
+
   const notasFiltradas = useMemo(() => {
-    const numeroBusca = filtroNumero.trim();
+    const numeroBusca = filtroNumeroBusca.trim();
     const numeroBuscaDigitos = numeroBusca.replace(/\D/g, '');
-    const emitenteBusca = filtroEmitente.trim().toLowerCase();
-    const emitenteBuscaDigitos = filtroEmitente.replace(/\D/g, '');
-    const destBusca = filtroDestinatario.trim().toLowerCase();
-    const destBuscaDigitos = filtroDestinatario.replace(/\D/g, '');
-    const valorMin = filtroValorMin ? Number(filtroValorMin) : null;
-    const valorMax = filtroValorMax ? Number(filtroValorMax) : null;
-    const itensMin = filtroItensMin ? Number(filtroItensMin) : null;
-    const itensMax = filtroItensMax ? Number(filtroItensMax) : null;
+    const emitenteBusca = filtroEmitenteBusca.trim().toLowerCase();
+    const emitenteBuscaDigitos = filtroEmitenteBusca.replace(/\D/g, '');
+    const destBusca = filtroDestinatarioBusca.trim().toLowerCase();
+    const destBuscaDigitos = filtroDestinatarioBusca.replace(/\D/g, '');
+    const valorMin = filtroValorMinBusca ? Number(filtroValorMinBusca) : null;
+    const valorMax = filtroValorMaxBusca ? Number(filtroValorMaxBusca) : null;
+    const itensMin = filtroItensMinBusca ? Number(filtroItensMinBusca) : null;
+    const itensMax = filtroItensMaxBusca ? Number(filtroItensMaxBusca) : null;
 
     return notas.filter((n) => {
+      const idx = notasBuscaIndex.get(n.id);
+      if (!idx) return false;
       if (filtroCnpjId !== 'todos' && n.cnpjId !== filtroCnpjId) return false;
       if (filtroStatus !== 'todos' && n.status !== filtroStatus) return false;
 
       // Busca por número da NF (ignora zeros à esquerda) ou por chave de acesso.
       if (numeroBuscaDigitos) {
-        const numNota = String(Number(n.numero ?? '') || '');
         const alvoBusca = String(Number(numeroBuscaDigitos) || '');
-        const matchNumero = numNota.length > 0 && numNota.includes(alvoBusca);
+        const matchNumero = idx.numero.length > 0 && idx.numero.includes(alvoBusca);
         const matchChave = numeroBuscaDigitos.length >= 8 && n.chave.includes(numeroBuscaDigitos);
         if (!matchNumero && !matchChave) return false;
       }
 
       if (emitenteBusca) {
-        const nomeAlvo = (n.emitenteNome ?? '').toLowerCase();
+        const nomeAlvo = idx.emitenteNome;
         const matchNome = nomeAlvo.length > 0 && (nomeAlvo.includes(emitenteBusca) || emitenteBusca.includes(nomeAlvo));
-        const matchCnpj = emitenteBuscaDigitos.length >= 3 && (n.emitenteCnpj ?? '').includes(emitenteBuscaDigitos);
+        const matchCnpj = emitenteBuscaDigitos.length >= 3 && idx.emitenteCnpj.includes(emitenteBuscaDigitos);
         if (!matchNome && !matchCnpj) return false;
       }
       if (destBusca) {
-        const nomeAlvo = (n.destNome ?? '').toLowerCase();
+        const nomeAlvo = idx.destNome;
         const matchNome = nomeAlvo.length > 0 && (nomeAlvo.includes(destBusca) || destBusca.includes(nomeAlvo));
-        const matchCnpj = destBuscaDigitos.length >= 3 && (n.destCnpj ?? '').includes(destBuscaDigitos);
+        const matchCnpj = destBuscaDigitos.length >= 3 && idx.destCnpj.includes(destBuscaDigitos);
         if (!matchNome && !matchCnpj) return false;
       }
 
@@ -680,9 +871,8 @@ export default function Dashboard({
       if (itensMax !== null && !Number.isNaN(itensMax) && qtdItens > itensMax) return false;
 
       if (filtroEtiquetas.length > 0) {
-        const tagsNota = parseEtiquetas(n.etiqueta);
         const corresponde = filtroEtiquetas.some((f) =>
-          f === 'sem-etiqueta' ? tagsNota.length === 0 : tagsNota.includes(f)
+          f === 'sem-etiqueta' ? idx.etiquetas.length === 0 : idx.etiquetas.includes(f)
         );
         if (!corresponde) return false;
       }
@@ -700,11 +890,10 @@ export default function Dashboard({
       }
 
       // Filtros por data de emissão
-      const emitidaEm = new Date(n.emitidaEm);
-      if (filtroDataInicio && emitidaEm < new Date(filtroDataInicio)) return false;
-      if (filtroDataFim && emitidaEm > new Date(filtroDataFim + 'T23:59:59')) return false;
-      if (filtroMes && emitidaEm.getMonth() + 1 !== Number(filtroMes)) return false;
-      if (filtroAno && emitidaEm.getFullYear() !== Number(filtroAno)) return false;
+      if (filtroDataInicioBusca && idx.emitidaEm < new Date(filtroDataInicioBusca)) return false;
+      if (filtroDataFimBusca && idx.emitidaEm > new Date(filtroDataFimBusca + 'T23:59:59')) return false;
+      if (filtroMes && idx.emitidaEm.getMonth() + 1 !== Number(filtroMes)) return false;
+      if (filtroAno && idx.emitidaEm.getFullYear() !== Number(filtroAno)) return false;
 
       // Filtro por situação SEFAZ
       if (filtroSituacao !== 'todas') {
@@ -713,7 +902,7 @@ export default function Dashboard({
       }
 
       if (filtroDaeSitram !== 'todos') {
-        const dae = statusDaeEfetivo(n);
+        const dae = idx.dae;
         const consultada = !!n.sitramConsultadaEm || !!dae;
         const temDae = ['PAGO', 'EM_ABERTO', 'LIBERADA_PARA_GERAR'].includes(dae);
         if (filtroDaeSitram === 'consultado' && !consultada) return false;
@@ -743,17 +932,18 @@ export default function Dashboard({
     });
   }, [
     notas,
+    notasBuscaIndex,
     filtroCnpjId,
     filtroStatus,
-    filtroNumero,
-    filtroEmitente,
-    filtroDestinatario,
-    filtroValorMin,
-    filtroValorMax,
-    filtroItensMin,
-    filtroItensMax,
-    filtroDataInicio,
-    filtroDataFim,
+    filtroNumeroBusca,
+    filtroEmitenteBusca,
+    filtroDestinatarioBusca,
+    filtroValorMinBusca,
+    filtroValorMaxBusca,
+    filtroItensMinBusca,
+    filtroItensMaxBusca,
+    filtroDataInicioBusca,
+    filtroDataFimBusca,
     filtroMes,
     filtroAno,
     filtroSituacao,
@@ -774,15 +964,15 @@ export default function Dashboard({
     notas,
     filtroCnpjId,
     filtroStatus,
-    filtroNumero,
-    filtroEmitente,
-    filtroDestinatario,
-    filtroValorMin,
-    filtroValorMax,
-    filtroItensMin,
-    filtroItensMax,
-    filtroDataInicio,
-    filtroDataFim,
+    filtroNumeroBusca,
+    filtroEmitenteBusca,
+    filtroDestinatarioBusca,
+    filtroValorMinBusca,
+    filtroValorMaxBusca,
+    filtroItensMinBusca,
+    filtroItensMaxBusca,
+    filtroDataInicioBusca,
+    filtroDataFimBusca,
     filtroMes,
     filtroAno,
     filtroSituacao,
@@ -809,7 +999,6 @@ export default function Dashboard({
     () => notas.filter((n) => n.status === 'RESUMO' && !n.manifestadaEm).length,
     [notas]
   );
-
   // Manifestação em lote
   const [selecionadas, setSelecionadas] = useState<Set<number>>(new Set());
   const [manifestoLoteProgresso, setManifestoLoteProgresso] = useState<{ feito: number; total: number } | null>(null);
@@ -877,50 +1066,81 @@ export default function Dashboard({
         {/* Header */}
         <header className="rounded-xl bg-[var(--surface)] border border-[var(--border)] px-5 py-3.5 mb-4 shadow-sm flex flex-wrap gap-4 justify-between items-center">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-[10px] grid place-items-center text-white text-lg font-bold"
+            <div className="hidden w-10 h-10 rounded-[10px] place-items-center text-white text-lg font-bold"
               style={{ background: 'linear-gradient(140deg,#2a251c,#4a4234)' }}>
               D
             </div>
             <div>
               <h1 className="text-lg font-bold tracking-tight text-[var(--ink)]">DanfeCollector</h1>
-              <p className="text-[var(--ink-mut)] text-xs">Sincronização direta com a SEFAZ</p>
+              <p className="text-[var(--ink-mut)] text-xs">{t('tagline')}</p>
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <button
-              onClick={() => setMostrarImport((v) => !v)}
+              onClick={() => { setSecaoAtual('notas'); setMostrarImport((v) => !v); }}
               className="px-3.5 py-2 rounded-lg text-sm font-medium border border-[var(--border-strong)] bg-[var(--surface)] text-[var(--ink)] hover:bg-[var(--surface-2)] transition"
             >
-              Importar chaves
+              {t('keys')}
             </button>
             <button
-              onClick={() => setMostrarPagamento((v) => !v)}
+              onClick={() => { setSecaoAtual('notas'); setMostrarPagamento((v) => !v); }}
               className="px-3.5 py-2 rounded-lg text-sm font-medium border border-[var(--border-strong)] bg-[var(--surface)] text-[var(--ink)] hover:bg-[var(--surface-2)] transition"
             >
-              Importar pagamento
+              {t('payment')}
             </button>
             <button
-              onClick={() => setMostrarSitram((v) => !v)}
+              onClick={() => { setSecaoAtual('notas'); setMostrarSitram((v) => !v); }}
               className="px-3.5 py-2 rounded-lg text-sm font-medium border border-[var(--border-strong)] bg-[var(--surface)] text-[var(--ink)] hover:bg-[var(--surface-2)] transition"
             >
               SITRAM
             </button>
+            <button
+              onClick={() => handleRotinaMatinal(false)}
+              disabled={pending || sitramConsultandoTudo || rotinaMatinalRodando}
+              className="px-3.5 py-2 rounded-lg text-sm font-semibold bg-emerald-600 text-white hover:bg-emerald-700 transition disabled:opacity-50"
+            >
+              {rotinaMatinalRodando || sitramConsultandoTudo ? t('updating') : t('updateAll')}
+            </button>
             {podeAdministrar && (
               <>
+                <button
+                  onClick={() => { setSecaoAtual('configuracao'); setMostrarAdmin((v) => !v); }}
+                  className="px-3.5 py-2 rounded-lg text-sm font-medium border border-[var(--border-strong)] bg-[var(--surface)] text-[var(--ink)] hover:bg-[var(--surface-2)] transition"
+                >
+                  {t('admin')}
+                </button>
+                {mostrarAdmin && (
+                  <>
+            <button
+              onClick={() => setMostrarUploadCert((v) => !v)}
+              disabled={pending}
+              className="px-3.5 py-2 rounded-lg text-sm font-semibold bg-amber-500 text-amber-950 hover:bg-amber-400 transition disabled:opacity-50"
+            >
+              {mostrarUploadCert ? t('closeCertificate') : t('updateCertificate')}
+            </button>
             <button
               onClick={abrirCertificados}
               disabled={carregandoCerts}
               className="px-3.5 py-2 rounded-lg text-sm font-medium border border-[var(--border-strong)] bg-[var(--surface)] text-[var(--ink)] hover:bg-[var(--surface-2)] transition disabled:opacity-50"
             >
-              {carregandoCerts ? 'Lendo…' : certs ? 'Fechar certificados' : 'Certificados do PC'}
+              {carregandoCerts ? t('reading') : certs ? t('closeCertificates') : t('pcCertificates')}
             </button>
             <button
               onClick={() => executar(verificarCertificado)}
               disabled={pending}
               className="px-3.5 py-2 rounded-lg text-sm font-semibold bg-[var(--accent)] text-[var(--accent-ink)] hover:brightness-150 transition disabled:opacity-50"
             >
-              Verificar certificado
+              {t('checkCertificate')}
             </button>
+            <button
+              onClick={abrirUsuariosAdmin}
+              disabled={carregandoUsuarios}
+              className="px-3.5 py-2 rounded-lg text-sm font-medium border border-[var(--border-strong)] bg-[var(--surface)] text-[var(--ink)] hover:bg-[var(--surface-2)] transition disabled:opacity-50"
+            >
+              {carregandoUsuarios ? t('updating') : t('users')}
+            </button>
+                  </>
+                )}
               </>
             )}
             <form action={sairUsuario} className="flex items-center gap-2 pl-1">
@@ -930,33 +1150,187 @@ export default function Dashboard({
                 </div>
                 <div className="leading-tight">
                   <div className="text-xs font-semibold text-[var(--ink)]">{usuario.nome}</div>
-                  <div className="text-[11px] text-[var(--ink-mut)]">{usuario.admin ? 'admin' : 'operação'}</div>
+                  <div className="text-[11px] text-[var(--ink-mut)]">{usuario.admin ? 'admin' : t('operation')}</div>
                 </div>
               </div>
               <button
                 type="submit"
                 className="px-3 py-2 rounded-lg text-sm font-medium border border-[var(--border-strong)] bg-[var(--surface)] text-[var(--ink)] hover:bg-[var(--surface-2)] transition"
               >
-                Sair
+                {t('logout')}
               </button>
             </form>
+            <select
+              value={idioma}
+              onChange={(e) => setIdioma(e.target.value === 'zh-CN' ? 'zh-CN' : 'pt-BR')}
+              aria-label={t('language')}
+              className="px-3 py-2 rounded-lg text-sm font-medium border border-[var(--border-strong)] bg-[var(--surface)] text-[var(--ink)] hover:bg-[var(--surface-2)] transition"
+            >
+              <option value="pt-BR">PT-BR</option>
+              <option value="zh-CN">中文</option>
+            </select>
           </div>
         </header>
 
-        {/* KPIs */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
-          <KpiCard label="Empresas" value={String(cnpjs.length)} sub="cadastradas" tone="neu" />
-          <KpiCard
-            label="Notas fiscais"
-            value={anoCarregado ? `${notas.length}` : String(notas.length)}
-            sub={anoCarregado ? `ano ${anoCarregado}` : totalNotas > notas.length ? `de ${totalNotas} no total` : 'no total'}
-            tone="neu"
-          />
-          <KpiCard label="Valor movimentado" value={moeda(valorGeral)} sub="notas carregadas" tone="good" />
-          <KpiCard label="A manifestar" value={String(pendentes)} sub="resumos pendentes" tone="warn" />
-        </div>
+        <nav className="mb-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-2 shadow-sm">
+          <div className="flex flex-wrap gap-2">
+            <SecaoBotao atual={secaoAtual} alvo="home" onClick={setSecaoAtual}>{t('home')}</SecaoBotao>
+            <SecaoBotao atual={secaoAtual} alvo="notas" onClick={setSecaoAtual}>{t('invoice')}</SecaoBotao>
+            <SecaoBotao atual={secaoAtual} alvo="relatorios" onClick={setSecaoAtual}>{t('reports')}</SecaoBotao>
+            <SecaoBotao atual={secaoAtual} alvo="empresas" onClick={setSecaoAtual}>{t('companies')}</SecaoBotao>
+            {podeAdministrar && <SecaoBotao atual={secaoAtual} alvo="usuarios" onClick={() => abrirUsuariosAdmin()}>{t('users')}</SecaoBotao>}
+            {podeAdministrar && <SecaoBotao atual={secaoAtual} alvo="configuracao" onClick={setSecaoAtual}>{t('settings')}</SecaoBotao>}
+          </div>
+        </nav>
 
-        {mostrarPagamento && (
+        {/* KPIs */}
+        {secaoAtual === 'home' && (
+          <>
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+              <KpiCard label={t('companies')} value={String(cnpjs.length)} sub={t('registered')} tone="neu" />
+              <KpiCard
+                label={t('invoices')}
+                value={anoCarregado ? `${notas.length}` : String(notas.length)}
+                sub={anoCarregado ? `${t('year')} ${anoCarregado}` : totalNotas > notas.length ? `de ${totalNotas} ${t('ofTotal')}` : t('ofTotal')}
+                tone="neu"
+              />
+              <KpiCard label={t('movedValue')} value={moeda(valorGeral)} sub={t('loadedInvoices')} tone="good" />
+              <KpiCard label={t('toManifest')} value={String(pendentes)} sub={t('pendingSummaries')} tone="warn" />
+            </div>
+
+            {alertasCertificado.length > 0 && (
+              <div className={`mb-4 rounded-xl border px-4 py-3 text-sm ${
+                alertasCertificado.some((item) => item.dias < 0)
+                  ? 'border-red-300 bg-red-50 text-red-800'
+                  : 'border-amber-300 bg-amber-50 text-amber-900'
+              }`}>
+                <div className="font-bold">
+                  {alertasCertificado.some((item) => item.dias < 0)
+                    ? t('certificateExpired')
+                    : t('certificateExpiring')}
+                </div>
+                <div className="mt-1 flex flex-wrap gap-2">
+                  {alertasCertificado.map(({ cnpj, dias, vencimento }) => (
+                    <span key={cnpj.id} className="rounded-lg bg-white/70 px-2.5 py-1 font-medium">
+                      {cnpj.razaoSocial || formatarCnpj(cnpj.cnpj)}: {dias < 0 ? t('expiredDays', { days: Math.abs(dias) }) : dias === 0 ? t('expiresToday') : t('expiresInDays', { days: dias })} ({data(vencimento)})
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="mb-6 grid gap-3 md:grid-cols-3">
+              <HomeAtalho titulo={t('invoice')} detalhe={idioma === 'zh-CN' ? '筛选、确认、DAE 和 DANFE' : 'Filtros, manifestação, DAE e DANFE'} onClick={() => setSecaoAtual('notas')} />
+              <HomeAtalho titulo={t('reports')} detalhe={idioma === 'zh-CN' ? '各州地图、金额和排名' : 'Mapa por UF, valores e ranking'} onClick={() => setSecaoAtual('relatorios')} />
+              <HomeAtalho titulo={t('companies')} detalhe={idioma === 'zh-CN' ? 'CNPJ、NSU、SEFAZ 状态和同步' : 'CNPJ, NSU, status da SEFAZ e sincronização'} onClick={() => setSecaoAtual('empresas')} />
+            </div>
+          </>
+        )}
+
+        {secaoAtual === 'relatorios' && (
+          <RelatoriosDashboard
+            notas={notasRelatorio}
+            carregando={carregandoRelatorio}
+            total={totalRelatorio}
+            temMais={temMaisRelatorio}
+            onCarregarMais={carregarMaisRelatorio}
+          />
+        )}
+
+        {podeAdministrar && secaoAtual === 'configuracao' && (
+          <div className="mb-6 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-5 shadow-sm">
+            <div className="mb-4 border-b border-[var(--border)] pb-3">
+              <h2 className="text-base font-bold text-[var(--ink)]">{t('settings')}</h2>
+              <p className="text-xs text-[var(--ink-mut)]">{idioma === 'zh-CN' ? '数字证书、Windows 读取和 SEFAZ 验证。' : 'Certificado digital, leitura do Windows e verificação da SEFAZ.'}</p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                onClick={() => setMostrarUploadCert((v) => !v)}
+                disabled={pending}
+                className="rounded-lg bg-amber-500 px-4 py-2 text-sm font-bold text-amber-950 hover:bg-amber-400 disabled:opacity-50"
+              >
+                {mostrarUploadCert ? t('closeCertificate') : t('updateCertificate')}
+              </button>
+              <button
+                onClick={abrirCertificados}
+                disabled={carregandoCerts}
+                className="rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-4 py-2 text-sm font-semibold text-[var(--ink)] hover:bg-[var(--surface-2)] disabled:opacity-50"
+              >
+                {carregandoCerts ? t('reading') : certs ? t('closeCertificates') : t('pcCertificates')}
+              </button>
+              <button
+                onClick={() => executar(verificarCertificado)}
+                disabled={pending}
+                className="rounded-lg bg-[var(--accent)] px-4 py-2 text-sm font-bold text-[var(--accent-ink)] hover:brightness-150 disabled:opacity-50"
+              >
+                {t('checkCertificate')}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {podeAdministrar && secaoAtual === 'configuracao' && mostrarUploadCert && (
+          <form action={handleEnviarCertificado} className="mb-6 bg-[var(--surface)] border border-[var(--border)] rounded-2xl p-5 shadow-sm">
+            <div className="flex items-center justify-between mb-3 border-b border-[var(--border)] pb-3">
+              <h2 className="text-base font-semibold text-[var(--ink)]">{t('updateCertificateVps')}</h2>
+            </div>
+            <div className="grid md:grid-cols-4 gap-3">
+              <input
+                name="certificado"
+                type="file"
+                accept=".pfx"
+                required
+                className="md:col-span-2 border border-[var(--border-strong)] rounded-lg px-3 py-2 text-sm bg-[var(--surface)] text-[var(--ink)] file:mr-3 file:rounded-md file:border-0 file:bg-[var(--surface-2)] file:px-3 file:py-1.5 file:text-sm file:font-medium"
+              />
+              <input
+                name="senha"
+                type="password"
+                placeholder={t('pfxPassword')}
+                required
+                className="border border-[var(--border-strong)] rounded-lg px-3 py-2 text-sm bg-[var(--surface)] text-[var(--ink)] placeholder-[var(--ink-mut)] focus:ring-2 focus:ring-[var(--border-strong)] outline-none"
+              />
+              <select
+                name="escopo"
+                defaultValue="raiz"
+                className="border border-[var(--border-strong)] rounded-lg px-3 py-2 text-sm bg-[var(--surface)] text-[var(--ink)] focus:ring-2 focus:ring-[var(--border-strong)] outline-none"
+              >
+                <option value="raiz">Mesma raiz</option>
+                <option value="cnpj">CNPJ exato</option>
+                <option value="padrao">Padrao geral</option>
+              </select>
+              <input
+                name="alvo"
+                placeholder="Raiz/CNPJ opcional"
+                inputMode="numeric"
+                className="md:col-span-3 border border-[var(--border-strong)] rounded-lg px-3 py-2 text-sm bg-[var(--surface)] text-[var(--ink)] placeholder-[var(--ink-mut)] focus:ring-2 focus:ring-[var(--border-strong)] outline-none"
+              />
+              <button
+                type="submit"
+                disabled={pending}
+                className="bg-amber-500 hover:bg-amber-400 text-amber-950 px-5 py-2 rounded-lg text-sm font-bold disabled:opacity-50"
+              >
+                {pending ? 'Enviando...' : 'Enviar e atualizar'}
+              </button>
+            </div>
+            <p className="mt-2 text-xs text-[var(--ink-mut)]">
+              Em "Mesma raiz", deixe o campo vazio para usar a raiz do proprio certificado.
+            </p>
+          </form>
+        )}
+
+        {podeAdministrar && secaoAtual === 'usuarios' && mostrarUsuarios && (
+          <UsuariosAdminPainel
+            cnpjs={cnpjs}
+            usuarios={usuariosAdmin ?? []}
+            carregando={carregandoUsuarios}
+            usuarioEditando={usuarioEditando}
+            onEditar={setUsuarioEditando}
+            onNovo={() => setUsuarioEditando(null)}
+            action={handleSalvarUsuario}
+          />
+        )}
+
+        {secaoAtual === 'notas' && mostrarPagamento && (
           <ImportarPagamentoSitram
             onFechar={() => setMostrarPagamento(false)}
             onAplicado={() => { setTodasCarregadas(false); router.refresh(); }}
@@ -964,7 +1338,7 @@ export default function Dashboard({
         )}
 
         {/* Painel de importação por chave */}
-        {mostrarImport && (
+        {secaoAtual === 'notas' && mostrarImport && (
           <div className="mb-6 bg-[var(--surface)] border border-[var(--border)] rounded-2xl p-5 shadow-sm">
             <div className="flex items-center justify-between mb-3 border-b border-[var(--border)] pb-3">
               <h2 className="text-base font-semibold text-[var(--ink)]">📥 Importar notas por chave de acesso</h2>
@@ -1067,7 +1441,7 @@ export default function Dashboard({
           </div>
         )}
 
-        {mostrarSitram && (
+        {secaoAtual === 'notas' && mostrarSitram && (
           <div className="mb-6 bg-[var(--surface)] border border-[var(--border)] rounded-2xl p-5 shadow-sm">
             <div className="flex items-center justify-between mb-3 border-b border-[var(--border)] pb-3">
               <h2 className="text-base font-semibold text-[var(--ink)]">SITRAM por NF-e ou MDF-e</h2>
@@ -1096,9 +1470,9 @@ export default function Dashboard({
             </div>
             <div className="mt-4 pt-4 border-t border-[var(--border)] grid md:grid-cols-[1fr_auto] gap-3 items-end">
               <div>
-                <p className="text-sm font-medium text-[var(--ink)]">Consultar todas as NF sem consulta SITRAM</p>
+                <p className="text-sm font-medium text-[var(--ink)]">Atualizar SITRAM do ano</p>
                 <p className="text-xs text-[var(--ink-mut)]">
-                  Processa automaticamente, uma por uma, todas as NF-e de emitente fora do CE no ano escolhido. Usa a empresa selecionada acima, se houver.
+                  Reconsulta NF-e fora do CE que ainda nao tem SITRAM ou foi consultada antes de hoje. Usa a empresa selecionada acima, se houver.
                 </p>
                 <div className="flex flex-wrap items-center gap-3 mt-2">
                   <label className="text-xs text-[var(--ink-mut)]">
@@ -1118,15 +1492,15 @@ export default function Dashboard({
               </div>
               <div className="flex flex-wrap gap-2">
                 <button
-                  onClick={handleSitramTodasSemConsulta}
+                  onClick={handleSitramAtualizacaoDiaria}
                   disabled={pending || sitramConsultandoTudo || !sitramAno}
                   className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50"
                 >
                   {sitramConsultandoTudo && sitramProgresso
                     ? `Consultando ${sitramProgresso.feito}/${sitramProgresso.total}`
                     : sitramConsultandoTudo
-                      ? 'Buscando pendências...'
-                      : 'Consultar todas do ano'}
+                      ? 'Buscando atualizacoes...'
+                      : 'Atualizar SITRAM'}
                 </button>
                 <button
                   onClick={handleAtualizarTransporte}
@@ -1173,7 +1547,7 @@ export default function Dashboard({
         )}
 
         {/* Painel de certificados */}
-        {podeAdministrar && certs && (
+        {podeAdministrar && secaoAtual === 'configuracao' && certs && (
           <div className="mb-6 bg-[var(--surface)] border border-[var(--border)] rounded-2xl p-5 shadow-sm">
             <div className="flex items-center justify-between mb-3 border-b border-[var(--border)] pb-3">
               <h2 className="text-base font-semibold text-[var(--ink)]">🔐 Certificados Digitais no Windows</h2>
@@ -1243,62 +1617,84 @@ export default function Dashboard({
           <span>{pending ? 'Processando…' : status.message}</span>
         </div>
 
+        {(secaoAtual === 'empresas' || secaoAtual === 'notas') && (
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
           {/* Empresas */}
-          <div className="bg-[var(--surface)] p-5 rounded-2xl shadow-sm border border-[var(--border)]">
-            <h2 className="text-base font-semibold text-[var(--ink)] mb-3 pb-3 border-b border-[var(--border)]">
-              Empresas
-            </h2>
+          <div className={`${secaoAtual === 'empresas' ? 'lg:col-span-4' : 'hidden'} bg-[var(--surface)] p-4 rounded-xl shadow-sm border border-[var(--border)]`}>
+            <div className="mb-3 flex items-center justify-between gap-2 border-b border-[var(--border)] pb-3">
+              <div>
+                <h2 className="text-base font-semibold text-[var(--ink)]">{t('companies')}</h2>
+                <p className="text-xs text-[var(--ink-mut)]">{cnpjs.length} {t('registered')}</p>
+              </div>
+              {podeAdministrar && !mostrarForm && (
+                <button
+                  onClick={() => setMostrarForm(true)}
+                  className="rounded-lg border border-[var(--border-strong)] px-3 py-1.5 text-xs font-semibold text-[var(--ink)] hover:bg-[var(--surface-2)]"
+                >
+                  {t('add')}
+                </button>
+              )}
+            </div>
 
             {cnpjs.length === 0 && !mostrarForm && (
-              <p className="text-sm text-[var(--ink-mut)] py-2">Nenhum CNPJ cadastrado.</p>
+              <p className="text-sm text-[var(--ink-mut)] py-2">{t('noCnpj')}</p>
             )}
 
             <ul className="space-y-2">
               {cnpjs.map((c) => {
                 const bloqueado = c.bloqueadoAte ? new Date(c.bloqueadoAte) > new Date() : false;
                 const hora = c.bloqueadoAte
-                  ? new Date(c.bloqueadoAte).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+                  ? new Date(c.bloqueadoAte).toLocaleTimeString('pt-BR', {
+                      hour: '2-digit',
+                      minute: '2-digit',
+                      timeZone: 'America/Sao_Paulo',
+                    })
                   : '';
+                const consumoIndevido = /consumo indevido/i.test(c.situacao);
+                const situacaoCurta = bloqueado
+                  ? t('waitSefazUntil', { time: hora })
+                  : consumoIndevido
+                    ? t('sefazLimit')
+                    : c.situacao;
                 return (
-                  <li key={c.id} className="rounded-xl border border-[var(--border)] p-3 hover:border-[var(--border)] hover:bg-[var(--surface-2)]/60 transition">
+                  <li key={c.id} className="rounded-lg border border-[var(--border)] p-3 hover:bg-[var(--surface-2)]/60 transition">
                     <div className="flex justify-between items-start gap-2">
                       <div className="min-w-0">
-                        <p className="font-semibold text-sm text-[var(--ink)] truncate">{c.razaoSocial || 'Sem nome'}</p>
+                        <p className="font-semibold text-sm leading-tight text-[var(--ink)] truncate" title={c.razaoSocial || t('noName')}>{c.razaoSocial || t('noName')}</p>
                         <p className="text-xs text-[var(--ink-mut)] font-mono">{formatarCnpj(c.cnpj)}</p>
-                        <p className="text-[11px] text-[var(--ink-mut)] mt-0.5">
+                        <p className="text-[11px] text-[var(--ink-mut)] mt-1 rounded-md bg-[var(--surface-2)] px-2 py-1">
                           {c.uf} · NSU {Number(c.ultimoNSU)} · {c._count.notas} nota(s)
                         </p>
                       </div>
-                      <Badge tone={c.ativo ? 'green' : 'gray'}>{c.ativo ? 'ATIVO' : 'INATIVO'}</Badge>
+                      <Badge tone={c.ativo ? 'green' : 'gray'}>{c.ativo ? t('active') : t('inactive')}</Badge>
                     </div>
-                    <p className="text-[11px] text-[var(--ink-mut)] mt-1.5 truncate" title={c.situacao}>
-                      {c.situacao}
+                    <p className={`mt-2 text-[11px] font-medium ${bloqueado || consumoIndevido ? 'text-amber-700' : 'text-[var(--ink-mut)]'}`} title={c.situacao}>
+                      {situacaoCurta}
                     </p>
-                    <div className="flex gap-3 mt-2 text-xs">
+                    <div className="flex flex-wrap gap-2 mt-2 text-xs">
                       <button
                         onClick={() => executar(() => sincronizarNotas(c.id))}
                         disabled={pending || !c.ativo || bloqueado}
-                        title={bloqueado ? `Em dia — próxima consulta às ${hora}` : 'Sincronizar com a SEFAZ'}
-                        className="font-semibold text-emerald-600 hover:text-emerald-700 disabled:opacity-40"
+                        title={bloqueado ? t('waitSefazUntil', { time: hora }) : t('syncWithSefaz')}
+                        className="rounded-md bg-emerald-600 px-2.5 py-1.5 font-semibold text-white hover:bg-emerald-700 disabled:bg-[var(--surface-2)] disabled:text-[var(--ink-mut)]"
                       >
-                        {bloqueado ? `⏱ Em dia (${hora})` : '↻ Sincronizar'}
+                        {bloqueado ? t('until', { time: hora }) : t('sync')}
                       </button>
                       {podeAdministrar && (
                         <>
                           <button
                             onClick={() => executar(() => alternarAtivoCnpj(c.id))}
                             disabled={pending}
-                            className="font-medium text-amber-600 hover:text-amber-700 disabled:opacity-40"
+                            className="rounded-md border border-[var(--border)] px-2.5 py-1.5 font-medium text-[var(--ink-mut)] hover:bg-[var(--surface-2)] disabled:opacity-40"
                           >
-                            {c.ativo ? 'Desativar' : 'Ativar'}
+                            {c.ativo ? t('disable') : t('enable')}
                           </button>
                           <button
                             onClick={() => executar(() => removerCnpj(c.id))}
                             disabled={pending}
-                            className="font-medium text-red-500 hover:text-red-600 disabled:opacity-40"
+                            className="rounded-md border border-red-200 px-2.5 py-1.5 font-medium text-red-600 hover:bg-red-50 disabled:opacity-40"
                           >
-                            Remover
+                            {t('remove')}
                           </button>
                         </>
                       )}
@@ -1310,33 +1706,28 @@ export default function Dashboard({
 
             {podeAdministrar && (mostrarForm ? (
               <form action={handleAdicionarCnpj} className="mt-4 space-y-2 border-t border-[var(--border)] pt-4">
-                <input name="cnpj" placeholder="CNPJ (somente números)" required
+                <input name="cnpj" placeholder={t('cnpjOnlyNumbers')} required
                   className="w-full border border-[var(--border-strong)] rounded-lg px-3 py-2 text-sm bg-[var(--surface)] text-[var(--ink)] placeholder-[var(--ink-mut)] focus:ring-2 focus:ring-[var(--border-strong)] focus:border-[var(--accent)] outline-none" />
-                <input name="razaoSocial" placeholder="Razão Social (opcional)"
+                <input name="razaoSocial" placeholder={t('companyNameOptional')}
                   className="w-full border border-[var(--border-strong)] rounded-lg px-3 py-2 text-sm bg-[var(--surface)] text-[var(--ink)] placeholder-[var(--ink-mut)] focus:ring-2 focus:ring-[var(--border-strong)] focus:border-[var(--accent)] outline-none" />
-                <input name="uf" placeholder="UF (ex.: CE)" required maxLength={2}
+                <input name="uf" placeholder={t('ufExample')} required maxLength={2}
                   className="w-full border border-[var(--border-strong)] rounded-lg px-3 py-2 text-sm uppercase bg-[var(--surface)] text-[var(--ink)] placeholder-[var(--ink-mut)] focus:ring-2 focus:ring-[var(--border-strong)] focus:border-[var(--accent)] outline-none" />
                 <div className="flex gap-2">
                   <button type="submit" disabled={pending}
                     className="flex-1 bg-[var(--accent)] hover:bg-[var(--accent)] text-white py-2 rounded-lg text-sm font-medium disabled:opacity-50">
-                    Salvar
+                    {t('save')}
                   </button>
                   <button type="button" onClick={() => setMostrarForm(false)}
                     className="flex-1 bg-[var(--surface-2)] hover:bg-[var(--surface-2)] text-[var(--ink)] py-2 rounded-lg text-sm font-medium">
-                    Cancelar
+                    {t('cancel')}
                   </button>
                 </div>
               </form>
-            ) : (
-              <button onClick={() => setMostrarForm(true)}
-                className="mt-4 w-full border border-dashed border-[var(--border-strong)] text-[var(--accent)] text-sm font-medium hover:bg-[var(--accent-soft)] hover:border-[var(--border-strong)] rounded-lg py-2 transition">
-                + Adicionar CNPJ
-              </button>
-            ))}
+            ) : null)}
           </div>
 
           {/* Notas */}
-          <div className="lg:col-span-3 bg-[var(--surface)] p-5 rounded-2xl shadow-sm border border-[var(--border)]">
+          <div className={`${secaoAtual === 'notas' ? 'lg:col-span-4' : 'hidden'} bg-[var(--surface)] p-5 rounded-2xl shadow-sm border border-[var(--border)]`}>
             <AlertaDaes
               notas={notasAlerta}
               cnpjId={filtroCnpjId}
@@ -1344,14 +1735,14 @@ export default function Dashboard({
             />
             <div className="mb-4 pb-3 border-b border-[var(--border)] space-y-3">
               <div className="flex flex-wrap items-center gap-2.5">
-                <h2 className="text-base font-semibold text-[var(--ink)]">Notas Fiscais</h2>
+                <h2 className="text-base font-semibold text-[var(--ink)]">{t('invoices')}</h2>
                 <div className="relative flex-1 min-w-[220px]">
                   <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--ink-mut)] text-sm">🔎</span>
                   <input
                     value={filtroNumero}
                     onChange={(e) => setFiltroNumero(e.target.value)}
                     inputMode="numeric"
-                    placeholder="Buscar pelo número da NF (ou chave)…"
+                    placeholder={t('searchInvoice')}
                     className="w-full border border-[var(--border-strong)] rounded-lg pl-9 pr-8 py-2 text-sm bg-[var(--surface)] text-[var(--ink)] placeholder-[var(--ink-mut)] focus:ring-2 focus:ring-[var(--border-strong)] focus:border-[var(--accent)] outline-none"
                   />
                   {filtroNumero && (
@@ -1359,7 +1750,7 @@ export default function Dashboard({
                       type="button"
                       onClick={() => setFiltroNumero('')}
                       className="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--ink-mut)] hover:text-[var(--ink)] text-sm"
-                      aria-label="Limpar busca"
+                      aria-label={t('clearSearch')}
                     >
                       ✕
                     </button>
@@ -1370,7 +1761,7 @@ export default function Dashboard({
                   onChange={(e) => setFiltroCnpjId(e.target.value === 'todos' ? 'todos' : Number(e.target.value))}
                   className="border border-[var(--border-strong)] rounded-lg px-3 py-2 text-sm bg-[var(--surface)] text-[var(--ink)] focus:ring-2 focus:ring-[var(--border-strong)] outline-none"
                 >
-                  <option value="todos">Todas as empresas</option>
+                  <option value="todos">{t('allCompanies')}</option>
                   {cnpjs.map((c) => (
                     <option key={c.id} value={c.id}>{c.razaoSocial || formatarCnpj(c.cnpj)}</option>
                   ))}
@@ -1380,9 +1771,9 @@ export default function Dashboard({
                   onChange={(e) => setFiltroStatus(e.target.value as typeof filtroStatus)}
                   className="border border-[var(--border-strong)] rounded-lg px-3 py-2 text-sm bg-[var(--surface)] text-[var(--ink)] focus:ring-2 focus:ring-[var(--border-strong)] outline-none"
                 >
-                  <option value="todos">Todos os status</option>
-                  <option value="RESUMO">Resumo</option>
-                  <option value="COMPLETA">Completa</option>
+                  <option value="todos">{t('allStatuses')}</option>
+                  <option value="RESUMO">{t('summary')}</option>
+                  <option value="COMPLETA">{t('complete')}</option>
                 </select>
               </div>
               <div className="flex flex-wrap items-center gap-2">
@@ -1391,7 +1782,7 @@ export default function Dashboard({
                     setFiltroForaCe15SemDae(false);
                     setFiltroDaeSitram((v) => (v === 'a-pagar' ? 'todos' : 'a-pagar'));
                   }}
-                  title="Mostrar só notas com DAE a pagar (em aberto ou a gerar)"
+                  title={t('daePayFilter')}
                   className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium border transition ${
                     filtroDaeSitram === 'a-pagar'
                       ? 'text-white'
@@ -1402,7 +1793,7 @@ export default function Dashboard({
                     : { color: 'var(--warn)', borderColor: 'color-mix(in srgb, var(--warn) 40%, var(--border))' }}
                 >
                   <span className="w-1.5 h-1.5 rounded-full" style={{ background: filtroDaeSitram === 'a-pagar' ? '#fff' : 'var(--warn)' }} />
-                  DAE a pagar
+                  {t('daeToPay')}
                 </button>
                 <button
                   onClick={alternarFiltroForaCe15SemDae}
@@ -1611,7 +2002,7 @@ export default function Dashboard({
                     <option value="todos">Todos</option>
                     <option value="consultado">Consultado</option>
                     <option value="com-dae">Com DAE</option>
-                    <option value="a-pagar">A pagar (em aberto + gerar)</option>
+                    <option value="a-pagar">{t('daePayFilter')}</option>
                     <option value="em-aberto">Em aberto</option>
                     <option value="pago">Pago</option>
                     <option value="sem-dae">Sem DAE</option>
@@ -1713,6 +2104,7 @@ export default function Dashboard({
               <span>
                 {notasFiltradas.length} nota(s)
                 {anoCarregado ? ` de ${anoCarregado}` : ''}
+                {filtroAtualizando ? ' - atualizando...' : ''}
               </span>
               <span>Total: <strong className="text-[var(--ink)]">{moeda(totalFiltrado)}</strong></span>
             </div>
@@ -1855,11 +2247,783 @@ export default function Dashboard({
             </div>
           </div>
         </div>
+        )}
 
         <p className="text-center text-xs text-[var(--ink-mut)] mt-8">
           DanfeCollector · NF-e direto da SEFAZ
         </p>
       </div>
+    </div>
+  );
+}
+
+function SecaoBotao({
+  atual,
+  alvo,
+  onClick,
+  children,
+}: {
+  atual: SecaoApp;
+  alvo: SecaoApp;
+  onClick: (alvo: SecaoApp) => void;
+  children: React.ReactNode;
+}) {
+  const ativo = atual === alvo;
+  return (
+    <button
+      type="button"
+      onClick={() => onClick(alvo)}
+      className={`rounded-lg px-4 py-2 text-sm font-semibold transition ${
+        ativo
+          ? 'bg-[var(--accent)] text-white shadow-sm'
+          : 'border border-[var(--border)] bg-[var(--surface)] text-[var(--ink-mut)] hover:bg-[var(--surface-2)] hover:text-[var(--ink)]'
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+function HomeAtalho({ titulo, detalhe, onClick }: { titulo: string; detalhe: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4 text-left shadow-sm transition hover:border-[var(--border-strong)] hover:bg-[var(--surface-2)]"
+    >
+      <div className="text-sm font-bold text-[var(--ink)]">{titulo}</div>
+      <div className="mt-1 text-xs text-[var(--ink-mut)]">{detalhe}</div>
+    </button>
+  );
+}
+
+function RelatoriosDashboard({
+  notas,
+  carregando,
+  total,
+  temMais,
+  onCarregarMais,
+}: {
+  notas: NotaRelatorio[];
+  carregando: boolean;
+  total: number;
+  temMais: boolean;
+  onCarregarMais: () => void;
+}) {
+  const { idioma, t } = useIdioma();
+  const [ufSelecionada, setUfSelecionada] = useState<string | null>(null);
+  const [dataInicio, setDataInicio] = useState('');
+  const [dataFim, setDataFim] = useState('');
+  const [filtroEmpresaRelatorio, setFiltroEmpresaRelatorio] = useState('todas');
+  const [filtroTipoRelatorio, setFiltroTipoRelatorio] = useState('todos');
+  const [filtroSituacaoRelatorio, setFiltroSituacaoRelatorio] = useState('todas');
+  const [filtroDaeRelatorio, setFiltroDaeRelatorio] = useState('todos');
+  const [filtroRiscoRelatorio, setFiltroRiscoRelatorio] = useState('todos');
+  const [buscaRelatorio, setBuscaRelatorio] = useState('');
+  const [limiteTabela, setLimiteTabela] = useState(20);
+  const buscaRelatorioAdiada = useDeferredValue(buscaRelatorio);
+  const dataInicioBusca = useDeferredValue(dataInicio);
+  const dataFimBusca = useDeferredValue(dataFim);
+  const inicioPeriodo = dataInicioBusca && dataFimBusca && dataInicioBusca > dataFimBusca ? dataFimBusca : dataInicioBusca;
+  const fimPeriodo = dataInicioBusca && dataFimBusca && dataInicioBusca > dataFimBusca ? dataInicioBusca : dataFimBusca;
+
+  const notasIndexadas = useMemo(() => notas.map((nota) => {
+    const emitidaEmIso = nota.emitidaEm instanceof Date ? nota.emitidaEm.toISOString() : String(nota.emitidaEm);
+    const dataChave = chaveDataLocal(emitidaEmIso) ?? '';
+    const daeStatus = statusDaeEfetivo(nota);
+    const diasDae = diasAteVencimento(nota.daeVencimento);
+    const daePendente = DAE_A_PAGAR.includes(daeStatus);
+    const pendencias = [
+      nota.status === 'RESUMO' ? 'XML completo pendente' : null,
+      !nota.manifestadaEm ? 'Sem manifestação' : null,
+      !nota.sitramConsultadaEm ? 'Sem consulta SITRAM' : null,
+      daePendente && diasDae !== null && diasDae < 0 ? 'DAE vencido' : null,
+      daePendente && diasDae !== null && diasDae >= 0 && diasDae <= 7 ? 'DAE vence em 7 dias' : null,
+      nota.situacaoSefaz === 'CANCELADA' ? 'Nota cancelada' : null,
+      nota.situacaoSefaz === 'DENEGADA' ? 'Nota denegada' : null,
+    ].filter(Boolean) as string[];
+    const risco = daePendente && diasDae !== null && diasDae < 0
+      ? 'critico'
+      : nota.situacaoSefaz === 'CANCELADA' || nota.situacaoSefaz === 'DENEGADA'
+        ? 'alto'
+        : pendencias.length > 0
+          ? 'medio'
+          : 'baixo';
+    const valor = nota.valorTotal ?? 0;
+    const icms = nota.valorIcms ?? 0;
+    return {
+      ...nota,
+      dataChave,
+      mesChave: dataChave.slice(0, 7),
+      uf: (nota.emitenteUf || '').trim().toUpperCase(),
+      daeStatus,
+      diasDae,
+      daePendente,
+      pendencias,
+      risco,
+      valor,
+      icms,
+      impostoPago: daeStatus === 'PAGO' ? (nota.daeValorPago ?? nota.pagamentoManualValor ?? icms) : 0,
+      impostoPendente: daePendente ? (nota.daeValorAberto ?? nota.daeValor ?? icms) : 0,
+      empresaLabel: nota.cnpj.razaoSocial || formatarCnpj(nota.cnpj.cnpj),
+      tipoLabel: nota.tipoOperacao || 'Entrada',
+      emitenteChave: nota.emitenteCnpj || nota.emitenteNome || `nota-${nota.id}`,
+      emitenteNomeRelatorio: nota.emitenteNome || nota.emitenteCnpj || 'Sem emitente',
+      buscaTexto: [
+        nota.numero,
+        nota.serie,
+        nota.chave,
+        nota.emitenteNome,
+        nota.emitenteCnpj,
+        nota.destNome,
+        nota.destCnpj,
+        nota.cnpj.razaoSocial,
+        nota.cnpj.cnpj,
+      ].filter(Boolean).join(' ').toLowerCase(),
+    };
+  }), [notas]);
+
+  // Notas dentro do período escolhido (filtro por data de emissão)
+  const notasPeriodo = useMemo(() => {
+    const busca = buscaRelatorioAdiada.trim().toLowerCase();
+    return notasIndexadas.filter((n) => {
+      if (!n.dataChave) return false;
+      if (inicioPeriodo && n.dataChave < inicioPeriodo) return false;
+      if (fimPeriodo && n.dataChave > fimPeriodo) return false;
+      if (filtroEmpresaRelatorio !== 'todas' && String(n.cnpjId) !== filtroEmpresaRelatorio) return false;
+      if (filtroTipoRelatorio !== 'todos' && n.tipoLabel !== filtroTipoRelatorio) return false;
+      if (filtroSituacaoRelatorio !== 'todas' && n.situacaoSefaz !== filtroSituacaoRelatorio) return false;
+      if (filtroDaeRelatorio === 'pago' && n.daeStatus !== 'PAGO') return false;
+      if (filtroDaeRelatorio === 'pendente' && !n.daePendente) return false;
+      if (filtroDaeRelatorio === 'vencido' && !(n.daePendente && n.diasDae !== null && n.diasDae < 0)) return false;
+      if (filtroDaeRelatorio === 'vence7' && !(n.daePendente && n.diasDae !== null && n.diasDae >= 0 && n.diasDae <= 7)) return false;
+      if (filtroDaeRelatorio === 'sem-consulta' && n.sitramConsultadaEm) return false;
+      if (filtroRiscoRelatorio !== 'todos' && n.risco !== filtroRiscoRelatorio) return false;
+      if (busca && !n.buscaTexto.includes(busca)) return false;
+      return true;
+    });
+  }, [
+    notasIndexadas,
+    inicioPeriodo,
+    fimPeriodo,
+    filtroEmpresaRelatorio,
+    filtroTipoRelatorio,
+    filtroSituacaoRelatorio,
+    filtroDaeRelatorio,
+    filtroRiscoRelatorio,
+    buscaRelatorioAdiada,
+  ]);
+
+  // Agregação por UF do emitente
+  const { valores, maxValor, ranking } = useMemo(() => {
+    const porUf = new Map<string, ValorUf>();
+    for (const nota of notasPeriodo) {
+      const uf = nota.uf;
+      if (!uf || uf === 'NA' || uf.length !== 2) continue;
+      const item = porUf.get(uf) ?? { qtd: 0, valor: 0 };
+      item.qtd += 1;
+      item.valor += nota.valor;
+      porUf.set(uf, item);
+    }
+    const rank = [...porUf.entries()]
+      .map(([uf, v]) => ({ uf, ...v }))
+      .sort((a, b) => b.valor - a.valor);
+    return { valores: porUf, maxValor: Math.max(...rank.map((r) => r.valor), 0), ranking: rank };
+  }, [notasPeriodo]);
+
+  // Detalhe do estado selecionado
+  const detalheUf = useMemo(() => {
+    if (!ufSelecionada) return null;
+    const doEstado = notasPeriodo.filter((n) => n.uf === ufSelecionada);
+    const valor = doEstado.reduce((a, n) => a + n.valor, 0);
+    const icms = doEstado.reduce((a, n) => a + n.icms, 0);
+
+    const porEmitente = new Map<string, { nome: string; qtd: number; valor: number; icms: number }>();
+    const porMes = new Map<string, { qtd: number; valor: number }>();
+    for (const n of doEstado) {
+      const chaveEmit = n.emitenteCnpj || n.emitenteNome || '—';
+      const emit = porEmitente.get(chaveEmit) ?? { nome: n.emitenteNome || chaveEmit, qtd: 0, valor: 0, icms: 0 };
+      emit.qtd += 1;
+      emit.valor += n.valor;
+      emit.icms += n.icms;
+      porEmitente.set(chaveEmit, emit);
+
+      const mesChave = n.mesChave;
+      const mes = porMes.get(mesChave) ?? { qtd: 0, valor: 0 };
+      mes.qtd += 1;
+      mes.valor += n.valor;
+      porMes.set(mesChave, mes);
+    }
+
+    const topEmitentes = [...porEmitente.values()].sort((a, b) => b.valor - a.valor).slice(0, 8);
+    const meses = [...porMes.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+    const maxMes = Math.max(...meses.map(([, v]) => v.valor), 0);
+    return { qtd: doEstado.length, valor, icms, topEmitentes, meses, maxMes };
+  }, [ufSelecionada, notasPeriodo]);
+
+  const topUf = ranking[0];
+  const totalValorPeriodo = ranking.reduce((a, r) => a + r.valor, 0);
+  const empresasRelatorio = useMemo(() => {
+    const mapa = new Map<number, string>();
+    for (const nota of notasIndexadas) mapa.set(nota.cnpjId, nota.empresaLabel);
+    return [...mapa.entries()].map(([id, nome]) => ({ id, nome })).sort((a, b) => a.nome.localeCompare(b.nome));
+  }, [notasIndexadas]);
+  const tiposRelatorio = useMemo(() => {
+    return [...new Set(notasIndexadas.map((nota) => nota.tipoLabel))].filter(Boolean).sort();
+  }, [notasIndexadas]);
+  const resumoFiscal = useMemo(() => {
+    const porMes = new Map<string, { qtd: number; valor: number; icms: number; pago: number; pendente: number }>();
+    const porEmitente = new Map<string, { nome: string; qtd: number; valor: number; icms: number }>();
+    let icms = 0;
+    let impostoPago = 0;
+    let impostoPendente = 0;
+    let semSitram = 0;
+    let daePagoQtd = 0;
+    let daeAbertoQtd = 0;
+    let daeSemCobrancaQtd = 0;
+    let canceladas = 0;
+    let aguardandoConferencia = 0;
+    let daeVencidoQtd = 0;
+    let daeVencidoValor = 0;
+    const riscos = { baixo: 0, medio: 0, alto: 0, critico: 0 };
+
+    for (const nota of notasPeriodo) {
+      icms += nota.icms;
+      impostoPago += nota.impostoPago;
+      impostoPendente += nota.impostoPendente;
+      if (!nota.sitramConsultadaEm) semSitram++;
+      if (nota.daeStatus === 'PAGO') daePagoQtd++;
+      if (DAE_A_PAGAR.includes(nota.daeStatus)) daeAbertoQtd++;
+      if (nota.daeStatus === 'SEM_DAE') daeSemCobrancaQtd++;
+      if (nota.situacaoSefaz === 'CANCELADA' || nota.situacaoSefaz === 'DENEGADA') canceladas++;
+      if (nota.status === 'RESUMO') aguardandoConferencia++;
+      if (nota.risco in riscos) riscos[nota.risco as keyof typeof riscos]++;
+      if (nota.daePendente && nota.diasDae !== null && nota.diasDae < 0) {
+        daeVencidoQtd++;
+        daeVencidoValor += nota.impostoPendente;
+      }
+
+      const mes = porMes.get(nota.mesChave) ?? { qtd: 0, valor: 0, icms: 0, pago: 0, pendente: 0 };
+      mes.qtd += 1;
+      mes.valor += nota.valor;
+      mes.icms += nota.icms;
+      mes.pago += nota.impostoPago;
+      mes.pendente += nota.impostoPendente;
+      porMes.set(nota.mesChave, mes);
+
+      const emit = porEmitente.get(nota.emitenteChave) ?? { nome: nota.emitenteNomeRelatorio, qtd: 0, valor: 0, icms: 0 };
+      emit.qtd += 1;
+      emit.valor += nota.valor;
+      emit.icms += nota.icms;
+      porEmitente.set(nota.emitenteChave, emit);
+    }
+
+    const meses = [...porMes.entries()].filter(([chave]) => !!chave).sort((a, b) => a[0].localeCompare(b[0]));
+    const topEmitentes = [...porEmitente.values()].sort((a, b) => b.valor - a.valor).slice(0, 10);
+    return {
+      icms,
+      impostoPago,
+      impostoPendente,
+      semSitram,
+      daePagoQtd,
+      daeAbertoQtd,
+      daeSemCobrancaQtd,
+      canceladas,
+      aguardandoConferencia,
+      daeVencidoQtd,
+      daeVencidoValor,
+      riscos,
+      meses,
+      maxMes: Math.max(...meses.map(([, v]) => v.valor), 0),
+      topEmitentes,
+    };
+  }, [notasPeriodo]);
+  const comparativoMes = useMemo(() => {
+    const meses = resumoFiscal.meses;
+    const atual = meses.at(-1);
+    const anterior = meses.at(-2);
+    const valorAtual = atual?.[1].valor ?? 0;
+    const valorAnterior = anterior?.[1].valor ?? 0;
+    const variacao = valorAnterior ? ((valorAtual - valorAnterior) / valorAnterior) * 100 : null;
+    return {
+      atual: atual?.[0] ?? null,
+      anterior: anterior?.[0] ?? null,
+      valorAtual,
+      valorAnterior,
+      variacao,
+    };
+  }, [resumoFiscal.meses]);
+  const daesPrioritarios = useMemo(() => {
+    return notasPeriodo
+      .filter((nota) => nota.daePendente && nota.diasDae !== null && nota.diasDae <= 7)
+      .sort((a, b) => (a.diasDae ?? 999) - (b.diasDae ?? 999))
+      .slice(0, 12);
+  }, [notasPeriodo]);
+  const pendenciasPrioritarias = useMemo(() => {
+    const peso = { critico: 0, alto: 1, medio: 2, baixo: 3 };
+    return notasPeriodo
+      .filter((nota) => nota.pendencias.length > 0)
+      .sort((a, b) => {
+        const risco = peso[a.risco as keyof typeof peso] - peso[b.risco as keyof typeof peso];
+        if (risco !== 0) return risco;
+        return b.valor - a.valor;
+      })
+      .slice(0, 12);
+  }, [notasPeriodo]);
+  const notasTabela = useMemo(() => notasPeriodo.slice(0, limiteTabela), [notasPeriodo, limiteTabela]);
+
+  useEffect(() => {
+    setLimiteTabela(20);
+  }, [inicioPeriodo, fimPeriodo, filtroEmpresaRelatorio, filtroTipoRelatorio, filtroSituacaoRelatorio, filtroDaeRelatorio, filtroRiscoRelatorio, buscaRelatorioAdiada]);
+
+  function selecionar(uf: string) {
+    setUfSelecionada((atual) => (atual === uf ? null : uf));
+  }
+
+  const mesLabel = (chave: string) => {
+    const [ano, mes] = chave.split('-');
+    return new Date(Number(ano), Number(mes) - 1, 1).toLocaleDateString(idioma, { month: 'short', year: '2-digit' });
+  };
+  const rt = (pt: string, zh: string) => idioma === 'zh-CN' ? zh : pt;
+
+  return (
+    <div className="report-shell mb-6 space-y-4">
+      {/* Filtro por data */}
+      <div className="report-card flex flex-wrap items-end gap-3 rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4 shadow-sm">
+        <div>
+          <label className="block text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-mut)]">{rt('De', '开始日期')}</label>
+          <input
+            type="date"
+            value={dataInicio}
+            onChange={(e) => setDataInicio(e.target.value)}
+            className="mt-1 rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-1.5 text-sm text-[var(--ink)]"
+          />
+        </div>
+        <div>
+          <label className="block text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-mut)]">{rt('Até', '结束日期')}</label>
+          <input
+            type="date"
+            value={dataFim}
+            onChange={(e) => setDataFim(e.target.value)}
+            className="mt-1 rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-1.5 text-sm text-[var(--ink)]"
+          />
+        </div>
+        <div>
+          <label className="block text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-mut)]">{rt('Empresa', '公司')}</label>
+          <select
+            value={filtroEmpresaRelatorio}
+            onChange={(e) => setFiltroEmpresaRelatorio(e.target.value)}
+            className="mt-1 max-w-[220px] rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-1.5 text-sm text-[var(--ink)]"
+          >
+            <option value="todas">{rt('Todas', '全部')}</option>
+            {empresasRelatorio.map((empresa) => (
+              <option key={empresa.id} value={empresa.id}>{empresa.nome}</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="block text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-mut)]">{rt('Tipo', '类型')}</label>
+          <select
+            value={filtroTipoRelatorio}
+            onChange={(e) => setFiltroTipoRelatorio(e.target.value)}
+            className="mt-1 rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-1.5 text-sm text-[var(--ink)]"
+          >
+            <option value="todos">{rt('Todos', '全部')}</option>
+            {tiposRelatorio.map((tipo) => (
+              <option key={tipo} value={tipo}>{tipo}</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="block text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-mut)]">{rt('Situação', '状态')}</label>
+          <select
+            value={filtroSituacaoRelatorio}
+            onChange={(e) => setFiltroSituacaoRelatorio(e.target.value)}
+            className="mt-1 rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-1.5 text-sm text-[var(--ink)]"
+          >
+            <option value="todas">{rt('Todas', '全部')}</option>
+            <option value="AUTORIZADA">{rt('Autorizada', '已授权')}</option>
+            <option value="CANCELADA">{rt('Cancelada', '已取消')}</option>
+            <option value="DENEGADA">{rt('Denegada', '已拒绝')}</option>
+          </select>
+        </div>
+        <div>
+          <label className="block text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-mut)]">DAE</label>
+          <select
+            value={filtroDaeRelatorio}
+            onChange={(e) => setFiltroDaeRelatorio(e.target.value)}
+            className="mt-1 rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-1.5 text-sm text-[var(--ink)]"
+          >
+            <option value="todos">{rt('Todos', '全部')}</option>
+            <option value="pago">{rt('Pago', '已付款')}</option>
+            <option value="pendente">{rt('Pendente', '待处理')}</option>
+            <option value="vencido">{rt('Vencido', '已逾期')}</option>
+            <option value="vence7">{rt('Vence em 7 dias', '7 天内到期')}</option>
+            <option value="sem-consulta">{rt('Sem consulta', '未查询')}</option>
+          </select>
+        </div>
+        <div>
+          <label className="block text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-mut)]">{rt('Risco', '风险')}</label>
+          <select
+            value={filtroRiscoRelatorio}
+            onChange={(e) => setFiltroRiscoRelatorio(e.target.value)}
+            className="mt-1 rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-1.5 text-sm text-[var(--ink)]"
+          >
+            <option value="todos">{rt('Todos', '全部')}</option>
+            <option value="baixo">{rt('Baixo', '低')}</option>
+            <option value="medio">{rt('Médio', '中')}</option>
+            <option value="alto">{rt('Alto', '高')}</option>
+            <option value="critico">{rt('Crítico', '严重')}</option>
+          </select>
+        </div>
+        <div className="min-w-[220px] flex-1">
+          <label className="block text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-mut)]">{rt('Buscar', '搜索')}</label>
+          <input
+            value={buscaRelatorio}
+            onChange={(e) => setBuscaRelatorio(e.target.value)}
+            placeholder={rt('Nota, chave, fornecedor ou CNPJ', '发票、密钥、供应商或 CNPJ')}
+            className="mt-1 w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-1.5 text-sm text-[var(--ink)]"
+          />
+        </div>
+        {(dataInicio || dataFim) && (
+          <button
+            onClick={() => { setDataInicio(''); setDataFim(''); }}
+            className="rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-1.5 text-sm font-medium text-[var(--ink-mut)] hover:bg-[var(--surface-2)]"
+          >
+            {rt('Limpar datas', '清除日期')}
+          </button>
+        )}
+        {ufSelecionada && (
+          <button
+            onClick={() => setUfSelecionada(null)}
+            className="rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-emerald-700"
+          >
+            ← {rt('Ver todo o Brasil', '查看整个巴西')}
+          </button>
+        )}
+        <p className="ml-auto text-xs text-[var(--ink-mut)]">
+          {rt(`${notasPeriodo.length} nota(s) no período`, `当前期间 ${notasPeriodo.length} 张发票`)} · {moeda(totalValorPeriodo)}
+        </p>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <KpiCard label={rt('Notas no período', '期间发票')} value={String(notasPeriodo.length)} sub={dataInicio || dataFim ? rt('Filtrado por data', '按日期筛选') : rt('Base carregada', '已加载数据')} tone="neu" />
+        <KpiCard label={rt('Valor total', '总金额')} value={moeda(totalValorPeriodo)} sub={rt('Soma das NF emitidas', '已开发票合计')} tone="good" />
+        <KpiCard label={rt('UFs com movimento', '有交易的州')} value={String(ranking.length)} sub={rt('Estados com nota', '有发票的州')} tone="neu" />
+        <KpiCard label={rt('Maior UF', '金额最高的州')} value={topUf?.uf ?? '—'} sub={topUf ? moeda(topUf.valor) : rt('Sem dados', '无数据')} tone="warn" />
+      </div>
+
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <KpiCard label="ICMS destacado" value={moeda(resumoFiscal.icms)} sub="Campo ICMS do XML" tone="warn" />
+        <KpiCard label="DAE pago" value={moeda(resumoFiscal.impostoPago)} sub={`${resumoFiscal.daePagoQtd} nota(s) paga(s)`} tone="good" />
+        <KpiCard label="DAE a pagar" value={moeda(resumoFiscal.impostoPendente)} sub={`${resumoFiscal.daeAbertoQtd} nota(s) em aberto/a gerar`} tone="crit" />
+        <KpiCard label="Sem consulta SITRAM" value={String(resumoFiscal.semSitram)} sub={`${resumoFiscal.canceladas} cancelada/denegada`} tone="warn" />
+      </div>
+
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <KpiCard
+          label={rt('Mês anterior', '上月对比')}
+          value={comparativoMes.variacao === null ? '-' : `${comparativoMes.variacao >= 0 ? '+' : ''}${comparativoMes.variacao.toFixed(1)}%`}
+          sub={`${comparativoMes.anterior ? mesLabel(comparativoMes.anterior) : 'sem base'} -> ${comparativoMes.atual ? mesLabel(comparativoMes.atual) : 'sem mes'}`}
+          tone={comparativoMes.variacao !== null && comparativoMes.variacao < 0 ? 'warn' : 'good'}
+        />
+        <KpiCard label="Aguardando conf." value={String(resumoFiscal.aguardandoConferencia)} sub="XML completo pendente" tone="warn" />
+        <KpiCard label="DAE vencido" value={moeda(resumoFiscal.daeVencidoValor)} sub={`${resumoFiscal.daeVencidoQtd} nota(s)`} tone="crit" />
+        <KpiCard label={rt('Risco crítico/alto', '严重/高风险')} value={String(resumoFiscal.riscos.critico + resumoFiscal.riscos.alto)} sub={rt(`${resumoFiscal.riscos.medio} risco médio`, `${resumoFiscal.riscos.medio} 项中等风险`)} tone="crit" />
+      </div>
+
+      {(carregando || temMais) && (
+        <div className="report-card flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-3 text-sm text-[var(--ink-mut)]">
+          <span>
+            {carregando
+              ? rt('Carregando um lote de relatórios...', '正在加载一批报表...')
+              : rt(`${notas.length} de ${total} notas carregadas.`, `已加载 ${notas.length} / ${total} 张发票。`)}
+          </span>
+          {temMais && (
+            <button type="button" onClick={onCarregarMais} disabled={carregando} className="rounded-lg bg-[var(--accent)] px-4 py-2 text-xs font-bold text-white transition hover:-translate-y-0.5 hover:shadow-md disabled:opacity-50">
+              {carregando ? rt('Carregando...', '加载中...') : rt('Carregar mais 120', '再加载 120 条')}
+            </button>
+          )}
+        </div>
+      )}
+
+      <div className="grid items-start gap-4 xl:grid-cols-[minmax(320px,0.82fr)_minmax(360px,1.18fr)]">
+        {/* Mapa interativo */}
+        <section className="report-card rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4 shadow-sm">
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-base font-bold text-[var(--ink)]">{rt('Mapa do Brasil por UF', '巴西各州地图')}</h2>
+              <p className="text-xs text-[var(--ink-mut)]">
+                {ufSelecionada ? rt('Clique no estado destacado para voltar.', '单击高亮州返回。') : rt('Selecione um estado para ver os detalhes.', '选择一个州查看详情。')}
+              </p>
+            </div>
+            {!ufSelecionada && (
+              <div className="flex items-center gap-2 text-xs text-[var(--ink-mut)]">
+                <span className="h-3 w-7 rounded bg-[#e5e7eb]" />
+                <span>{rt('baixo', '低')}</span>
+                <span className="h-3 w-7 rounded bg-[#047857]" />
+                <span>{rt('alto', '高')}</span>
+              </div>
+            )}
+          </div>
+
+          <div className="rounded-xl bg-[var(--surface-2)] p-2 sm:p-3">
+            <MapaBrasil
+              valores={valores}
+              maxValor={maxValor}
+              selecionada={ufSelecionada}
+              onSelect={selecionar}
+            />
+          </div>
+        </section>
+
+        {/* Painel de relatório: estado selecionado OU ranking geral */}
+        <section className="report-card rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-5 shadow-sm">
+          {ufSelecionada && detalheUf ? (
+            <div className="space-y-4">
+              <div>
+                <h2 className="text-base font-bold text-[var(--ink)]">
+                  {nomeUf(ufSelecionada)} <span className="text-[var(--ink-mut)]">({ufSelecionada})</span>
+                </h2>
+                <p className="text-xs text-[var(--ink-mut)]">{rt('Resumo do estado no período selecionado.', '当前期间的州别摘要。')}</p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="rounded-lg border border-[var(--border)] p-3">
+                  <p className="text-[11px] uppercase tracking-wider text-[var(--ink-mut)]">Notas</p>
+                  <p className="text-xl font-bold text-[var(--ink)]">{detalheUf.qtd}</p>
+                </div>
+                <div className="rounded-lg border border-[var(--border)] p-3">
+                  <p className="text-[11px] uppercase tracking-wider text-[var(--ink-mut)]">Valor</p>
+                  <p className="text-xl font-bold text-emerald-700">{moeda(detalheUf.valor)}</p>
+                </div>
+              </div>
+
+              {detalheUf.meses.length > 0 && (
+                <div>
+                  <h3 className="mb-2 text-sm font-bold text-[var(--ink)]">Por mês</h3>
+                  <div className="space-y-1.5">
+                    {detalheUf.meses.map(([chave, v]) => (
+                      <div key={chave} className="flex items-center gap-2">
+                        <span className="w-16 shrink-0 text-xs text-[var(--ink-mut)]">{mesLabel(chave)}</span>
+                        <div className="h-2.5 flex-1 overflow-hidden rounded-full bg-[var(--surface-2)]">
+                          <div className="h-full rounded-full bg-emerald-600" style={{ width: `${detalheUf.maxMes ? Math.max(4, (v.valor / detalheUf.maxMes) * 100) : 0}%` }} />
+                        </div>
+                        <span className="w-24 shrink-0 text-right text-xs font-semibold text-[var(--ink)]">{moeda(v.valor)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div>
+                <h3 className="mb-2 text-sm font-bold text-[var(--ink)]">Maiores emitentes</h3>
+                <div className="space-y-2">
+                  {detalheUf.topEmitentes.map((e, i) => (
+                    <div key={i} className="rounded-lg border border-[var(--border)] p-2.5">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="truncate text-sm font-medium text-[var(--ink)]" title={e.nome}>{e.nome}</span>
+                        <span className="shrink-0 text-sm font-semibold text-[var(--ink)]">{moeda(e.valor)}</span>
+                      </div>
+                      <div className="mt-0.5 text-xs text-[var(--ink-mut)]">{e.qtd} nota(s)</div>
+                    </div>
+                  ))}
+                  {detalheUf.topEmitentes.length === 0 && (
+                    <p className="text-sm text-[var(--ink-mut)]">Sem notas deste estado no período.</p>
+                  )}
+                </div>
+              </div>
+            </div>
+          ) : (
+            <>
+              <h2 className="mb-3 text-base font-bold text-[var(--ink)]">{rt('Ranking por estado', '各州排名')}</h2>
+              <div className="space-y-2">
+                {ranking.slice(0, 14).map((item) => (
+                  <button
+                    key={item.uf}
+                    onClick={() => selecionar(item.uf)}
+                    className="w-full rounded-lg border border-[var(--border)] p-3 text-left transition hover:border-emerald-500 hover:bg-[var(--surface-2)]"
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-sm font-bold text-[var(--ink)]">{item.uf} <span className="font-normal text-[var(--ink-mut)]">{nomeUf(item.uf)}</span></span>
+                      <span className="text-sm font-semibold text-[var(--ink)]">{moeda(item.valor)}</span>
+                    </div>
+                    <div className="mt-2 h-2 overflow-hidden rounded-full bg-[var(--surface-2)]">
+                      <div className="h-full rounded-full bg-emerald-600" style={{ width: `${maxValor ? Math.max(4, (item.valor / maxValor) * 100) : 0}%` }} />
+                    </div>
+                    <div className="mt-1 text-xs text-[var(--ink-mut)]">{item.qtd} nota(s)</div>
+                  </button>
+                ))}
+                {ranking.length === 0 && (
+                  <p className="text-sm text-[var(--ink-mut)]">Sem notas para montar o relatório no período.</p>
+                )}
+              </div>
+            </>
+          )}
+        </section>
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-2">
+        <section className="report-card rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-5 shadow-sm">
+          <h2 className="mb-3 text-base font-bold text-[var(--ink)]">{rt('Evolução mensal', '月度趋势')}</h2>
+          <div className="space-y-2">
+            {resumoFiscal.meses.slice(-12).map(([chave, v]) => (
+              <div key={chave} className="rounded-lg border border-[var(--border)] p-3">
+                <div className="mb-2 flex items-center justify-between gap-3">
+                  <span className="text-sm font-bold text-[var(--ink)]">{mesLabel(chave)}</span>
+                  <span className="text-sm font-semibold text-[var(--ink)]">{moeda(v.valor)}</span>
+                </div>
+                <div className="h-2 overflow-hidden rounded-full bg-[var(--surface-2)]">
+                  <div className="bar-progress h-full rounded-full bg-[var(--accent)]" style={{ width: `${resumoFiscal.maxMes ? Math.max(4, (v.valor / resumoFiscal.maxMes) * 100) : 0}%` }} />
+                </div>
+                <div className="mt-1 text-xs text-[var(--ink-mut)]">
+                  {v.qtd} nota(s) - ICMS {moeda(v.icms)} - pago {moeda(v.pago)} - pendente {moeda(v.pendente)}
+                </div>
+              </div>
+            ))}
+            {resumoFiscal.meses.length === 0 && (
+              <p className="text-sm text-[var(--ink-mut)]">{rt('Sem movimento no período.', '当前期间无交易。')}</p>
+            )}
+          </div>
+        </section>
+
+        <section className="report-card rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-5 shadow-sm">
+          <h2 className="mb-3 text-base font-bold text-[var(--ink)]">{rt('Principais emitentes', '主要开票方')}</h2>
+          <div className="space-y-2">
+            {resumoFiscal.topEmitentes.map((emitente, i) => (
+              <div key={`${emitente.nome}-${i}`} className="rounded-lg border border-[var(--border)] p-3">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="truncate text-sm font-semibold text-[var(--ink)]" title={emitente.nome}>{emitente.nome}</span>
+                  <span className="shrink-0 text-sm font-bold text-[var(--ink)]">{moeda(emitente.valor)}</span>
+                </div>
+                <div className="mt-1 text-xs text-[var(--ink-mut)]">
+                  {emitente.qtd} nota(s) - ICMS {moeda(emitente.icms)}
+                </div>
+              </div>
+            ))}
+            {resumoFiscal.topEmitentes.length === 0 && (
+              <p className="text-sm text-[var(--ink-mut)]">{rt('Sem emitentes no período.', '当前期间无开票方。')}</p>
+            )}
+          </div>
+        </section>
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-2">
+        <section className="report-card rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-5 shadow-sm">
+          <h2 className="mb-3 text-base font-bold text-[var(--ink)]">{rt('DAEs vencidos e próximos', '逾期及即将到期的 DAE')}</h2>
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-left text-xs">
+              <thead className="text-[var(--ink-mut)]">
+                <tr>
+                  <th className="px-2 py-2 font-semibold">NF</th>
+                  <th className="px-2 py-2 font-semibold">Fornecedor</th>
+                  <th className="px-2 py-2 font-semibold">Venc.</th>
+                  <th className="px-2 py-2 text-right font-semibold">Valor</th>
+                  <th className="px-2 py-2 font-semibold">Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[var(--border)]">
+                {daesPrioritarios.map((nota) => (
+                  <tr key={`dae-${nota.id}`}>
+                    <td className="px-2 py-2 font-semibold text-[var(--ink)]">{nota.numero || '-'}</td>
+                    <td className="max-w-[220px] truncate px-2 py-2 text-[var(--ink)]" title={nota.emitenteNomeRelatorio}>{nota.emitenteNomeRelatorio}</td>
+                    <td className="px-2 py-2 text-[var(--ink)]">{nota.daeVencimento ? data(nota.daeVencimento) : '-'}</td>
+                    <td className="px-2 py-2 text-right font-semibold text-[var(--ink)]">{moeda(nota.impostoPendente)}</td>
+                    <td className="px-2 py-2">
+                      <Badge tone={nota.diasDae !== null && nota.diasDae < 0 ? 'red' : 'amber'}>
+                        {nota.diasDae !== null && nota.diasDae < 0 ? `${Math.abs(nota.diasDae)}d vencido` : `${nota.diasDae ?? 0}d`}
+                      </Badge>
+                    </td>
+                  </tr>
+                ))}
+                {daesPrioritarios.length === 0 && (
+                  <tr><td colSpan={5} className="px-2 py-4 text-center text-[var(--ink-mut)]">Sem DAE vencido ou vencendo em 7 dias.</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section className="report-card rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-5 shadow-sm">
+          <h2 className="mb-3 text-base font-bold text-[var(--ink)]">{rt('Pendências e risco fiscal', '待处理事项与税务风险')}</h2>
+          <div className="space-y-2">
+            {pendenciasPrioritarias.map((nota) => (
+              <div key={`pend-${nota.id}`} className="rounded-lg border border-[var(--border)] p-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-semibold text-[var(--ink)]" title={nota.emitenteNomeRelatorio}>
+                      NF {nota.numero || '-'} - {nota.emitenteNomeRelatorio}
+                    </div>
+                    <div className="mt-1 text-xs text-[var(--ink-mut)]">{nota.pendencias.join(' | ')}</div>
+                  </div>
+                  <Badge tone={nota.risco === 'critico' ? 'red' : nota.risco === 'alto' ? 'orange' : 'amber'}>
+                    {nota.risco === 'critico' ? rt('crítico', '严重') : nota.risco === 'medio' ? rt('médio', '中') : nota.risco === 'alto' ? rt('alto', '高') : rt('baixo', '低')}
+                  </Badge>
+                </div>
+              </div>
+            ))}
+            {pendenciasPrioritarias.length === 0 && (
+              <p className="text-sm text-[var(--ink-mut)]">{rt('Sem pendências no filtro atual.', '当前筛选无待处理事项。')}</p>
+            )}
+          </div>
+        </section>
+      </div>
+
+      <section className="report-card rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4 shadow-sm sm:p-5">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-base font-bold text-[var(--ink)]">{rt('Relatório de notas', '发票报表')}</h2>
+            <p className="text-xs text-[var(--ink-mut)]">{rt(`Mostrando até ${limiteTabela} linhas do filtro atual.`, `当前筛选最多显示 ${limiteTabela} 行。`)}</p>
+          </div>
+          <div className="text-xs text-[var(--ink-mut)]">{notasPeriodo.length} nota(s) filtrada(s)</div>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="min-w-[1120px] text-left text-xs">
+            <thead className="text-[var(--ink-mut)]">
+              <tr>
+                <th className="px-2 py-2 font-semibold">{rt('Emissão', '开票日期')}</th>
+                <th className="px-2 py-2 font-semibold">NF</th>
+                <th className="px-2 py-2 font-semibold">{rt('Série', '系列')}</th>
+                <th className="px-2 py-2 font-semibold">Empresa</th>
+                <th className="px-2 py-2 font-semibold">Fornecedor</th>
+                <th className="px-2 py-2 font-semibold">UF</th>
+                <th className="px-2 py-2 text-right font-semibold">Produtos</th>
+                <th className="px-2 py-2 text-right font-semibold">Total</th>
+                <th className="px-2 py-2 text-right font-semibold">ICMS</th>
+                <th className="px-2 py-2 font-semibold">DAE</th>
+                <th className="px-2 py-2 font-semibold">Risco</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-[var(--border)]">
+              {notasTabela.map((nota) => (
+                <tr key={`nota-rel-${nota.id}`} className="hover:bg-[var(--surface-2)]">
+                  <td className="px-2 py-2 text-[var(--ink)]">{data(nota.emitidaEm)}</td>
+                  <td className="px-2 py-2 font-semibold text-[var(--ink)]">{nota.numero || '-'}</td>
+                  <td className="px-2 py-2 text-[var(--ink-mut)]">{nota.serie || '-'}</td>
+                  <td className="max-w-[180px] truncate px-2 py-2 text-[var(--ink)]" title={nota.empresaLabel}>{nota.empresaLabel}</td>
+                  <td className="max-w-[260px] truncate px-2 py-2 text-[var(--ink)]" title={nota.emitenteNomeRelatorio}>{nota.emitenteNomeRelatorio}</td>
+                  <td className="px-2 py-2 text-[var(--ink)]">{nota.uf || '-'}</td>
+                  <td className="px-2 py-2 text-right text-[var(--ink)]">{moeda(nota.valorProdutos ?? 0)}</td>
+                  <td className="px-2 py-2 text-right font-semibold text-[var(--ink)]">{moeda(nota.valor)}</td>
+                  <td className="px-2 py-2 text-right text-[var(--ink)]">{moeda(nota.icms)}</td>
+                  <td className="px-2 py-2"><Badge tone={nota.daeStatus === 'PAGO' ? 'green' : nota.daePendente ? 'red' : 'gray'}>{textoDaeSitram(nota.daeStatus)}</Badge></td>
+                  <td className="px-2 py-2"><Badge tone={nota.risco === 'baixo' ? 'green' : nota.risco === 'medio' ? 'amber' : nota.risco === 'alto' ? 'orange' : 'red'}>{nota.risco === 'critico' ? rt('crítico', '严重') : nota.risco === 'medio' ? rt('médio', '中') : nota.risco === 'alto' ? rt('alto', '高') : rt('baixo', '低')}</Badge></td>
+                </tr>
+              ))}
+              {notasTabela.length === 0 && (
+                <tr><td colSpan={11} className="px-2 py-4 text-center text-[var(--ink-mut)]">Nenhuma nota no filtro atual.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+        {notasTabela.length < notasPeriodo.length && (
+          <div className="mt-4 flex justify-center">
+            <button type="button" onClick={() => setLimiteTabela((atual) => atual + 20)} className="rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-4 py-2 text-sm font-semibold text-[var(--ink)] transition hover:-translate-y-0.5 hover:bg-[var(--surface-2)] hover:shadow-sm">
+              {rt('Mostrar mais 20 linhas', '再显示 20 行')}
+            </button>
+          </div>
+        )}
+      </section>
     </div>
   );
 }
@@ -1919,6 +3083,7 @@ function ImportarPagamentoSitram({
   onFechar: () => void;
   onAplicado: () => void;
 }) {
+  const { t } = useIdioma();
   const [analisando, setAnalisando] = useState(false);
   const [preview, setPreview] = useState<PreviewPagamentoSitram | null>(null);
   const [referencia, setReferencia] = useState('');
@@ -1930,15 +3095,16 @@ function ImportarPagamentoSitram({
     e.preventDefault();
     const form = e.currentTarget;
     const fd = new FormData(form);
-    if (!(fd.get('arquivo') instanceof File) || (fd.get('arquivo') as File).size === 0) {
-      setMsg({ ok: false, texto: 'Selecione o PDF da relação.' });
+    const arquivos = fd.getAll('arquivo').filter((arquivo): arquivo is File => arquivo instanceof File && arquivo.size > 0);
+    if (arquivos.length === 0) {
+      setMsg({ ok: false, texto: t('selectPdf') });
       return;
     }
     setAnalisando(true);
     setMsg(null);
     const res = await previewPagamentoSitram(fd);
     setAnalisando(false);
-    if (!res.ok) { setMsg({ ok: false, texto: res.message ?? 'Falha ao analisar.' }); return; }
+    if (!res.ok) { setMsg({ ok: false, texto: res.message ?? t('analysisFailed') }); return; }
     setPreview(res);
   }
 
@@ -1946,7 +3112,7 @@ function ImportarPagamentoSitram({
   const totalAberto = (preview?.encontradas ?? []).reduce((t, n) => t + n.valorAberto, 0);
 
   async function handleConfirmar() {
-    if (idsParaAplicar.length === 0) { setMsg({ ok: false, texto: 'Nada para marcar (todas já pagas ou nenhuma encontrada).' }); return; }
+    if (idsParaAplicar.length === 0) { setMsg({ ok: false, texto: t('nothingToMark') }); return; }
     setAplicando(true);
     setMsg(null);
     const res = await aplicarPagamentoSitram(idsParaAplicar, referencia);
@@ -1966,44 +3132,42 @@ function ImportarPagamentoSitram({
   return (
     <div className="mb-4 bg-[var(--surface)] border border-[var(--border)] rounded-2xl p-5 shadow-sm">
       <div className="flex items-center justify-between mb-3 border-b border-[var(--border)] pb-3">
-        <h2 className="text-base font-semibold text-[var(--ink)]">Importar pagamento (relação SITRAM)</h2>
-        <button onClick={onFechar} className="text-sm text-[var(--ink-mut)] hover:text-[var(--ink)]">Fechar ✕</button>
+        <h2 className="text-base font-semibold text-[var(--ink)]">{t('importPaymentTitle')}</h2>
+        <button onClick={onFechar} className="text-sm text-[var(--ink-mut)] hover:text-[var(--ink)]">{t('close')} x</button>
       </div>
 
       {!preview ? (
         <form onSubmit={handleAnalisar} className="space-y-3">
-          <p className="text-sm text-[var(--ink-mut)]">
-            Suba o PDF da <strong>Relação de Lançamentos de Nota Fiscal</strong> do SITRAM. O app cruza cada
-            linha (nº da NF + CNPJ do emitente) com suas notas e marca o DAE como pago.
-          </p>
+          <p className="text-sm text-[var(--ink-mut)]">{t('paymentHelp')}</p>
           <input
             type="file"
             name="arquivo"
             accept="application/pdf,.pdf"
+            multiple
             className="w-full text-sm text-[var(--ink-mut)] file:mr-3 file:rounded-lg file:border-0 file:bg-[var(--accent-soft)] file:px-3 file:py-2 file:text-sm file:font-medium file:text-[var(--ink)]"
           />
           <button type="submit" disabled={analisando}
             className="bg-[var(--accent)] text-[var(--accent-ink)] px-5 py-2 rounded-lg text-sm font-medium hover:brightness-150 disabled:opacity-50">
-            {analisando ? 'Analisando PDF…' : 'Analisar'}
+            {analisando ? t('analyzingPdf') : t('analyze')}
           </button>
         </form>
       ) : (
         <div className="space-y-4">
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <div className="rounded-xl border border-[var(--border)] p-3">
-              <p className="text-[11px] uppercase tracking-wide text-[var(--ink-mut)] font-semibold">Lançamentos</p>
+              <p className="text-[11px] uppercase tracking-wide text-[var(--ink-mut)] font-semibold">{t('launches')}</p>
               <p className="text-xl font-bold text-[var(--ink)]">{preview.totalLancamentos}</p>
             </div>
             <div className="rounded-xl border border-[var(--border)] p-3">
-              <p className="text-[11px] uppercase tracking-wide text-[var(--ink-mut)] font-semibold">NFs encontradas</p>
+              <p className="text-[11px] uppercase tracking-wide text-[var(--ink-mut)] font-semibold">{t('foundNfs')}</p>
               <p className="text-xl font-bold" style={{ color: 'var(--good)' }}>{preview.encontradas.length}</p>
             </div>
             <div className="rounded-xl border border-[var(--border)] p-3">
-              <p className="text-[11px] uppercase tracking-wide text-[var(--ink-mut)] font-semibold">Não encontradas</p>
+              <p className="text-[11px] uppercase tracking-wide text-[var(--ink-mut)] font-semibold">{t('notFound')}</p>
               <p className="text-xl font-bold" style={{ color: preview.naoEncontradas.length ? 'var(--crit)' : 'var(--ink)' }}>{preview.naoEncontradas.length}</p>
             </div>
             <div className="rounded-xl border border-[var(--border)] p-3">
-              <p className="text-[11px] uppercase tracking-wide text-[var(--ink-mut)] font-semibold">Em aberto</p>
+              <p className="text-[11px] uppercase tracking-wide text-[var(--ink-mut)] font-semibold">{t('openAmount')}</p>
               <p className="text-xl font-bold text-[var(--ink)]">{moeda(totalAberto)}</p>
             </div>
           </div>
@@ -2065,6 +3229,122 @@ function ImportarPagamentoSitram({
   );
 }
 
+function UsuariosAdminPainel({
+  cnpjs,
+  usuarios,
+  carregando,
+  usuarioEditando,
+  onEditar,
+  onNovo,
+  action,
+}: {
+  cnpjs: CnpjComContagem[];
+  usuarios: UsuarioAdminResumo[];
+  carregando: boolean;
+  usuarioEditando: UsuarioAdminResumo | null;
+  onEditar: (usuario: UsuarioAdminResumo) => void;
+  onNovo: () => void;
+  action: (formData: FormData) => void;
+}) {
+  const selecionado = usuarioEditando;
+  const cnpjsSelecionados = new Set(selecionado?.cnpjIds ?? []);
+  const acessoTodos = selecionado?.acessoTodosCnpjs ?? false;
+
+  return (
+    <div className="mb-6 bg-[var(--surface)] border border-[var(--border)] rounded-2xl p-5 shadow-sm">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border)] pb-3">
+        <div>
+          <h2 className="text-base font-semibold text-[var(--ink)]">Usuarios e acesso por loja</h2>
+          <p className="text-xs text-[var(--ink-mut)]">Crie login, defina nivel e escolha quais CNPJs a pessoa pode ver.</p>
+        </div>
+        <button type="button" onClick={onNovo} className="rounded-lg border border-[var(--border-strong)] px-3 py-2 text-sm font-semibold text-[var(--ink)] hover:bg-[var(--surface-2)]">
+          Novo usuario
+        </button>
+      </div>
+
+      <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_360px]">
+        <div className="overflow-x-auto rounded-xl border border-[var(--border)]">
+          <table className="w-full text-left text-sm">
+            <thead className="bg-[var(--surface-2)] text-xs uppercase text-[var(--ink-mut)]">
+              <tr>
+                <th className="px-3 py-2 font-semibold">Usuario</th>
+                <th className="px-3 py-2 font-semibold">Nivel</th>
+                <th className="px-3 py-2 font-semibold">Lojas</th>
+                <th className="px-3 py-2 font-semibold">Status</th>
+                <th className="px-3 py-2" />
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-[var(--border)]">
+              {carregando ? (
+                <tr><td colSpan={5} className="px-3 py-4 text-[var(--ink-mut)]">Carregando usuarios...</td></tr>
+              ) : usuarios.length === 0 ? (
+                <tr><td colSpan={5} className="px-3 py-4 text-[var(--ink-mut)]">Nenhum usuario cadastrado.</td></tr>
+              ) : usuarios.map((u) => (
+                <tr key={u.id} className="hover:bg-[var(--surface-2)]/60">
+                  <td className="px-3 py-2">
+                    <div className="font-semibold text-[var(--ink)]">{u.nome}</div>
+                    <div className="text-xs font-mono text-[var(--ink-mut)]">{u.login}</div>
+                  </td>
+                  <td className="px-3 py-2"><Badge tone={u.perfil === 'admin' ? 'indigo' : 'gray'}>{u.perfil}</Badge></td>
+                  <td className="px-3 py-2 text-xs text-[var(--ink-mut)]">{u.acessoTodosCnpjs ? 'Todas as lojas' : `${u.cnpjIds.length} loja(s)`}</td>
+                  <td className="px-3 py-2"><Badge tone={u.ativo ? 'green' : 'red'}>{u.ativo ? 'Ativo' : 'Inativo'}</Badge></td>
+                  <td className="px-3 py-2 text-right">
+                    <button type="button" onClick={() => onEditar(u)} className="rounded-md border border-[var(--border)] px-2.5 py-1.5 text-xs font-semibold text-[var(--ink)] hover:bg-[var(--surface-2)]">
+                      Editar
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <form key={selecionado?.id ?? 'novo'} action={action} className="rounded-xl border border-[var(--border)] p-4">
+          <input type="hidden" name="id" value={selecionado?.id ?? ''} />
+          <h3 className="mb-3 text-sm font-bold text-[var(--ink)]">{selecionado ? 'Editar usuario' : 'Novo usuario'}</h3>
+          <div className="space-y-2">
+            <input name="nome" required defaultValue={selecionado?.nome ?? ''} placeholder="Nome" className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)]" />
+            <input name="login" required defaultValue={selecionado?.login ?? ''} placeholder="Login" className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)]" />
+            <input name="senha" type="password" placeholder={selecionado ? 'Nova senha (opcional)' : 'Senha'} className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)]" />
+            <select name="perfil" defaultValue={selecionado?.perfil ?? 'operador'} className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)]">
+              <option value="operador">Operador</option>
+              <option value="admin">Admin</option>
+            </select>
+            <label className="flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm text-[var(--ink)]">
+              <input type="checkbox" name="ativo" defaultChecked={selecionado?.ativo ?? true} />
+              Usuario ativo
+            </label>
+            <label className="flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm text-[var(--ink)]">
+              <input type="checkbox" name="acessoTodosCnpjs" defaultChecked={acessoTodos} />
+              Pode ver todas as lojas
+            </label>
+          </div>
+
+          <div className="mt-4">
+            <div className="mb-2 text-xs font-bold uppercase text-[var(--ink-mut)]">Lojas permitidas</div>
+            <div className="max-h-52 space-y-1 overflow-y-auto rounded-lg border border-[var(--border)] p-2">
+              {cnpjs.map((cnpj) => (
+                <label key={cnpj.id} className="flex gap-2 rounded-md px-2 py-1.5 text-xs text-[var(--ink)] hover:bg-[var(--surface-2)]">
+                  <input type="checkbox" name="cnpjIds" value={cnpj.id} defaultChecked={cnpjsSelecionados.has(cnpj.id)} />
+                  <span>
+                    <strong>{cnpj.razaoSocial || formatarCnpj(cnpj.cnpj)}</strong>
+                    <span className="block font-mono text-[var(--ink-mut)]">{formatarCnpj(cnpj.cnpj)}</span>
+                  </span>
+                </label>
+              ))}
+            </div>
+            <p className="mt-1 text-[11px] text-[var(--ink-mut)]">Se "todas as lojas" estiver marcado, essa lista e ignorada.</p>
+          </div>
+
+          <button type="submit" className="mt-4 w-full rounded-lg bg-[var(--accent)] px-4 py-2 text-sm font-bold text-white hover:brightness-125">
+            {selecionado ? 'Salvar alteracoes' : 'Criar usuario'}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 function AlertaDaes({
   notas,
   cnpjId,
@@ -2074,6 +3354,7 @@ function AlertaDaes({
   cnpjId: number | 'todos';
   onFiltrar: (inicio: string, fim: string) => void;
 }) {
+  const { t } = useIdioma();
   const itens = useMemo<ItemAlertaDae[]>(() => {
     const resultado: ItemAlertaDae[] = [];
 
@@ -2115,7 +3396,17 @@ function AlertaDaes({
     return resultado.sort((a, b) => {
       if (!a.dataChave) return 1;
       if (!b.dataChave) return -1;
-      return a.dataChave.localeCompare(b.dataChave);
+
+      const dataCmp = a.dataChave.localeCompare(b.dataChave);
+      if (dataCmp !== 0) return dataCmp;
+
+      const grupoCmp = nomeGrupoEmpresa(a.nota.cnpj.cnpj).localeCompare(nomeGrupoEmpresa(b.nota.cnpj.cnpj));
+      if (grupoCmp !== 0) return grupoCmp;
+
+      const cnpjCmp = a.nota.cnpj.cnpj.localeCompare(b.nota.cnpj.cnpj);
+      if (cnpjCmp !== 0) return cnpjCmp;
+
+      return (a.nota.numero || a.numeroNota || '').localeCompare(b.nota.numero || b.numeroNota || '');
     });
   }, [notas, cnpjId]);
 
@@ -2155,8 +3446,8 @@ function AlertaDaes({
       <div className="border-b border-amber-200 bg-amber-100/70 px-4 py-3">
         <div className="flex flex-wrap items-center gap-3">
           <div className="mr-auto">
-            <h2 className="font-bold text-[var(--ink)]">Alerta de DAE a pagar</h2>
-            <p className="text-xs text-[var(--ink-mut)]">{itens.length} pendência(s) • {moeda(totalAberto)} em aberto</p>
+            <h2 className="font-bold text-[var(--ink)]">{t('daeAlertTitle')}</h2>
+            <p className="text-xs text-[var(--ink-mut)]">{t('daeAlertSummary', { count: itens.length, amount: moeda(totalAberto) })}</p>
           </div>
           {vencidos.length > 0 && (
             <button
@@ -2164,7 +3455,7 @@ function AlertaDaes({
               onClick={() => onFiltrar('', deslocarData(-1))}
               className="rounded-lg border border-red-300 bg-red-600 px-3 py-2 text-left text-white shadow-sm"
             >
-              <span className="block text-[10px] font-bold uppercase">Vencidos</span>
+              <span className="block text-[10px] font-bold uppercase">{t('overdue')}</span>
               <span className="text-lg font-black">{vencidos.length}</span>
             </button>
           )}
@@ -2174,7 +3465,7 @@ function AlertaDaes({
               onClick={() => onFiltrar(hoje, hoje)}
               className="rounded-lg border border-orange-300 bg-orange-500 px-3 py-2 text-left text-white shadow-sm"
             >
-              <span className="block text-[10px] font-bold uppercase">Vencem hoje</span>
+              <span className="block text-[10px] font-bold uppercase">{t('dueToday')}</span>
               <span className="text-lg font-black">{vencemHoje.length}</span>
             </button>
           )}
@@ -2184,7 +3475,7 @@ function AlertaDaes({
               onClick={() => onFiltrar(deslocarData(1), deslocarData(7))}
               className="rounded-lg border border-amber-300 bg-[var(--surface)] px-3 py-2 text-left text-amber-800 shadow-sm"
             >
-              <span className="block text-[10px] font-bold uppercase">Próximos 7 dias</span>
+              <span className="block text-[10px] font-bold uppercase">{t('nextSevenDays')}</span>
               <span className="text-lg font-black">{proximos.length}</span>
             </button>
           )}
@@ -2193,15 +3484,15 @@ function AlertaDaes({
             onClick={() => onFiltrar('', '')}
             className="rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm font-semibold text-[var(--ink)] shadow-sm"
           >
-            Ver todos
+            {t('viewAll')}
           </button>
           <button
             type="button"
             onClick={alternarAberto}
-            title={aberto ? 'Minimizar lista' : 'Expandir lista'}
+            title={aberto ? t('minimizeList') : t('expandList')}
             className="rounded-lg border border-amber-300 bg-[var(--surface)] px-3 py-2 text-sm font-semibold text-amber-800 shadow-sm hover:bg-amber-50"
           >
-            {aberto ? '▾ Minimizar' : '▸ Expandir'}
+            {aberto ? `v ${t('minimize')}` : `> ${t('expand')}`}
           </button>
         </div>
       </div>
@@ -2214,12 +3505,12 @@ function AlertaDaes({
           const vencido = diasGrupo !== null && diasGrupo < 0;
           const venceHoje = diasGrupo === 0;
           const rotuloPrazo = dataGrupo === 'SEM_DATA'
-            ? 'Sem data de vencimento'
+            ? t('noDueDate')
             : vencido
-              ? `VENCIDO HÁ ${Math.abs(diasGrupo!)} DIA(S)`
+              ? t('overdueDaysUpper', { days: Math.abs(diasGrupo!) })
               : venceHoje
-                ? 'VENCE HOJE'
-                : `Vence em ${diasGrupo} dia(s)`;
+                ? t('dueTodayUpper')
+                : t('dueInDays', { days: diasGrupo ?? 0 });
 
           return (
             <div key={dataGrupo} className={vencido ? 'bg-red-50' : venceHoje ? 'bg-orange-50' : 'bg-[var(--surface-2)]'}>
@@ -2229,11 +3520,11 @@ function AlertaDaes({
                 className="flex w-full flex-wrap items-center gap-3 px-4 py-2 text-left hover:bg-black/[0.03]"
               >
                 <span className="font-bold text-[var(--ink)]">
-                  {dataGrupo === 'SEM_DATA' ? 'Sem vencimento informado' : data(`${dataGrupo}T12:00:00`)}
+                  {dataGrupo === 'SEM_DATA' ? t('noDueDateInfo') : data(`${dataGrupo}T12:00:00`)}
                 </span>
                 <Badge tone={vencido ? 'red' : venceHoje ? 'orange' : 'amber'}>{rotuloPrazo}</Badge>
                 <span className="ml-auto text-sm font-bold text-[var(--ink)]">
-                  {itensGrupo.length} DAE(s) • {moeda(valorGrupo)}
+                  {t('daeCountAmount', { count: itensGrupo.length, amount: moeda(valorGrupo) })}
                 </span>
               </button>
               <div className="grid gap-2 px-4 pb-3 md:grid-cols-2">
@@ -2244,8 +3535,13 @@ function AlertaDaes({
                       <Badge tone="indigo">{item.classificacao}</Badge>
                       <strong className="ml-auto text-[var(--ink)]">{moeda(item.lancamento?.valorAberto ?? null)}</strong>
                     </div>
+                    <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                      <Badge tone="amber">{nomeGrupoEmpresa(item.nota.cnpj.cnpj)}</Badge>
+                      <Badge tone="gray">{nomeEmpresaCurta(item.nota)}</Badge>
+                      <span className="text-[11px] font-mono text-[var(--ink-mut)]">{formatarCnpj(item.nota.cnpj.cnpj)}</span>
+                    </div>
                     <p className="mt-1 truncate text-[var(--ink-mut)]" title={item.nota.emitenteNome || ''}>
-                      {item.nota.emitenteNome || 'Emitente não informado'}
+                      {item.nota.emitenteNome || t('issuerNotInformed')}
                     </p>
                   </div>
                 ))}
@@ -2430,7 +3726,7 @@ function FragmentNota({
               )}
             </div>
           ) : (
-            <span className="text-slate-300">â€”</span>
+            <span className="text-slate-300">—</span>
           )}
         </td>
         <td className="py-3 text-right whitespace-nowrap text-[var(--ink-mut)]">{nota.qtdItens ?? '—'}</td>
