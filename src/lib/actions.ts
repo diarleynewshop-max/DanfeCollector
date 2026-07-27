@@ -4,6 +4,7 @@ import { revalidatePath } from 'next/cache';
 import * as tls from 'tls';
 import * as fs from 'fs';
 import * as path from 'path';
+import { Prisma } from '@prisma/client';
 import { prisma } from './prisma';
 import {
   carregarCertificado,
@@ -32,11 +33,24 @@ import {
 import {
   consultarLancamentosNotaFiscalSitram,
   consultarNotaFiscalSitramPorChave,
+  consultarTodosItensNotaFiscalSitram,
   type SitramPortalLancamento,
   type SitramPortalNotaFiscal,
 } from './sitram/portal';
-import { classificarStatusDaePortal, extrairResumoDae, lancamentosVisiveisDae, statusDaeEfetivo } from './sitram/dae';
+import {
+  classificarStatusDaePortal,
+  detectarSuspeitasPagamentoDuplicadoIcms,
+  extrairResumoDae,
+  lancamentosVisiveisDae,
+  statusDaeEfetivo,
+} from './sitram/dae';
 import { parseRelacaoPagamentoSitram, chaveCruzamento, extrairDaChave } from './sitram/pagamento';
+import {
+  consultarDaePorCodigo,
+  consultarDocumentosDaeBatch,
+  simularDaeNotaFiscal,
+  type SitramDocumentoPagamento,
+} from './sitram/pagamento-icms-portal';
 import { salvarArquivo, mimeAceito, TAMANHO_MAX } from './anexos/storage';
 
 export interface ActionResult {
@@ -470,7 +484,10 @@ export async function sincronizarNotas(cnpjId: number): Promise<ActionResult> {
   const usuario = await exigirUsuario().catch(() => null);
   if (!usuario) return { success: false, message: 'Sessao expirada. Faca login novamente.' };
   if (!usuarioPodeAcessarCnpj(usuario, cnpjId)) return { success: false, message: 'Acesso negado para esta loja.' };
+  return sincronizarNotasInterno(cnpjId);
+}
 
+export async function sincronizarNotasInterno(cnpjId: number): Promise<ActionResult> {
   const registro = await prisma.cnpj.findUnique({ where: { id: cnpjId } });
   if (!registro) return { success: false, message: 'CNPJ não encontrado.' };
   if (!registro.ativo) return { success: false, message: 'CNPJ está desativado.' };
@@ -975,11 +992,15 @@ export async function listarNotas(pagina = 1, porPagina = 50) {
   const include = { cnpj: { select: { cnpj: true, razaoSocial: true } } } as const;
   const paginaSegura = Math.max(1, Math.trunc(Number(pagina) || 1));
   const limiteSeguro = Math.max(1, Math.min(100, Math.trunc(Number(porPagina) || 50)));
+  const where = {
+    ...whereNotaPermitida(usuario),
+    situacaoSefaz: { not: 'CANCELADA' as const },
+  };
 
   // Mantém as 2000 recentes e inclui qualquer DAE antigo, para nenhum
   // vencimento desaparecer do painel de alertas.
   return prisma.notaFiscal.findMany({
-    where: whereNotaPermitida(usuario),
+    where,
     orderBy: { emitidaEm: 'desc' },
     skip: (paginaSegura - 1) * limiteSeguro,
     take: limiteSeguro,
@@ -994,7 +1015,10 @@ export async function listarNotas(pagina = 1, porPagina = 50) {
 export async function listarTodasNotas() {
   const usuario = await exigirUsuario();
   return prisma.notaFiscal.findMany({
-    where: whereNotaPermitida(usuario),
+    where: {
+      ...whereNotaPermitida(usuario),
+      situacaoSefaz: { not: 'CANCELADA' },
+    },
     orderBy: { emitidaEm: 'desc' },
     include: { cnpj: { select: { cnpj: true, razaoSocial: true } } },
   });
@@ -1086,6 +1110,7 @@ export async function listarNotasAlertaDae() {
     where: {
       ...whereNotaPermitida(usuario),
       sitramConsultadaEm: { not: null },
+      sitramDaeStatus: { in: ['EM_ABERTO', 'LIBERADA_PARA_GERAR'] },
     },
     orderBy: { emitidaEm: 'desc' },
     include: { cnpj: { select: { cnpj: true, razaoSocial: true } } },
@@ -1117,25 +1142,88 @@ export async function listarNotasPorAno(ano: number) {
  */
 export async function listarAnosDisponiveis(): Promise<number[]> {
   const usuario = await exigirUsuario();
-  const notas = await prisma.notaFiscal.findMany({
-    where: whereNotaPermitida(usuario),
-    select: { emitidaEm: true },
-    orderBy: { emitidaEm: 'desc' },
-  });
-  const anos = [...new Set(notas.map((n) => new Date(n.emitidaEm).getFullYear()))].sort((a, b) => b - a);
-  return anos;
+  if (!usuario.acessoTodosCnpjs && usuario.cnpjIds.length === 0) return [];
+
+  const linhas = usuario.acessoTodosCnpjs
+    ? await prisma.$queryRaw<Array<{ ano: number }>>`
+        SELECT DISTINCT EXTRACT(YEAR FROM "emitidaEm")::int AS ano
+        FROM "NotaFiscal"
+        ORDER BY ano DESC
+      `
+    : await prisma.$queryRaw<Array<{ ano: number }>>`
+        SELECT DISTINCT EXTRACT(YEAR FROM "emitidaEm")::int AS ano
+        FROM "NotaFiscal"
+        WHERE "cnpjId" IN (${Prisma.join(usuario.cnpjIds)})
+        ORDER BY ano DESC
+      `;
+
+  return linhas.map((linha) => linha.ano);
 }
 
 /** Retorna o total de notas no banco (rápido — só COUNT). */
 export async function contarNotasTotal(): Promise<number> {
   const usuario = await exigirUsuario();
-  return prisma.notaFiscal.count({ where: whereNotaPermitida(usuario) });
+  return prisma.notaFiscal.count({
+    where: {
+      ...whereNotaPermitida(usuario),
+      situacaoSefaz: { not: 'CANCELADA' },
+    },
+  });
+}
+
+export type ResumoInicio = {
+  totalNotas: number;
+  notasCompletas: number;
+  pendentesManifestacao: number;
+  emitidasHoje: number;
+  emitidasUltimos7Dias: number;
+  valorTotal: number;
+};
+
+export async function obterResumoInicio(): Promise<ResumoInicio> {
+  const usuario = await exigirUsuario();
+  const where = whereNotaPermitida(usuario);
+  const inicioHoje = new Date();
+  inicioHoje.setHours(0, 0, 0, 0);
+  const inicio7Dias = new Date(inicioHoje);
+  inicio7Dias.setDate(inicio7Dias.getDate() - 6);
+  const inicioPrazoManifestacao = new Date(inicioHoje);
+  inicioPrazoManifestacao.setDate(inicioPrazoManifestacao.getDate() - 10);
+
+  const [totalNotas, notasCompletas, pendentesManifestacao, emitidasHoje, emitidasUltimos7Dias, valores] = await Promise.all([
+    prisma.notaFiscal.count({ where }),
+    prisma.notaFiscal.count({ where: { ...where, status: 'COMPLETA' } }),
+    prisma.notaFiscal.count({
+      where: {
+        ...where,
+        status: 'RESUMO',
+        manifestadaEm: null,
+        situacaoSefaz: { notIn: ['CANCELADA', 'DENEGADA'] },
+        emitidaEm: { gte: inicioPrazoManifestacao },
+      },
+    }),
+    prisma.notaFiscal.count({ where: { ...where, emitidaEm: { gte: inicioHoje } } }),
+    prisma.notaFiscal.count({ where: { ...where, emitidaEm: { gte: inicio7Dias } } }),
+    prisma.notaFiscal.aggregate({ where, _sum: { valorTotal: true } }),
+  ]);
+
+  return {
+    totalNotas,
+    notasCompletas,
+    pendentesManifestacao,
+    emitidasHoje,
+    emitidasUltimos7Dias,
+    valorTotal: valores._sum.valorTotal ?? 0,
+  };
 }
 
 export async function sincronizarCnpjsAtivos(): Promise<ActionResult> {
   const negado = await checarUsuarioAction();
   if (negado) return negado;
+  return sincronizarCnpjsAtivosInterno();
+}
 
+export async function sincronizarCnpjsAtivosInterno(): Promise<ActionResult> {
   const cnpjs = await prisma.cnpj.findMany({
     where: { ativo: true },
     orderBy: { createdAt: 'asc' },
@@ -1157,7 +1245,7 @@ export async function sincronizarCnpjsAtivos(): Promise<ActionResult> {
       continue;
     }
 
-    const res = await sincronizarNotas(cnpj.id);
+    const res = await sincronizarNotasInterno(cnpj.id);
     if (res.success) sucesso++;
     else erros++;
     detalhes.push(`${formatarCnpj(cnpj.cnpj)}: ${res.message}`);
@@ -1258,6 +1346,44 @@ function inicioDoDiaLocal(): Date {
   const data = new Date();
   data.setHours(0, 0, 0, 0);
   return data;
+}
+
+function textoCampoSitram(objeto: unknown, ...campos: string[]): string | null {
+  const registro = objeto && typeof objeto === 'object' && !Array.isArray(objeto)
+    ? objeto as Record<string, unknown>
+    : {};
+
+  for (const campo of campos) {
+    const valor = registro[campo];
+    if (typeof valor === 'string' && valor.trim()) return valor.trim();
+    if (typeof valor === 'number' && Number.isFinite(valor)) return String(valor);
+  }
+
+  return null;
+}
+
+function numeroNotaDaChave(chave: string | null | undefined): string | null {
+  const normalizada = String(chave ?? '').replace(/\D/g, '');
+  if (normalizada.length !== 44) return null;
+  const numero = normalizada.slice(25, 34);
+  return numero.replace(/^0+/, '') || numero;
+}
+
+function serieNotaDaChave(chave: string | null | undefined): string | null {
+  const normalizada = String(chave ?? '').replace(/\D/g, '');
+  if (normalizada.length !== 44) return null;
+  const serie = normalizada.slice(22, 25);
+  return serie.replace(/^0+/, '') || serie;
+}
+
+function numeroNotaSitram(nota: SitramNotaFiscal | SitramPortalNotaFiscal, chave: string): string | null {
+  return textoCampoSitram(nota, 'numero', 'numeroNotaFiscal', 'numeroNota', 'nNF')
+    ?? numeroNotaDaChave(chave);
+}
+
+function serieNotaSitram(nota: SitramNotaFiscal | SitramPortalNotaFiscal, chave: string): string | null {
+  return textoCampoSitram(nota, 'serie', 'serieNotaFiscal', 'serieNota', 'nSerie')
+    ?? serieNotaDaChave(chave);
 }
 
 function textoSitramNota(nota: SitramNotaFiscal): string | null {
@@ -1389,6 +1515,8 @@ async function marcarSitramNfeNaoEncontrada(chaveNfe: string): Promise<Resultado
       sitramDaeResumo: null,
       sitramDaeUrl: null,
       sitramDetalhe: JSON.stringify({ origem: 'portal-nfe', erro: detalhe }),
+      numero: numeroNotaDaChave(chaveNfe),
+      serie: serieNotaDaChave(chaveNfe),
     },
   });
 
@@ -1436,6 +1564,8 @@ async function salvarRetornoSitram(
         sitramDaeResumo: resumoDae(notaSitram),
         sitramDaeUrl: primeiraUrlDae(notaSitram),
         sitramDetalhe: JSON.stringify(detalhe),
+        numero: numeroNotaSitram(notaSitram, chaveNfe),
+        serie: serieNotaSitram(notaSitram, chaveNfe),
       },
     });
 
@@ -1482,9 +1612,12 @@ async function salvarRetornoSitramPorNfe(chaveNfe: string): Promise<ResultadoSit
   // e o desperdício do limite do lote com a mesma nota.
   const notaSitram = [...notas].sort(compararPortalMaisRecente)[0];
 
-  const lancamentos = notaSitram.id
-    ? await consultarLancamentosNotaFiscalSitram(notaSitram.id).catch(() => [])
-    : [];
+  const [lancamentos, itens] = notaSitram.id
+    ? await Promise.all([
+        consultarLancamentosNotaFiscalSitram(notaSitram.id).catch(() => []),
+        consultarTodosItensNotaFiscalSitram(notaSitram.id).catch(() => []),
+      ])
+    : [[], []];
 
   const ret = await prisma.notaFiscal.updateMany({
     where: { chave: chaveNfe },
@@ -1501,8 +1634,11 @@ async function salvarRetornoSitramPorNfe(chaveNfe: string): Promise<ResultadoSit
         origem: 'portal-nfe',
         notaFiscal: notaSitram,
         lancamentos,
+        itens,
         registrosSitram: notas.length,
       }),
+      numero: numeroNotaSitram(notaSitram, chaveNfe),
+      serie: serieNotaSitram(notaSitram, chaveNfe),
     },
   });
 
@@ -1759,6 +1895,770 @@ export async function atualizarSitramPorChaves(
 // Etiquetas (organização livre das notas, múltiplas por nota — armazenadas
 // separadas por vírgula no campo `etiqueta`)
 // ---------------------------------------------------------------------------
+
+type RegistroJson = Record<string, unknown>;
+
+export interface DocumentoPagamentoIcms {
+  idLancamentoFront: string;
+  tipo: string;
+  situacao: string | null;
+  codigoDocumento: string | null;
+  valor: string | null;
+  pago: boolean;
+  dataValidade: string | null;
+  codigoBarras: string | null;
+  total: number | null;
+  valorPago: number | null;
+  dataPagamento: string | null;
+  detalheDae?: unknown;
+}
+
+export interface ResultadoPagamentoIcms extends ActionResult {
+  statusDae?: string;
+  documentos: DocumentoPagamentoIcms[];
+  simulacoes: unknown[];
+  anexosCriados?: number;
+  suspeitasDuplicidade?: number;
+}
+
+export interface ConsultaPagamentoIcmsLoteInput {
+  notaIds?: number[];
+  cnpjId?: number;
+  ano?: number;
+  limite?: number;
+}
+
+export interface ResultadoPagamentoIcmsLoteDetalhe {
+  notaId: number;
+  chave: string;
+  numero: string | null;
+  status: 'pago' | 'duplicado' | 'em-aberto' | 'consultado' | 'sem-lancamento' | 'erro';
+  detalhe?: string;
+}
+
+export interface ResultadoPagamentoIcmsLote extends ActionResult {
+  totalElegiveis: number;
+  processadas: number;
+  atualizadas: number;
+  pagas: number;
+  emAberto: number;
+  consultadas: number;
+  semLancamento: number;
+  erros: number;
+  limiteAplicado: boolean;
+  detalhes: ResultadoPagamentoIcmsLoteDetalhe[];
+  anexosCriados?: number;
+  suspeitasDuplicidade?: number;
+  notasComSuspeitaDuplicidade?: number;
+}
+
+function registroJson(valor: unknown): RegistroJson {
+  return valor && typeof valor === 'object' && !Array.isArray(valor) ? valor as RegistroJson : {};
+}
+
+function textoJson(valor: unknown): string | null {
+  if (typeof valor === 'string' && valor.trim()) return valor.trim();
+  if (typeof valor === 'number' && Number.isFinite(valor)) return String(valor);
+  return null;
+}
+
+function numeroJson(valor: unknown): number | null {
+  return typeof valor === 'number' && Number.isFinite(valor) ? valor : null;
+}
+
+function numeroMoedaJson(valor: unknown): number | null {
+  if (typeof valor === 'number' && Number.isFinite(valor)) return valor;
+  if (typeof valor !== 'string' || !valor.trim()) return null;
+  const texto = valor.replace(/\s/g, '').replace(/^R\$/i, '');
+  const normalizado = texto.includes(',')
+    ? texto.replace(/\./g, '').replace(',', '.')
+    : texto;
+  const numero = Number(normalizado);
+  return Number.isFinite(numero) ? numero : null;
+}
+
+function totalDaeDetalheJson(detalheDae: RegistroJson, valorFallback?: unknown): number | null {
+  const total = numeroJson(detalheDae.total);
+  if (total !== null) return total;
+
+  const principal = numeroJson(detalheDae.valorPrincipal);
+  if (principal !== null) {
+    return principal +
+      (numeroJson(detalheDae.valorMulta) ?? 0) +
+      (numeroJson(detalheDae.valorJuros) ?? 0) -
+      (numeroJson(detalheDae.valorDesconto) ?? 0);
+  }
+
+  return numeroMoedaJson(valorFallback);
+}
+
+function idLancamentoPagamento(lancamento: RegistroJson): string | null {
+  return textoJson(lancamento.idLancamentoFront) ?? textoJson(lancamento.id);
+}
+
+function extrairLancamentosPagamento(detalhe: RegistroJson): RegistroJson[] {
+  if (Array.isArray(detalhe.lancamentos)) return detalhe.lancamentos.map(registroJson);
+  const notaFiscal = registroJson(detalhe.notaFiscal);
+  if (Array.isArray(notaFiscal.lancamentos)) return notaFiscal.lancamentos.map(registroJson);
+  return [];
+}
+
+function idsDaSimulacaoPagamento(simulacao: unknown): string[] {
+  const ids = new Set<string>();
+  const raiz = registroJson(simulacao);
+  const idRaiz = textoJson(raiz.idLancamento)?.replace(/\D/g, '');
+  if (idRaiz) ids.add(idRaiz);
+
+  if (Array.isArray(raiz.lancamento)) {
+    for (const item of raiz.lancamento) {
+      const id = textoJson(registroJson(item).idLancamento)?.replace(/\D/g, '');
+      if (id) ids.add(id);
+    }
+  }
+
+  return [...ids];
+}
+
+const DIAS_RECONSULTA_DAE_NOVO = 30;
+
+function pagamentoIcmsJaConsultado(detalhe: RegistroJson): boolean {
+  return !!textoJson(registroJson(detalhe.pagamentoIcms).consultadoEm);
+}
+
+function dentroJanelaReconsultaDaeNovo(
+  emitidaEm: Date,
+  lancamentos: Array<{ vencimento: string | null }>
+): boolean {
+  const corte = new Date();
+  corte.setHours(0, 0, 0, 0);
+  corte.setDate(corte.getDate() - DIAS_RECONSULTA_DAE_NOVO);
+
+  const datas = lancamentos
+    .map((lancamento) => lancamento.vencimento ? new Date(lancamento.vencimento) : null)
+    .filter((data): data is Date => !!data && !Number.isNaN(data.getTime()));
+
+  const referencia = datas.length > 0
+    ? new Date(Math.max(...datas.map((data) => data.getTime())))
+    : new Date(emitidaEm);
+
+  return !Number.isNaN(referencia.getTime()) && referencia.getTime() >= corte.getTime();
+}
+
+function lotesDe<T>(itens: T[], tamanho: number): T[][] {
+  const lotes: T[][] = [];
+  for (let i = 0; i < itens.length; i += tamanho) lotes.push(itens.slice(i, i + tamanho));
+  return lotes;
+}
+
+function lancamentoAparentementePago(lancamento: RegistroJson, documentos: SitramDocumentoPagamento[]): boolean {
+  if (documentos.some((documento) => documento.pago === true || /pago|quitad|baixad|recolhid/i.test(`${documento.tipo ?? ''} ${documento.situacao ?? ''}`))) {
+    return true;
+  }
+
+  const valor = numeroJson(lancamento.valor) ?? numeroJson(lancamento.icmsDevido) ?? numeroJson(lancamento.icmsCalculado);
+  const valorPago = numeroJson(lancamento.valorPago);
+  if (valor !== null && valorPago !== null && valor > 0) return valorPago + 0.005 >= valor;
+  return /pago|quitad|baixad|recolhid/i.test(`${textoJson(lancamento.siuacaoDescricao) ?? ''} ${textoJson(lancamento.situacaoDescricao) ?? ''} ${textoJson(lancamento.situacao) ?? ''}`);
+}
+
+async function enriquecerDocumentosPagamento(
+  idLancamentoFront: string,
+  documentos: SitramDocumentoPagamento[],
+  cacheDetalhes: Map<string, unknown> = new Map()
+): Promise<DocumentoPagamentoIcms[]> {
+  const codigosParaDetalhar = new Set<string>();
+
+  for (const documento of documentos) {
+    const codigo = textoJson(documento.codigoDocumento)?.replace(/\D/g, '');
+    if (!codigo) continue;
+    if (documento.pago === true || /pago|emitido/i.test(`${documento.tipo ?? ''} ${documento.situacao ?? ''}`)) {
+      codigosParaDetalhar.add(codigo);
+    }
+    if (codigosParaDetalhar.size >= 8) break;
+  }
+
+  const detalhes = new Map<string, unknown>();
+  for (const codigo of codigosParaDetalhar) {
+    try {
+      if (!cacheDetalhes.has(codigo)) cacheDetalhes.set(codigo, await consultarDaePorCodigo(codigo));
+      detalhes.set(codigo, cacheDetalhes.get(codigo));
+    } catch {
+      // O documento continua util mesmo sem detalhe/codigo de barras.
+    }
+  }
+
+  const resultado = documentos.map((documento) => {
+    const codigo = textoJson(documento.codigoDocumento)?.replace(/\D/g, '') ?? null;
+    const detalheDae = codigo ? detalhes.get(codigo) : undefined;
+    const detalhe = registroJson(detalheDae);
+    const situacao = textoJson(documento.situacao) ?? textoJson(detalhe.descricaoSituacaoDebito);
+    const dataPagamento = textoJson(detalhe.dataPagamento);
+    const pago = documento.pago === true || !!dataPagamento || /pago|quitad|baixad|recolhid/i.test(`${documento.tipo ?? ''} ${situacao ?? ''}`);
+    const valorDocumento = textoJson(documento.valor);
+    const valorNormalizado = numeroMoedaJson(valorDocumento);
+    return {
+      idLancamentoFront,
+      tipo: textoJson(documento.tipo) ?? 'DAE',
+      situacao,
+      codigoDocumento: codigo,
+      valor: valorDocumento,
+      pago,
+      dataValidade: textoJson(documento.dataValidade) ?? textoJson(detalhe.dataVencimento),
+      codigoBarras: textoJson(detalhe.numeracaoCodigoBarras),
+      total: valorNormalizado ?? (valorDocumento ? null : totalDaeDetalheJson(detalhe, documento.valor)),
+      valorPago: pago ? valorNormalizado ?? numeroJson(detalhe.valorPago) : null,
+      dataPagamento,
+      detalheDae,
+    };
+  });
+  const mapa = new Map<string, DocumentoPagamentoIcms>();
+  for (const documento of resultado) {
+    const chave = [
+      documento.idLancamentoFront,
+      documento.codigoDocumento ?? '',
+      documento.tipo,
+      documento.valor ?? '',
+    ].join('|');
+    if (!mapa.has(chave)) mapa.set(chave, documento);
+  }
+  return [...mapa.values()];
+}
+
+function escaparHtml(valor: unknown): string {
+  return String(valor ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function formatarMoedaHtml(valor: unknown): string {
+  const numero = numeroJson(valor);
+  if (numero !== null) {
+    return numero.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+  }
+  return textoJson(valor) ?? '-';
+}
+
+function montarHtmlDaeEmitido(
+  nota: { chave: string; numero: string | null },
+  documento: DocumentoPagamentoIcms
+): Buffer {
+  const detalhe = registroJson(documento.detalheDae);
+  const codigo = documento.codigoDocumento ?? textoJson(detalhe.codigoIdentificadorUnico) ?? '-';
+  const codigoBarras = documento.codigoBarras ?? textoJson(detalhe.numeracaoCodigoBarras) ?? '';
+  const receita = [
+    textoJson(detalhe.codigoReceitaCodigo),
+    textoJson(detalhe.codigoReceitaDescricao),
+  ].filter(Boolean).join(' - ') || documento.tipo || 'DAE';
+  const status = documento.situacao ?? textoJson(detalhe.descricaoSituacaoDebito) ?? '-';
+  const vencimento = documento.dataValidade ?? textoJson(detalhe.dataVencimento);
+  const pagamento = textoJson(detalhe.dataPagamento);
+  const total = numeroJson(detalhe.total) ?? numeroJson(detalhe.valorPrincipal) ?? documento.valor;
+
+  const html = `<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <title>DAE SITRAM ${escaparHtml(codigo)}</title>
+  <style>
+    body{font-family:Arial,sans-serif;margin:24px;color:#111827}
+    .box{border:1px solid #d1d5db;border-radius:12px;padding:18px;max-width:820px}
+    h1{font-size:20px;margin:0 0 4px}
+    p{margin:6px 0}
+    .muted{color:#6b7280;font-size:12px}
+    .grid{display:grid;grid-template-columns:180px 1fr;gap:8px 12px;margin-top:16px}
+    .label{font-size:11px;text-transform:uppercase;color:#6b7280}
+    .value{font-weight:700}
+    .barcode{font-family:monospace;word-break:break-all;background:#f3f4f6;border-radius:8px;padding:10px;margin-top:8px}
+    @media print{body{margin:0}.box{border-radius:0;border:none}}
+  </style>
+</head>
+<body>
+  <section class="box">
+    <h1>DAE emitido no SITRAM</h1>
+    <p class="muted">Anexo gerado automaticamente pelo DanfeCollector. Nao emite DAE novo; apenas registra o DAE que ja existia na consulta do SITRAM.</p>
+    <div class="grid">
+      <div class="label">NF</div><div class="value">${escaparHtml(nota.numero ?? '-')}</div>
+      <div class="label">Chave NF-e</div><div class="value">${escaparHtml(nota.chave)}</div>
+      <div class="label">Codigo DAE</div><div class="value">${escaparHtml(codigo)}</div>
+      <div class="label">Receita</div><div class="value">${escaparHtml(receita)}</div>
+      <div class="label">Status</div><div class="value">${escaparHtml(status)}</div>
+      <div class="label">Valor</div><div class="value">${escaparHtml(formatarMoedaHtml(total))}</div>
+      <div class="label">Vencimento</div><div class="value">${escaparHtml(vencimento ?? '-')}</div>
+      <div class="label">Pagamento</div><div class="value">${escaparHtml(pagamento ?? '-')}</div>
+    </div>
+    ${codigoBarras ? `<p class="label" style="margin-top:18px">Codigo de barras</p><div class="barcode">${escaparHtml(codigoBarras)}</div>` : ''}
+  </section>
+</body>
+</html>`;
+
+  return Buffer.from(html, 'utf8');
+}
+
+async function anexarDaesEmitidosSeNovo(
+  nota: { id: number; chave: string; numero: string | null },
+  documentos: DocumentoPagamentoIcms[],
+  criadoPor: string
+): Promise<number> {
+  let criados = 0;
+  for (const documento of documentos) {
+    const codigo = documento.codigoDocumento?.replace(/\D/g, '');
+    if (!codigo) continue;
+
+    const arquivoNome = `dae-sitram-${codigo}.html`;
+    const jaExiste = await prisma.anexo.findFirst({
+      where: { notaId: nota.id, arquivoNome },
+      select: { id: true },
+    });
+    if (jaExiste) continue;
+
+    const bytes = montarHtmlDaeEmitido(nota, documento);
+    const caminho = await salvarArquivo(nota.id, 'text/html', bytes);
+    await prisma.anexo.create({
+      data: {
+        notaId: nota.id,
+        nome: `DAE SITRAM emitido ${codigo}`,
+        arquivoNome,
+        mime: 'text/html',
+        tamanho: bytes.length,
+        caminho,
+        criadoPor,
+      },
+    });
+    criados++;
+  }
+  return criados;
+}
+
+export async function consultarPagamentoIcmsNota(notaId: number): Promise<ResultadoPagamentoIcms> {
+  let usuario;
+  try {
+    usuario = await exigirUsuario();
+  } catch (error: unknown) {
+    return { success: false, message: (error as Error).message, documentos: [], simulacoes: [] };
+  }
+
+  let nota = await prisma.notaFiscal.findUnique({
+    where: { id: notaId },
+    include: { cnpj: { select: { cnpj: true, razaoSocial: true } } },
+  });
+  if (!nota) return { success: false, message: 'Nota nao encontrada.', documentos: [], simulacoes: [] };
+  if (!usuarioPodeAcessarCnpj(usuario, nota.cnpjId)) {
+    return { success: false, message: 'Acesso negado para esta nota.', documentos: [], simulacoes: [] };
+  }
+
+  let detalhe = registroJson(nota.sitramDetalhe ? JSON.parse(nota.sitramDetalhe) : {});
+  let lancamentos = Array.isArray(detalhe.lancamentos) ? detalhe.lancamentos.map(registroJson) : [];
+
+  if (lancamentos.length === 0) {
+    await salvarRetornoSitramPorNfe(nota.chave);
+    nota = await prisma.notaFiscal.findUnique({
+      where: { id: notaId },
+      include: { cnpj: { select: { cnpj: true, razaoSocial: true } } },
+    });
+    if (!nota) return { success: false, message: 'Nota nao encontrada apos reconsulta SITRAM.', documentos: [], simulacoes: [] };
+    detalhe = registroJson(nota?.sitramDetalhe ? JSON.parse(nota.sitramDetalhe) : {});
+    lancamentos = Array.isArray(detalhe.lancamentos) ? detalhe.lancamentos.map(registroJson) : [];
+  }
+
+  const idsLancamento = [...new Set(lancamentos.map(idLancamentoPagamento).filter((id): id is string => !!id))];
+  if (idsLancamento.length === 0) {
+    return { success: false, message: 'A NF nao tem lancamento SITRAM com id para consultar pagamento.', documentos: [], simulacoes: [] };
+  }
+
+  const documentosPorLancamento = await consultarDocumentosDaeBatch(idsLancamento);
+  const documentosEnriquecidos: DocumentoPagamentoIcms[] = [];
+  const idsEmAberto: string[] = [];
+
+  for (const lancamento of lancamentos) {
+    const id = idLancamentoPagamento(lancamento);
+    if (!id) continue;
+    const documentos = documentosPorLancamento[id] ?? [];
+    const enriquecidos = await enriquecerDocumentosPagamento(id, documentos);
+    documentosEnriquecidos.push(...enriquecidos);
+    if (!lancamentoAparentementePago(lancamento, documentos)) idsEmAberto.push(id);
+  }
+
+  const simulacoes = idsEmAberto.length > 0 ? await simularDaeNotaFiscal(idsEmAberto).catch(() => []) : [];
+  const suspeitasDuplicidade = detectarSuspeitasPagamentoDuplicadoIcms(documentosEnriquecidos);
+  const lancamentosAtualizados = lancamentos.map((lancamento) => {
+    const id = idLancamentoPagamento(lancamento);
+    const documentos = id ? documentosEnriquecidos.filter((documento) => documento.idLancamentoFront === id) : [];
+    return {
+      ...lancamento,
+      documentosPagamento: documentos,
+      documentosPagamentoConsultadosEm: new Date().toISOString(),
+    };
+  });
+
+  const detalheAtualizado = {
+    ...detalhe,
+    lancamentos: lancamentosAtualizados,
+    pagamentoIcms: {
+      consultadoEm: new Date().toISOString(),
+      status: '',
+      documentos: documentosEnriquecidos,
+      simulacoes,
+      suspeitasDuplicidade,
+      origem: 'api-pagamento',
+    },
+  };
+  const statusAtualizado = statusDaeEfetivo({
+    sitramDetalhe: JSON.stringify(detalheAtualizado),
+    sitramDaeStatus: nota.sitramDaeStatus,
+    sitramDaeResumo: nota.sitramDaeResumo,
+    pagamentoManualEm: nota.pagamentoManualEm,
+  }) || (simulacoes.length > 0 ? 'EM_ABERTO' : 'CONSULTADO');
+  detalheAtualizado.pagamentoIcms.status = statusAtualizado;
+
+  await prisma.notaFiscal.update({
+    where: { id: notaId },
+    data: {
+      sitramConsultadaEm: new Date(),
+      sitramDaeStatus: statusAtualizado,
+      sitramDetalhe: JSON.stringify(detalheAtualizado),
+    },
+  });
+  const anexosCriados = await anexarDaesEmitidosSeNovo(nota, documentosEnriquecidos, usuario.login);
+
+  revalidatePath('/');
+
+  const pagos = documentosEnriquecidos.filter((documento) => documento.pago).length;
+  const emitidos = documentosEnriquecidos.filter((documento) => /emitido/i.test(documento.tipo)).length;
+  const resumoDocs = documentosEnriquecidos.length
+    ? `${pagos} pago(s), ${emitidos} emitido(s)`
+    : 'nenhum DAE emitido ainda';
+  const resumoAnexos = anexosCriados > 0 ? `, ${anexosCriados} anexo(s) DAE criado(s)` : '';
+  const resumoDuplicidade = suspeitasDuplicidade.length > 0
+    ? `, ${suspeitasDuplicidade.length} suspeita(s) de pagamento duplicado`
+    : '';
+
+  return {
+    success: true,
+    message: `Pagamento ICMS consultado: ${textoDaeSitramInterno(statusAtualizado)} (${resumoDocs}${resumoAnexos}${resumoDuplicidade}).`,
+    statusDae: statusAtualizado,
+    documentos: documentosEnriquecidos,
+    simulacoes,
+    anexosCriados,
+    suspeitasDuplicidade: suspeitasDuplicidade.length,
+  };
+}
+
+export async function consultarPagamentoIcmsLote(input: ConsultaPagamentoIcmsLoteInput = {}): Promise<ResultadoPagamentoIcmsLote> {
+  let usuario;
+  try {
+    usuario = await exigirUsuario();
+  } catch (error: unknown) {
+    return {
+      success: false,
+      message: (error as Error).message,
+      totalElegiveis: 0,
+      processadas: 0,
+      atualizadas: 0,
+      pagas: 0,
+      emAberto: 0,
+      consultadas: 0,
+      semLancamento: 0,
+      erros: 0,
+      limiteAplicado: false,
+      detalhes: [],
+    };
+  }
+
+  const idsFiltro = [...new Set((input.notaIds ?? []).filter((id) => Number.isInteger(id) && id > 0))];
+  const limite = input.limite === undefined
+    ? Number.MAX_SAFE_INTEGER
+    : Math.min(Math.max(Math.floor(input.limite), 1), 5000);
+  const where: Prisma.NotaFiscalWhereInput = {
+    ...whereNotaPermitida(usuario),
+    sitramDetalhe: { not: null },
+    situacaoSefaz: { notIn: ['CANCELADA', 'DENEGADA'] },
+    OR: [
+      { sitramDaeStatus: null },
+      { sitramDaeStatus: { notIn: ['SEM_DAE', 'NAO_ENCONTRADA'] } },
+    ],
+  };
+
+  if (idsFiltro.length > 0) where.id = { in: idsFiltro };
+  if (input.cnpjId && Number.isInteger(input.cnpjId)) {
+    if (!usuarioPodeAcessarCnpj(usuario, input.cnpjId)) {
+      return {
+        success: false,
+        message: 'Acesso negado para esta empresa.',
+        totalElegiveis: 0,
+        processadas: 0,
+        atualizadas: 0,
+        pagas: 0,
+        emAberto: 0,
+        consultadas: 0,
+        semLancamento: 0,
+        erros: 0,
+        limiteAplicado: false,
+        detalhes: [],
+      };
+    }
+    where.cnpjId = input.cnpjId;
+  }
+  if (input.ano && Number.isInteger(input.ano)) {
+    where.emitidaEm = {
+      gte: new Date(input.ano, 0, 1),
+      lt: new Date(input.ano + 1, 0, 1),
+    };
+  }
+
+  const notas = await prisma.notaFiscal.findMany({
+    where,
+    orderBy: { emitidaEm: 'desc' },
+    select: {
+      id: true,
+      chave: true,
+      numero: true,
+      emitidaEm: true,
+      sitramDaeStatus: true,
+      sitramDaeResumo: true,
+      sitramDetalhe: true,
+      pagamentoManualEm: true,
+    },
+  });
+
+  const elegiveis = notas.flatMap((nota) => {
+    let detalhe: RegistroJson;
+    try {
+      detalhe = registroJson(nota.sitramDetalhe ? JSON.parse(nota.sitramDetalhe) : {});
+    } catch {
+      return [];
+    }
+
+    const lancamentos = extrairLancamentosPagamento(detalhe);
+    if (lancamentos.length === 0) return [];
+
+    const resumo = extrairResumoDae(nota);
+    const lancamentosComId: Array<{
+      id: string;
+      normalizado: ReturnType<typeof extrairResumoDae>['lancamentos'][number] | undefined;
+    }> = [];
+
+    for (let indice = 0; indice < lancamentos.length; indice++) {
+      const lancamento = lancamentos[indice];
+      const id = idLancamentoPagamento(lancamento)?.replace(/\D/g, '') ?? null;
+      if (!id) continue;
+      const normalizado = resumo.lancamentos[indice];
+      if (normalizado && lancamentosVisiveisDae([normalizado]).length === 0) continue;
+      lancamentosComId.push({ id, normalizado });
+    }
+
+    if (lancamentosComId.length === 0) return [];
+    const lancamentosNormalizados = lancamentosComId
+      .map((item) => item.normalizado)
+      .filter((lancamento): lancamento is ReturnType<typeof extrairResumoDae>['lancamentos'][number] => !!lancamento);
+    const ids = lancamentosComId.map((item) => item.id);
+    const daePago = statusDaeEfetivo(nota) === 'PAGO' ||
+      !!nota.pagamentoManualEm ||
+      (lancamentosNormalizados.length > 0 && lancamentosNormalizados.every((lancamento) => lancamento.pago));
+    const consultado = pagamentoIcmsJaConsultado(detalhe);
+    const podeReconsultarDaeNovo = dentroJanelaReconsultaDaeNovo(nota.emitidaEm, lancamentosNormalizados);
+
+    if (daePago && consultado && !podeReconsultarDaeNovo) return [];
+
+    const primeiroVencimento = lancamentosNormalizados
+      .map((lancamento) => lancamento.vencimento)
+      .filter((vencimento): vencimento is string => !!vencimento)
+      .sort()[0] ?? '9999-12-31';
+
+    return [{ nota, detalhe, lancamentos, ids: [...new Set(ids)], primeiroVencimento, daePago }];
+  }).sort((a, b) => {
+    if (a.daePago !== b.daePago) return a.daePago ? 1 : -1;
+    return a.primeiroVencimento.localeCompare(b.primeiroVencimento);
+  });
+
+  const totalElegiveis = elegiveis.length;
+  const selecionadas = elegiveis.slice(0, limite);
+  const limiteAplicado = input.limite !== undefined && totalElegiveis > selecionadas.length;
+
+  if (selecionadas.length === 0) {
+    return {
+      success: true,
+      message: 'Nenhuma NF com DAE pendente de consulta de pagamento.',
+      totalElegiveis,
+      processadas: 0,
+      atualizadas: 0,
+      pagas: 0,
+      emAberto: 0,
+      consultadas: 0,
+      semLancamento: notas.length,
+      erros: 0,
+      limiteAplicado: false,
+      detalhes: [],
+    };
+  }
+
+  const idsLancamento = [...new Set(selecionadas.flatMap((item) => item.ids))];
+  const documentosPorLancamento: Record<string, SitramDocumentoPagamento[]> = {};
+
+  for (const lote of lotesDe(idsLancamento, 80)) {
+    const documentos = await consultarDocumentosDaeBatch(lote);
+    Object.assign(documentosPorLancamento, documentos);
+  }
+
+  const documentosEnriquecidosPorId = new Map<string, DocumentoPagamentoIcms[]>();
+  const cacheDetalhesDae = new Map<string, unknown>();
+  for (const id of idsLancamento) {
+    documentosEnriquecidosPorId.set(
+      id,
+      await enriquecerDocumentosPagamento(id, documentosPorLancamento[id] ?? [], cacheDetalhesDae)
+    );
+  }
+
+  const idsEmAberto = [...new Set(selecionadas.flatMap((item) =>
+    item.lancamentos
+      .map((lancamento) => {
+        const id = idLancamentoPagamento(lancamento)?.replace(/\D/g, '') ?? null;
+        if (!id || !item.ids.includes(id)) return null;
+        return lancamentoAparentementePago(lancamento, documentosPorLancamento[id] ?? []) ? null : id;
+      })
+      .filter((id): id is string => !!id)
+  ))];
+
+  const simulacoesTodas: unknown[] = [];
+  for (const lote of lotesDe(idsEmAberto, 30)) {
+    try {
+      simulacoesTodas.push(...await simularDaeNotaFiscal(lote));
+    } catch {
+      // A simulacao ajuda o boleto futuro, mas a consulta de documentos continua valida sem ela.
+    }
+  }
+
+  const idsPorSimulacao = new Map<unknown, string[]>();
+  for (const simulacao of simulacoesTodas) idsPorSimulacao.set(simulacao, idsDaSimulacaoPagamento(simulacao));
+
+  const detalhes: ResultadoPagamentoIcmsLoteDetalhe[] = [];
+  let atualizadas = 0;
+  let pagas = 0;
+  let emAberto = 0;
+  let consultadas = 0;
+  let erros = 0;
+  let anexosCriados = 0;
+  let suspeitasDuplicidadeTotal = 0;
+  let notasComSuspeitaDuplicidade = 0;
+
+  for (const item of selecionadas) {
+    try {
+      const documentosEnriquecidos = item.ids.flatMap((id) => documentosEnriquecidosPorId.get(id) ?? []);
+      const simulacoes = simulacoesTodas.filter((simulacao) => {
+        const ids = idsPorSimulacao.get(simulacao) ?? [];
+        return ids.some((id) => item.ids.includes(id));
+      });
+      const suspeitasDuplicidade = detectarSuspeitasPagamentoDuplicadoIcms(documentosEnriquecidos);
+      if (suspeitasDuplicidade.length > 0) {
+        suspeitasDuplicidadeTotal += suspeitasDuplicidade.length;
+        notasComSuspeitaDuplicidade++;
+      }
+      const agoraIso = new Date().toISOString();
+      const lancamentosAtualizados = item.lancamentos.map((lancamento) => {
+        const id = idLancamentoPagamento(lancamento)?.replace(/\D/g, '') ?? null;
+        const documentos = id ? documentosEnriquecidos.filter((documento) => documento.idLancamentoFront === id) : [];
+        return {
+          ...lancamento,
+          documentosPagamento: documentos,
+          documentosPagamentoConsultadosEm: agoraIso,
+        };
+      });
+
+      const detalheAtualizado = {
+        ...item.detalhe,
+        lancamentos: lancamentosAtualizados,
+        pagamentoIcms: {
+          consultadoEm: agoraIso,
+          status: '',
+          documentos: documentosEnriquecidos,
+          simulacoes,
+          suspeitasDuplicidade,
+          origem: 'api-pagamento-lote',
+        },
+      };
+      const statusAtualizado = statusDaeEfetivo({
+        sitramDetalhe: JSON.stringify(detalheAtualizado),
+        sitramDaeStatus: item.nota.sitramDaeStatus,
+        sitramDaeResumo: item.nota.sitramDaeResumo,
+        pagamentoManualEm: item.nota.pagamentoManualEm,
+      }) || (simulacoes.length > 0 ? 'EM_ABERTO' : 'CONSULTADO');
+      detalheAtualizado.pagamentoIcms.status = statusAtualizado;
+
+      await prisma.notaFiscal.update({
+        where: { id: item.nota.id },
+        data: {
+          sitramConsultadaEm: new Date(),
+          sitramDaeStatus: statusAtualizado,
+          sitramDetalhe: JSON.stringify(detalheAtualizado),
+        },
+      });
+      anexosCriados += await anexarDaesEmitidosSeNovo(item.nota, documentosEnriquecidos, usuario.login);
+
+      atualizadas++;
+      if (statusAtualizado === 'PAGO') pagas++;
+      else if (statusAtualizado === 'EM_ABERTO') emAberto++;
+      else consultadas++;
+
+      detalhes.push({
+        notaId: item.nota.id,
+        chave: item.nota.chave,
+        numero: item.nota.numero,
+        status: suspeitasDuplicidade.length > 0
+          ? 'duplicado'
+          : statusAtualizado === 'PAGO'
+            ? 'pago'
+            : statusAtualizado === 'EM_ABERTO'
+              ? 'em-aberto'
+              : 'consultado',
+        detalhe: suspeitasDuplicidade.length > 0
+          ? `${textoDaeSitramInterno(statusAtualizado)} - ${suspeitasDuplicidade.length} suspeita(s) de duplicidade`
+          : textoDaeSitramInterno(statusAtualizado),
+      });
+    } catch (error: unknown) {
+      erros++;
+      detalhes.push({
+        notaId: item.nota.id,
+        chave: item.nota.chave,
+        numero: item.nota.numero,
+        status: 'erro',
+        detalhe: (error as Error).message,
+      });
+    }
+  }
+
+  revalidatePath('/');
+
+  return {
+    success: erros === 0,
+    message:
+      `Consulta pagamento ICMS em lote: ${selecionadas.length}/${totalElegiveis} NF(s) com DAE processada(s), ` +
+      `${pagas} paga(s), ${emAberto} em aberto, ${erros} erro(s), ${anexosCriados} anexo(s) DAE` +
+      `${suspeitasDuplicidadeTotal > 0 ? `, ${notasComSuspeitaDuplicidade} NF(s) com suspeita de duplicidade` : ''}` +
+      `${limiteAplicado ? `. Limite desta rodada: ${limite}; execute novamente para o restante.` : '.'}`,
+    totalElegiveis,
+    processadas: selecionadas.length,
+    atualizadas,
+    pagas,
+    emAberto,
+    consultadas,
+    semLancamento: Math.max(0, notas.length - totalElegiveis),
+    erros,
+    limiteAplicado,
+    detalhes: detalhes.slice(0, 80),
+    anexosCriados,
+    suspeitasDuplicidade: suspeitasDuplicidadeTotal,
+    notasComSuspeitaDuplicidade,
+  };
+}
+
+function textoDaeSitramInterno(status: string): string {
+  if (status === 'PAGO') return 'pago';
+  if (status === 'EM_ABERTO') return 'em aberto';
+  if (status === 'SEM_DAE') return 'sem DAE';
+  return status.toLowerCase();
+}
 
 export async function alternarEtiqueta(notaId: number, etiqueta: string): Promise<ActionResult> {
   const negado = await checarUsuarioAction();

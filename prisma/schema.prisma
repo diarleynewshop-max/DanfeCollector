@@ -120,6 +120,13 @@ model NotaFiscal {
   cnpjId        Int
   cnpj          Cnpj     @relation(fields: [cnpjId], references: [id])
   anexos        Anexo[]
+
+  // Índices para as colunas usadas em filtro/ordenação no painel e relatórios.
+  // A FK cnpjId não é indexada automaticamente no Postgres.
+  @@index([cnpjId, emitidaEm(sort: Desc)])
+  @@index([cnpjId, status, manifestadaEm])
+  @@index([cnpjId, sitramDaeStatus])
+  @@index([cnpjId, situacaoSefaz])
 }
 
 model DaeCompartilhado {

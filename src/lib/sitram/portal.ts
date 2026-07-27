@@ -3,6 +3,9 @@ const PORTAL_API_URL = process.env.SITRAM_PORTAL_API_URL || 'https://portal-sitr
 export interface SitramPortalPage<T> {
   content?: T[];
   totalElements?: number;
+  totalPages?: number;
+  number?: number;
+  size?: number;
 }
 
 export interface SitramPortalNotaFiscal {
@@ -44,6 +47,34 @@ export interface SitramPortalLancamento {
   situacaoDescricao?: string;
   situacao?: string;
   identificadorUnico?: string | number;
+}
+
+export interface SitramPortalItemNotaFiscal {
+  id?: number;
+  numero?: string | number;
+  codigoProduto?: string | number;
+  ncm?: string;
+  ncmDescricao?: string;
+  descricaoProduto?: string;
+  cfop?: string | number;
+  cfopDescricao?: string;
+  codigoCSTA?: string | number;
+  codigoCSTB?: string | number;
+  quantidade?: number;
+  valorUnitario?: number;
+  valorTotal?: number;
+  valorAliquota?: number;
+  valorBc?: number;
+  valorBcICMSSt?: number;
+  valorICMSSt?: number;
+  valorIcmsDestacado?: number;
+  icms?: number;
+  valorFecop?: number;
+  valorIPI?: number;
+  tipoRegime?: string | number;
+  tipoCobranca?: string | number;
+  nomeConfiguracao?: string;
+  tipoAlteracaoNotaItem?: string;
 }
 
 function portalUrl(pathname: string, query?: Record<string, string | number | undefined>): string {
@@ -95,4 +126,33 @@ export async function consultarLancamentosNotaFiscalSitram(
   idNotaFiscal: number
 ): Promise<SitramPortalLancamento[]> {
   return portalGet<SitramPortalLancamento[]>(`/api-nota/notafiscal/lancamentos-nota-fiscal/${idNotaFiscal}`);
+}
+
+export async function consultarItensNotaFiscalSitram(
+  idNotaFiscal: number,
+  page = 0,
+  size = 100
+): Promise<SitramPortalPage<SitramPortalItemNotaFiscal>> {
+  return portalGet<SitramPortalPage<SitramPortalItemNotaFiscal>>(
+    `/api-nota/notafiscal/itens-nota-fiscal/${idNotaFiscal}`,
+    { page, size }
+  );
+}
+
+export async function consultarTodosItensNotaFiscalSitram(
+  idNotaFiscal: number,
+  size = 100
+): Promise<SitramPortalItemNotaFiscal[]> {
+  const itens: SitramPortalItemNotaFiscal[] = [];
+  let paginaAtual = 0;
+  let totalPaginas = 1;
+
+  do {
+    const pagina = await consultarItensNotaFiscalSitram(idNotaFiscal, paginaAtual, size);
+    itens.push(...(pagina.content ?? []));
+    totalPaginas = Math.max(1, Math.min(Number(pagina.totalPages ?? 1), 20));
+    paginaAtual += 1;
+  } while (paginaAtual < totalPaginas);
+
+  return itens;
 }

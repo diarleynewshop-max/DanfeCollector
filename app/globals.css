@@ -57,6 +57,40 @@ select:focus-visible,
   transform: translateY(-1px);
 }
 
+.home-shell {
+  animation: report-enter 280ms ease-out both;
+}
+
+.home-hero {
+  position: relative;
+  background:
+    radial-gradient(circle at 88% 18%, rgb(255 255 255 / 13%), transparent 25%),
+    radial-gradient(circle at 72% 115%, rgb(169 112 26 / 30%), transparent 34%),
+    linear-gradient(135deg, #1d1913 0%, #2d271d 55%, #3a3022 100%);
+}
+
+.home-hero::after {
+  content: '';
+  position: absolute;
+  width: 220px;
+  height: 220px;
+  right: -70px;
+  top: -105px;
+  border: 1px solid rgb(255 255 255 / 10%);
+  border-radius: 999px;
+  box-shadow: 0 0 0 40px rgb(255 255 255 / 2.5%), 0 0 0 80px rgb(255 255 255 / 2%);
+}
+
+.home-kpi {
+  transition: transform 180ms ease, box-shadow 180ms ease, border-color 180ms ease;
+}
+
+.home-kpi:hover {
+  transform: translateY(-2px);
+  border-color: var(--border-strong);
+  box-shadow: 0 12px 28px rgb(46 38 25 / 8%);
+}
+
 .bar-progress {
   transform-origin: left;
   animation: bar-grow 420ms ease-out both;
@@ -79,6 +113,10 @@ select:focus-visible,
   }
 
   .report-card:hover {
+    transform: none;
+  }
+
+  .home-kpi:hover {
     transform: none;
   }
 }

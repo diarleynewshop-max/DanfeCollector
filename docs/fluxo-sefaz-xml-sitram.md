@@ -350,29 +350,17 @@ Rotas internas:
 - exige nota `COMPLETA`;
 - le XML do disco;
 - parseia `procNFe`;
-- renderiza DANFE em HTML para impressao.
+- renderiza DANFE em HTML no formato de folha para impressao;
+- o fluxo principal para baixar PDF agora e abrir essa rota e usar `Ctrl+P`.
 
 `/danfe/[chave]/pdf`:
 
-- exige login;
-- valida permissao;
-- exige XML completo;
-- se `pdfPath` ja existe, serve o PDF do disco;
-- se nao existe, envia XML para MeuDanfe e recebe PDF em base64;
-- valida se resposta comeca com `%PDF`;
-- salva PDF ao lado do XML;
-- atualiza `NotaFiscal.pdfPath`.
-
-Endpoint externo usado para PDF:
-
-```txt
-https://ws.meudanfe.com/api/v1/get/nfe/xmltodanfepdf/API
-```
+- mantida apenas por compatibilidade;
+- redireciona para `/danfe/[chave]`.
 
 Cuidados:
 
-- PDF oficial depende de servico externo MeuDanfe.
-- Se MeuDanfe falhar, o HTML interno ainda pode ser usado para impressao.
+- A DANFE impressa passa a depender so do HTML interno do sistema e do dialogo de impressao do navegador.
 - Nunca mandar resumo `resNFe` para DANFE completa.
 
 ## 10. SITRAM - consulta por NF-e
@@ -394,6 +382,7 @@ Rotas externas:
 ```txt
 GET /api-nota/notafiscal/por-chave-de-acesso/{chave}?page=0&size=25
 GET /api-nota/notafiscal/lancamentos-nota-fiscal/{idNotaFiscal}
+GET /api-nota/notafiscal/itens-nota-fiscal/{idNotaFiscal}?page=0&size=100
 ```
 
 Fluxo:
@@ -402,8 +391,8 @@ Fluxo:
 2. Consulta o portal por chave.
 3. Se nao encontrar, marca a nota como `NAO_ENCONTRADA`.
 4. Se retornar mais de um registro, usa o mais recente por `dataInclusao`, `dataFatoGerador`, `dataEmissao` ou `id`.
-5. Se existir `id` da nota no SITRAM, consulta lancamentos.
-6. Atualiza a nota no banco com status de selagem, situacao, DAE e detalhe JSON.
+5. Se existir `id` da nota no SITRAM, consulta lancamentos e itens da nota.
+6. Atualiza a nota no banco com status de selagem, situacao, DAE, itens e detalhe JSON.
 
 Campos atualizados:
 
@@ -415,7 +404,13 @@ Campos atualizados:
 - `sitramDaeStatus`;
 - `sitramDaeResumo`;
 - `sitramDaeUrl`;
-- `sitramDetalhe`.
+- `sitramDetalhe`, com `notaFiscal`, `lancamentos` e `itens`.
+
+Uso do espelho SITRAM:
+
+- O sistema pode montar `/danfe-sitram/{chave}` com dados do SITRAM para impressao via `Ctrl+P`.
+- Esse documento e um espelho operacional, nao substitui o DANFE oficial do XML `procNFe`.
+- Para notas antigas ja consultadas antes desta melhoria, e preciso reconsultar o SITRAM para preencher `itens`.
 
 Status DAE normalizados:
 
@@ -432,6 +427,38 @@ Cuidados:
 - `NAO_ENCONTRADA` nao significa erro da NF-e; pode significar que a nota nao passou pelo fluxo SITRAM.
 - O status manual de pagamento (`pagamentoManualEm`) tem prioridade sobre o status retornado pelo SITRAM.
 - Lancamento FECOP codigo `2020` e ocultado na visualizacao normal de DAE.
+- A memoria completa da calculadora ICMS do portal ainda nao esta integrada; hoje o espelho usa os campos do grid de itens e os lancamentos/DAE retornados pela API.
+
+## 10.1. SITRAM - pagamento ICMS / DAE por NF-e
+
+Arquivos principais:
+
+- `src/lib/sitram/pagamento-icms-portal.ts`.
+- `src/lib/sitram/dae.ts`.
+- `src/lib/actions.ts` - `consultarPagamentoIcmsNota`.
+
+Rotas externas confirmadas:
+
+```txt
+GET  /api-pagamento/dae/buscarNumeroDae?idLancamento={idLancamentoFront}
+POST /api-pagamento/dae/informacoes-documentos/batch
+GET  /api-pagamento/dae/simularDaeNotaFiscal?idsLancamento={idLancamentoFront}
+POST /api-pagamento/pagamento/dae
+```
+
+Fluxo implementado:
+
+1. A nota precisa ter lancamentos SITRAM em `sitramDetalhe.lancamentos`.
+2. O sistema usa `idLancamentoFront`, nao o `id` interno, para consultar documentos DAE.
+3. Se existir `DAE PAGO`, o status efetivo passa a ser `PAGO`.
+4. Se existir `DAE EMITIDO`, o sistema guarda codigo do documento, validade e codigo de barras quando retornado.
+5. Se nao existir documento emitido e houver lancamento em aberto, o sistema faz simulacao para mostrar valor/vencimento.
+
+Cuidados:
+
+- IDs do SITRAM sao maiores que o limite seguro de `number` em JavaScript; devem ser tratados como string.
+- A emissao real de DAE (`/dae/emitir-dae`) nao deve rodar automaticamente. Deve ser um clique explicito do usuario, pois cria documento de arrecadacao.
+- A API confirmada retorna codigo de barras do DAE; QR Code so deve ser exibido se o SITRAM retornar esse dado em endpoint especifico ou PDF oficial.
 
 ## 11. SITRAM - consulta por MDF-e
 
@@ -671,4 +698,3 @@ Erro 632 ou fora de prazo:
 
 - Buscar XML com contador/ERP.
 - Importar pela pasta local.
-

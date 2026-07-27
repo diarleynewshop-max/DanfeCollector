@@ -20,6 +20,7 @@ export const MIMES_ACEITOS: Record<string, string> = {
   'image/gif': 'gif',
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
   'application/vnd.ms-excel': 'xls',
+  'text/html': 'html',
   'text/csv': 'csv',
   'application/csv': 'csv',
 };

@@ -1,53 +1,126 @@
-import type { DanfeData } from '@/lib/sefaz/detalhe';
+import type { DanfeData, DanfeItem } from '@/lib/sefaz/detalhe';
+import type { SitramEspelhoData, SitramEspelhoItem } from '@/lib/sitram/espelho';
 
-function moeda(v: number): string {
+function moeda(v: number | null | undefined): string {
+  if (v === null || v === undefined) return '-';
   return v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 }
-function qtd(v: number): string {
+
+function qtd(v: number | null | undefined): string {
+  if (v === null || v === undefined) return '-';
   return v.toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 4 });
 }
 
-export default function ItensView({ danfe }: { danfe: DanfeData }) {
+function normalizarTexto(v: string | number | null | undefined): string {
+  return String(v ?? '').replace(/\D/g, '').replace(/^0+/, '');
+}
+
+function itemSitramCorrespondente(
+  item: DanfeItem,
+  espelho: SitramEspelhoData | null | undefined
+): SitramEspelhoItem | null {
+  if (!espelho?.itens?.length) return null;
+
+  const nItem = normalizarTexto(item.nItem);
+  const codigo = normalizarTexto(item.codigo);
+  const ncm = normalizarTexto(item.ncm);
+  const cfop = normalizarTexto(item.cfop);
+
+  return espelho.itens.find((sitramItem) => normalizarTexto(sitramItem.nItem) === nItem)
+    ?? espelho.itens.find((sitramItem) => codigo && normalizarTexto(sitramItem.codigo) === codigo)
+    ?? espelho.itens.find((sitramItem) =>
+      ncm && cfop && normalizarTexto(sitramItem.ncm) === ncm && normalizarTexto(sitramItem.cfop) === cfop
+    )
+    ?? null;
+}
+
+function tributoPorItemXml(
+  item: DanfeItem,
+  espelho: SitramEspelhoData | null | undefined
+): { label: string; classe: string } | null {
+  const itemSitram = itemSitramCorrespondente(item, espelho);
+
+  if (itemSitram?.temSt || item.vBCST > 0 || item.vICMSST > 0) {
+    return { label: '1031 - SUBT', classe: 'bg-red-100 text-red-700' };
+  }
+
+  if (itemSitram?.temAntecipacao) {
+    return { label: '1023 - ANTC', classe: 'bg-amber-100 text-amber-800' };
+  }
+
+  return null;
+}
+
+export default function ItensView({
+  danfe,
+  espelho,
+}: {
+  danfe: DanfeData;
+  espelho?: SitramEspelhoData | null;
+}) {
   if (danfe.itens.length === 0) {
-    return <p className="text-sm text-gray-400 py-4">Nenhum item nesta nota.</p>;
+    return <p className="py-4 text-sm text-gray-400">Nenhum item nesta nota.</p>;
   }
 
   return (
     <div className="space-y-2">
-      <div className="flex justify-between text-xs text-gray-500 px-1">
+      <div className="flex justify-between px-1 text-xs text-gray-500">
         <span>{danfe.itens.length} item(ns)</span>
         <span>
           Total dos produtos: <strong className="text-gray-700">{moeda(danfe.total.vProd)}</strong>
         </span>
       </div>
 
-      {danfe.itens.map((it) => (
-        <div key={it.nItem} className="border border-gray-200 rounded-lg p-3 hover:bg-gray-50">
-          <div className="flex items-start gap-3">
-            <span className="shrink-0 w-7 h-7 rounded-full bg-gray-800 text-white text-xs font-bold flex items-center justify-center">
-              {it.nItem}
-            </span>
-            <div className="min-w-0 flex-1">
-              <p className="font-medium text-sm text-gray-800">{it.descricao}</p>
-              <p className="text-xs text-gray-500 mt-0.5">
-                Cód. {it.codigo}
-                {it.ean && it.ean !== 'SEM GTIN' ? ` · EAN ${it.ean}` : ''} · NCM {it.ncm} · CFOP {it.cfop}
-              </p>
-              <div className="flex flex-wrap gap-x-6 gap-y-1 mt-2 text-xs">
-                <span className="text-gray-500">
-                  Qtd: <strong className="text-gray-700">{qtd(it.quantidade)} {it.unidade}</strong>
-                </span>
-                <span className="text-gray-500">
-                  Unitário: <strong className="text-gray-700">{moeda(it.valorUnitario)}</strong>
-                </span>
-                <span className="text-gray-500">
-                  Total: <strong className="text-gray-800">{moeda(it.valorTotal)}</strong>
-                </span>
+      {danfe.itens.map((it) => {
+        const tributo = tributoPorItemXml(it, espelho);
+
+        return (
+          <div key={it.nItem} className="rounded-lg border border-gray-200 p-3 hover:bg-gray-50">
+            <div className="flex items-start gap-3">
+              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gray-800 text-xs font-bold text-white">
+                {it.nItem}
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-start gap-2">
+                  <p className="min-w-0 flex-1 text-sm font-medium text-gray-800">{it.descricao}</p>
+                  {tributo && (
+                    <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${tributo.classe}`}>
+                      {tributo.label}
+                    </span>
+                  )}
+                </div>
+                <p className="mt-0.5 text-xs text-gray-500">
+                  Cod. {it.codigo || '-'}
+                  {it.ean && it.ean !== 'SEM GTIN' ? ` | EAN ${it.ean}` : ''} | NCM {it.ncm || '-'} | CFOP {it.cfop || '-'}
+                </p>
+                <div className="mt-2 grid grid-cols-2 gap-2 text-xs md:grid-cols-4 lg:grid-cols-7">
+                  <span className="text-gray-500">
+                    Qtd: <strong className="text-gray-700">{qtd(it.quantidade)} {it.unidade}</strong>
+                  </span>
+                  <span className="text-gray-500">
+                    Unitario: <strong className="text-gray-700">{moeda(it.valorUnitario)}</strong>
+                  </span>
+                  <span className="text-gray-500">
+                    Total: <strong className="text-gray-800">{moeda(it.valorTotal)}</strong>
+                  </span>
+                  <span className="text-gray-500">
+                    Base ICMS: <strong className="text-gray-700">{moeda(it.vBC)}</strong>
+                  </span>
+                  <span className="text-gray-500">
+                    ICMS: <strong className="text-gray-700">{moeda(it.vICMS)}</strong>
+                  </span>
+                  <span className="text-gray-500">
+                    Base ICMS ST: <strong className="text-gray-700">{moeda(it.vBCST)}</strong>
+                  </span>
+                  <span className="text-gray-500">
+                    ICMS ST: <strong className="text-gray-700">{moeda(it.vICMSST)}</strong>
+                  </span>
+                </div>
               </div>
             </div>
           </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }

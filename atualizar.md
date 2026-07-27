@@ -17,7 +17,7 @@
 | Usuário do site | `danfe` |
 | Porta do app | `3100` |
 | Node (nvm) | `/home/danfe/.nvm/versions/node/v22.23.1/bin` (exportar no PATH; nvm não carrega sozinho em shell não-interativo) |
-| Processo | pm2 `danfecollector` (auto-start systemd `pm2-danfe`) |
+| Processo | pm2 `danfecollector` + `danfecollector-sync-nf` (auto-start systemd `pm2-danfe`) |
 | Projeto local | `c:\Users\diarl\OneDrive\Documentos\GitHub\DanfeCollector` |
 
 ---
@@ -41,6 +41,8 @@ tar czf "<SCRATCHPAD>/danfe.tgz" \
 > **Certificados atuais:** o app escolhe o PFX por CNPJ/raiz. Newshop usa a raiz `45998339`;
 > Soye usa `62803717`; Facil usa `50767035`. Na VPS, manter os `.pfx` em `certs/`
 > ou configurar `CERT_PFX_PATH_<CNPJ>` / `CERT_PFX_PATH_RAIZ_<RAIZ>` no `.env`.
+> Para a rotina server-side de NF, o `.env` da VPS tambem precisa ter `CRON_SYNC_SECRET`
+> e, se quiser sobrescrever a rota padrao local, `CRON_SYNC_URL`.
 
 ### Subir certificado A1 para a VPS
 Use quando trocar/recriar certificado ou quando a VPS for recriada. Rode no
@@ -97,8 +99,10 @@ su - danfe -c 'export PATH=/home/danfe/.nvm/versions/node/v22.23.1/bin:$PATH; \
 ### 5. Reiniciar o app (Claude)
 ```bash
 su - danfe -c 'export PATH=/home/danfe/.nvm/versions/node/v22.23.1/bin:$PATH; \
-  pm2 restart danfecollector && pm2 save'
+  pm2 restart danfecollector && pm2 start ecosystem.config.cjs --only danfecollector-sync-nf && pm2 save'
 ```
+> O worker `danfecollector-sync-nf` chama a rota interna `/api/internal/sync-nf` a cada 15 minutos.
+> Isso evita depender de abrir o dashboard para sincronizar NF.
 
 ### 6. Verificar (Claude)
 ```bash
@@ -110,6 +114,8 @@ Esperado: **HTTP 200** nos dois. Se der 502, o app não subiu → ver `pm2 logs 
 ### 7. Verificação visual do dashboard/relatórios (Claude)
 Depois do `HTTP 200`, abrir `https://danfe.newgrup.cloud/login` e validar no navegador:
 
+- a tela `Início` deve mostrar o resumo operacional, os quatro indicadores gerais, pontos de atenção, notas recentes e atalhos;
+- os cards da tela `Início` devem se reorganizar sem cortes no mobile, mantendo os valores e ações legíveis;
 - a tela `Relatórios` não pode puxar tudo de uma vez; a primeira carga vem paginada e deve existir ação para carregar mais;
 - a tabela do relatório deve crescer em blocos pequenos, sem travar a página;
 - o mapa de estados não deve ficar com área branca sobrando em volta;

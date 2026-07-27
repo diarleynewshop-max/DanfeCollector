@@ -1,0 +1,29 @@
+{
+  "name": "Danfe Collect",
+  "short_name": "Danfe",
+  "description": "Gestao digital de documentos fiscais",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ece5d6",
+  "theme_color": "#211d16",
+  "icons": [
+    {
+      "src": "/brand/danfe-collect-mark.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/brand/danfe-collect-mark-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/brand/danfe-collect-mark.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}

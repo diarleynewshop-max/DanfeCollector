@@ -6,16 +6,20 @@
     "dev": "next dev --port 3000",
     "build": "next build",
     "start": "next start",
+    "pm2:start": "pm2 start ecosystem.config.cjs",
+    "pm2:restart": "pm2 restart ecosystem.config.cjs --update-env",
+    "pm2:save": "pm2 save",
     "lint": "next lint",
     "db:generate": "prisma generate",
     "db:push": "prisma db push",
     "db:studio": "prisma studio",
-    "cert:vps": "powershell -ExecutionPolicy Bypass -File scripts/subir-certificado-vps.ps1"
+    "cert:vps": "powershell -ExecutionPolicy Bypass -File scripts/subir-certificado-vps.ps1",
+    "sync:nf:cron": "node scripts/cron-sync-nf.js"
   },
   "dependencies": {
     "@prisma/client": "^6.6.0",
     "@xmldom/xmldom": "^0.9.10",
-    "axios": "^1.9.0",
+    "exceljs": "^4.4.0",
     "fast-xml-parser": "^5.8.0",
     "next": "^15.3.2",
     "node-forge": "^1.4.0",

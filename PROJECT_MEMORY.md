@@ -52,6 +52,39 @@ Transformar a gestão manual de planilhas de NF-e (baseado no modelo `NOTA FISCA
 
 ---
 
+## ⚡ Fase 5: Performance e Manutenibilidade (iniciada 21/07/2026)
+
+Diagnóstico: app funcional, mas a carga do painel e os filtros escalam mal
+conforme o volume de NF cresce. Três gargalos principais + limpeza de código.
+Passo a passo em ordem de esforço/risco (menor → maior):
+
+### Etapa 1 — Ganhos rápidos (baixo risco)
+- [ ] **1.1 Índices no Postgres:** `NotaFiscal` só tinha `chave @unique`. Adicionar
+  índices compostos para as colunas usadas em filtro/ordenação (`cnpjId`+`emitidaEm`,
+  `cnpjId`+`sitramDaeStatus`, `cnpjId`+`status`+`manifestadaEm`). Aplicar com
+  `prisma db push`. Ganho direto nos `count`/`findMany`/`aggregate` do resumo.
+- [ ] **1.2 Remover `axios`:** dependência declarada no `package.json` mas **não
+  usada em nenhum arquivo** (o SITRAM já usa `fetch` nativo). Remover reduz bundle
+  e superfície de deps.
+
+### Etapa 2 — Paginação real do painel (médio risco)
+- [ ] **2.1 Parar de carregar TODAS as notas:** `app/page.tsx` chama
+  `listarTodasNotas()` (findMany sem limite) e serializa tudo para o cliente em toda
+  visita. Trocar pela base paginada `listarNotasRelatorio()` (já existe, com `select`
+  enxuto) e mover a busca "sobre todas as notas" para query server-side por termo.
+
+### Etapa 3 — Frontend mais leve (médio risco)
+- [ ] **3.1 Virtualizar listas grandes** com TanStack Virtual (renderiza só o visível).
+- [ ] **3.2 Quebrar `dashboard.tsx`** (5.254 linhas, 1 client component) em componentes
+  por aba; converter partes estáticas em Server Components para reduzir o JS enviado.
+- [ ] **3.3 Quebrar `actions.ts`** (2.944 linhas) em `actions/notas.ts`,
+  `actions/sitram.ts`, `actions/certificado.ts`, etc.
+
+> Regra: cada etapa é testável isolada. Buildar (`npm run build`) e validar o
+> painel antes de avançar para a próxima.
+
+---
+
 ## 📚 Referência de Produto: FSist "Monitor de Notas" (estudado em 12/06/2026)
 
 App instalado em `C:\Users\diarl\AppData\Roaming\FSist Sistemas Online\Monitor de Notas` que faz o que queremos. Aprendizados extraídos do `Empresas.dat` (JSON) e `user.config`:

@@ -34,6 +34,50 @@ export interface DaeCompartilhadoInfo {
   valor: number | null;
 }
 
+export interface DocumentoPagamentoIcmsNormalizado {
+  idLancamentoFront: string | null;
+  tipo: string;
+  situacao: string | null;
+  codigoDocumento: string | null;
+  valor: string | null;
+  pago: boolean;
+  dataValidade: string | null;
+  codigoBarras: string | null;
+  total: number | null;
+  valorPago: number | null;
+  dataPagamento: string | null;
+}
+
+export interface SuspeitaPagamentoDuplicado {
+  id: string;
+  nivel: 'ALERTA' | 'CRITICO';
+  titulo: string;
+  detalhe: string;
+  idLancamentoFront: string | null;
+  codigoDocumento: string | null;
+  valorEsperado: number | null;
+  valorPago: number | null;
+  quantidadeDocumentos: number;
+}
+
+export interface SimulacaoDaeIcmsNormalizada {
+  idLancamento: string | null;
+  receita: string | null;
+  responsavel: string | null;
+  total: number | null;
+  icmsDevido: number | null;
+  dataVencimento: string | null;
+  dataPagamento: string | null;
+}
+
+export interface PagamentoIcmsSitramNormalizado {
+  consultadoEm: string | null;
+  status: string | null;
+  documentos: DocumentoPagamentoIcmsNormalizado[];
+  simulacoes: SimulacaoDaeIcmsNormalizada[];
+  suspeitasDuplicidade: SuspeitaPagamentoDuplicado[];
+}
+
 export function ehLancamentoFecop2020(lancamento: Pick<LancamentoDaeNormalizado, 'codigo' | 'descricao'>): boolean {
   const alvo = semAcentos(`${lancamento.codigo ?? ''} ${lancamento.descricao ?? ''}`);
   return /\b2020\b/.test(alvo) && /\bfecop\b/.test(alvo);
@@ -67,6 +111,34 @@ function numero(valor: unknown): number | null {
   return typeof valor === 'number' && Number.isFinite(valor) ? valor : null;
 }
 
+function numeroMoeda(valor: unknown): number | null {
+  if (typeof valor === 'number' && Number.isFinite(valor)) return valor;
+  if (typeof valor !== 'string' || !valor.trim()) return null;
+  const texto = valor
+    .replace(/\s/g, '')
+    .replace(/^R\$/i, '');
+  const normalizado = texto.includes(',')
+    ? texto.replace(/\./g, '').replace(',', '.')
+    : texto;
+  const n = Number(normalizado);
+  return Number.isFinite(n) ? n : null;
+}
+
+function totalDaeDetalhe(detalheDae: Registro, valorFallback?: unknown): number | null {
+  const total = numero(detalheDae.total);
+  if (total !== null) return total;
+
+  const principal = numero(detalheDae.valorPrincipal);
+  if (principal !== null) {
+    return principal +
+      (numero(detalheDae.valorMulta) ?? 0) +
+      (numero(detalheDae.valorJuros) ?? 0) -
+      (numero(detalheDae.valorDesconto) ?? 0);
+  }
+
+  return numeroMoeda(valorFallback);
+}
+
 function primeiroTexto(...valores: unknown[]): string | null {
   for (const valor of valores) {
     const resultado = texto(valor);
@@ -98,6 +170,7 @@ function tipoTributo(raw: Registro): TipoTributoDae {
 
 function normalizarLancamento(valorBruto: unknown): LancamentoDaeNormalizado {
   const raw = registro(valorBruto);
+  const documentosPagamento = Array.isArray(raw.documentosPagamento) ? raw.documentosPagamento.map(registro) : [];
   const codigo = primeiroTexto(raw.codigo, raw.codReceita);
   const identificador = primeiroTexto(raw.identificadorUnico);
   const descricao = [
@@ -105,14 +178,22 @@ function normalizarLancamento(valorBruto: unknown): LancamentoDaeNormalizado {
     primeiroTexto(raw.descricao, raw.descricaoRec),
   ].filter(Boolean).join(' - ') || 'Lançamento SITRAM';
   const valor = numero(raw.valor) ?? numero(raw.icmsDevido) ?? numero(raw.icmsCalculado);
-  const valorPago = numero(raw.valorPago);
+  const valorPagoDocumentos = documentosPagamento
+    .filter((documento) => documento.pago === true || /pago|quitad|baixad|recolhid/.test(semAcentos(primeiroTexto(documento.tipo, documento.situacao))))
+    .reduce((total, documento) => total + (numeroMoeda(documento.valor) ?? 0), 0);
+  const valorPago = numero(raw.valorPago) ?? (valorPagoDocumentos > 0 ? valorPagoDocumentos : null);
   const situacao = primeiroTexto(raw.siuacaoDescricao, raw.situacaoDescricao, raw.situacao);
   const situacaoNormalizada = semAcentos(situacao);
   const indicaAberto = /a pagar|aberto|pendente|retid|autuad/.test(situacaoNormalizada);
   const indicaPago = /pago|paga|parcelad|quitad|baixad|recolhid/.test(situacaoNormalizada);
+  const documentoPago = documentosPagamento.some(
+    (documento) => documento.pago === true || /pago|quitad|baixad|recolhid/.test(semAcentos(primeiroTexto(documento.tipo, documento.situacao)))
+  );
 
   let pago: boolean;
-  if (valorPago !== null) {
+  if (documentoPago) {
+    pago = true;
+  } else if (valorPago !== null) {
     if (valor !== null && valor > 0) pago = valorPago + 0.005 >= valor;
     else pago = valorPago > 0 || (valor === 0 && indicaPago && !indicaAberto);
   } else {
@@ -192,6 +273,70 @@ export function opcoesCompartilhadasDae(nota: NotaComDadosDae): DaeCompartilhado
   return [...mapa.values()];
 }
 
+function formatarMoedaAnalise(valor: number | null): string {
+  if (valor === null) return '-';
+  return valor.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+}
+
+export function detectarSuspeitasPagamentoDuplicadoIcms(
+  documentos: DocumentoPagamentoIcmsNormalizado[]
+): SuspeitaPagamentoDuplicado[] {
+  const suspeitas: SuspeitaPagamentoDuplicado[] = [];
+  const pagos = documentos.filter((documento) => documento.pago);
+
+  for (const documento of pagos) {
+    if (
+      documento.total !== null &&
+      documento.total > 0 &&
+      documento.valorPago !== null &&
+      documento.valorPago > documento.total + 0.01
+    ) {
+      const diferenca = documento.valorPago - documento.total;
+      suspeitas.push({
+        id: `valor-acima:${documento.codigoDocumento ?? documento.idLancamentoFront ?? suspeitas.length}`,
+        nivel: 'CRITICO',
+        titulo: 'Valor pago maior que o valor do DAE',
+        detalhe: `Pago ${formatarMoedaAnalise(documento.valorPago)} para um DAE de ${formatarMoedaAnalise(documento.total)}. Diferença: ${formatarMoedaAnalise(diferenca)}.`,
+        idLancamentoFront: documento.idLancamentoFront,
+        codigoDocumento: documento.codigoDocumento,
+        valorEsperado: documento.total,
+        valorPago: documento.valorPago,
+        quantidadeDocumentos: 1,
+      });
+    }
+  }
+
+  const pagosPorCodigo = new Map<string, DocumentoPagamentoIcmsNormalizado[]>();
+  for (const documento of pagos) {
+    const codigo = documento.codigoDocumento?.replace(/\D/g, '');
+    if (!codigo) continue;
+    pagosPorCodigo.set(codigo, [...(pagosPorCodigo.get(codigo) ?? []), documento]);
+  }
+
+  for (const [codigoDocumento, docs] of pagosPorCodigo.entries()) {
+    if (docs.length <= 1) continue;
+
+    const idsLancamento = [...new Set(docs.map((documento) => documento.idLancamentoFront).filter(Boolean))];
+    if (idsLancamento.length <= 1) continue;
+
+    const valorPago = docs.reduce((total, documento) => total + (numeroMoeda(documento.valor) ?? documento.valorPago ?? documento.total ?? 0), 0);
+    const valorEsperado = numeroMoeda(docs[0]?.valor) ?? docs[0]?.total ?? null;
+    suspeitas.push({
+      id: `mesmo-dae:${codigoDocumento}`,
+      nivel: 'CRITICO',
+      titulo: 'Mesmo DAE pago em mais de um lançamento',
+      detalhe: `Documento ${codigoDocumento} apareceu pago em ${idsLancamento.length} lançamentos: ${idsLancamento.join(', ')}.`,
+      idLancamentoFront: idsLancamento[0] ?? null,
+      codigoDocumento,
+      valorEsperado,
+      valorPago: valorPago > 0 ? valorPago : null,
+      quantidadeDocumentos: docs.length,
+    });
+  }
+
+  return suspeitas;
+}
+
 function classificacaoTributo(notaFiscal: Registro, lancamentos: LancamentoDaeNormalizado[]): string {
   const tipos = new Set(lancamentos.map((l) => l.tipo));
   if (tipos.has('ST') && tipos.has('ANTECIPACAO')) return 'ST + Antecipação';
@@ -240,6 +385,77 @@ export function extrairResumoDae(nota: NotaComDadosDae): ResumoDaeNormalizado {
     return montarResumoDae(notaFiscal, lancamentosRaiz ?? lancamentosNota);
   } catch {
     return montarResumoDae({}, []);
+  }
+}
+
+export function extrairPagamentoIcmsSitram(nota: NotaComDadosDae): PagamentoIcmsSitramNormalizado {
+  if (!nota.sitramDetalhe) {
+    return { consultadoEm: null, status: null, documentos: [], simulacoes: [], suspeitasDuplicidade: [] };
+  }
+
+  try {
+    const detalhe = registro(JSON.parse(nota.sitramDetalhe));
+    const pagamento = registro(detalhe.pagamentoIcms);
+    const documentosRaiz = Array.isArray(pagamento.documentos) ? pagamento.documentos.map(registro) : [];
+    const simulacoesRaiz = Array.isArray(pagamento.simulacoes) ? pagamento.simulacoes.map(registro) : [];
+    const lancamentos = Array.isArray(detalhe.lancamentos) ? detalhe.lancamentos.map(registro) : [];
+    const documentosLancamentos: Registro[] = lancamentos.flatMap((lancamento) => {
+      const idLancamentoFront = primeiroTexto(lancamento.idLancamentoFront, lancamento.id);
+      const documentos = Array.isArray(lancamento.documentosPagamento) ? lancamento.documentosPagamento.map(registro) : [];
+      return documentos.map((documento) => ({ ...documento, idLancamentoFront }));
+    });
+
+    const documentosMapa = new Map<string, DocumentoPagamentoIcmsNormalizado>();
+    for (const documento of [...documentosLancamentos, ...documentosRaiz] as Registro[]) {
+      const detalheDae = registro(documento.detalheDae);
+      const situacao = primeiroTexto(documento.situacao, detalheDae.descricaoSituacaoDebito);
+      const dataPagamento = primeiroTexto(detalheDae.dataPagamento);
+      const valorDocumento = primeiroTexto(documento.valor);
+      const valorNormalizado = numeroMoeda(valorDocumento);
+      const total = valorNormalizado ?? (valorDocumento ? null : totalDaeDetalhe(detalheDae, documento.valor));
+      const codigoDocumento = primeiroTexto(documento.codigoDocumento, detalheDae.codigoIdentificadorUnico);
+      const normalizado: DocumentoPagamentoIcmsNormalizado = {
+        idLancamentoFront: primeiroTexto(documento.idLancamentoFront),
+        tipo: primeiroTexto(documento.tipo) ?? 'DAE',
+        situacao,
+        codigoDocumento,
+        valor: valorDocumento,
+        pago: documento.pago === true || !!dataPagamento || /pago|quitad|baixad|recolhid/.test(semAcentos(primeiroTexto(documento.tipo, situacao))),
+        dataValidade: primeiroTexto(documento.dataValidade, detalheDae.dataVencimento),
+        codigoBarras: primeiroTexto(documento.codigoBarras, detalheDae.numeracaoCodigoBarras),
+        total,
+        valorPago: valorNormalizado ?? numero(detalheDae.valorPago),
+        dataPagamento,
+      };
+      const chave = [
+        normalizado.idLancamentoFront ?? '',
+        normalizado.codigoDocumento ?? '',
+        normalizado.tipo,
+        normalizado.valor ?? '',
+      ].join('|');
+      if (!documentosMapa.has(chave)) documentosMapa.set(chave, normalizado);
+    }
+    const documentos = [...documentosMapa.values()];
+
+    const simulacoes = simulacoesRaiz.map((simulacao) => ({
+      idLancamento: primeiroTexto(simulacao.idLancamento),
+      receita: primeiroTexto(simulacao.receita),
+      responsavel: primeiroTexto(simulacao.responsavel),
+      total: numero(simulacao.total),
+      icmsDevido: numero(simulacao.icmsDevido),
+      dataVencimento: primeiroTexto(simulacao.dataVencimento),
+      dataPagamento: primeiroTexto(simulacao.dataPagamento),
+    }));
+
+    return {
+      consultadoEm: primeiroTexto(pagamento.consultadoEm),
+      status: primeiroTexto(pagamento.status),
+      documentos,
+      simulacoes,
+      suspeitasDuplicidade: detectarSuspeitasPagamentoDuplicadoIcms(documentos),
+    };
+  } catch {
+    return { consultadoEm: null, status: null, documentos: [], simulacoes: [], suspeitasDuplicidade: [] };
   }
 }
 

@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 205" role="img" aria-labelledby="title desc">
+  <title id="title">Danfe Collect</title>
+  <desc id="desc">Danfe Collect logo and tagline</desc>
+  <g transform="translate(8 14) scale(1.18)">
+    <path d="M34 15h74v70L88 66 64 90 21 47l21-21-8-11Z" fill="none" stroke="#776b55" stroke-width="9" stroke-linejoin="miter" stroke-linecap="square"/>
+    <path d="M42 26h66v59L88 66 64 90 21 47l21-21Z" fill="#f7f3ea" opacity=".12"/>
+    <g transform="translate(48 47) rotate(42)">
+      <rect x="0" y="0" width="8" height="43" rx="1" fill="#35b7a3"/>
+      <rect x="13" y="0" width="8" height="43" rx="1" fill="#35b7a3"/>
+      <rect x="26" y="0" width="8" height="43" rx="1" fill="#35b7a3"/>
+      <rect x="39" y="0" width="8" height="43" rx="1" fill="#35b7a3"/>
+      <rect x="52" y="0" width="8" height="43" rx="1" fill="#35b7a3"/>
+    </g>
+  </g>
+  <g fill="#050505" font-family="Arial Black, Impact, sans-serif" font-weight="900" letter-spacing="0">
+    <text x="182" y="74" font-size="66">DANFE</text>
+    <text x="182" y="145" font-size="66">COLLECT</text>
+  </g>
+  <text x="185" y="181" fill="#776b55" font-family="Arial Black, Impact, sans-serif" font-size="20" font-weight="900" letter-spacing="0">GESTAO DIGITAL DE DOCUMENTOS FISCAIS</text>
+</svg>

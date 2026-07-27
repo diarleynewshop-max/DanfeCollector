@@ -11,6 +11,11 @@ export interface DanfeItem {
   valorUnitario: number;
   valorTotal: number;
   ean: string;
+  vBC: number;
+  pICMS: number;
+  vICMS: number;
+  vBCST: number;
+  vICMSST: number;
 }
 
 export interface DanfeEndereco {
@@ -106,6 +111,17 @@ function endereco(ender: Record<string, unknown> | undefined): DanfeEndereco {
   };
 }
 
+function primeiroGrupoIcms(imposto: Record<string, unknown> | undefined): Record<string, unknown> {
+  const icms = imposto?.ICMS as Record<string, unknown> | undefined;
+  if (!icms) return {};
+  for (const valor of Object.values(icms)) {
+    if (valor && typeof valor === 'object' && !Array.isArray(valor)) {
+      return valor as Record<string, unknown>;
+    }
+  }
+  return {};
+}
+
 /**
  * Parseia o XML de uma NF-e completa (procNFe) em uma estrutura pronta para a DANFE.
  * Retorna null se não for uma nota completa (resumos não têm itens).
@@ -130,6 +146,7 @@ export function parseDanfe(xml: string): DanfeData | null {
     .filter((d: unknown) => d && (d as Record<string, unknown>).prod)
     .map((d: Record<string, unknown>) => {
       const p = d.prod as Record<string, unknown>;
+      const icms = primeiroGrupoIcms(d.imposto as Record<string, unknown> | undefined);
       return {
         nItem: n(d['@_nItem']),
         codigo: s(p.cProd),
@@ -141,6 +158,11 @@ export function parseDanfe(xml: string): DanfeData | null {
         valorUnitario: n(p.vUnCom),
         valorTotal: n(p.vProd),
         ean: s(p.cEAN),
+        vBC: n(icms.vBC),
+        pICMS: n(icms.pICMS),
+        vICMS: n(icms.vICMS),
+        vBCST: n(icms.vBCST),
+        vICMSST: n(icms.vICMSST ?? icms.vST),
       };
     });
 

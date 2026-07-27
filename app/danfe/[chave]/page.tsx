@@ -2,9 +2,10 @@ import { notFound, redirect } from 'next/navigation';
 import * as fs from 'fs';
 import { prisma } from '@/lib/prisma';
 import { parseDanfe } from '@/lib/sefaz/detalhe';
+import { extrairEspelhoSitram } from '@/lib/sitram/espelho';
 import { resolverXmlPath } from '@/lib/xmlpath';
 import { obterUsuarioAtual, usuarioPodeAcessarCnpj } from '@/lib/usuarios/auth';
-import DanfeView from '../../components/DanfeView';
+import DanfeView from '../../components/DanfeViewResizable';
 import BotaoImprimir from './BotaoImprimir';
 
 export const dynamic = 'force-dynamic';
@@ -23,6 +24,7 @@ export default async function DanfePage({ params }: { params: Promise<{ chave: s
 
   const danfe = parseDanfe(fs.readFileSync(xmlPath, 'utf8'));
   if (!danfe) notFound();
+  const espelho = nota ? extrairEspelhoSitram(nota) : null;
 
   return (
     <div className="min-h-screen bg-gray-200 py-6">
@@ -30,10 +32,13 @@ export default async function DanfePage({ params }: { params: Promise<{ chave: s
         <a href="/" className="text-blue-600 text-sm hover:underline">
           ← Voltar
         </a>
-        <BotaoImprimir />
+        <div className="flex items-center gap-3">
+          <span className="text-xs text-slate-500">Visualizacao pronta para impressao. Use Ctrl+P para salvar em PDF.</span>
+          <BotaoImprimir />
+        </div>
       </div>
       <div className="bg-white shadow-lg mx-auto p-6 print-area" style={{ maxWidth: '210mm' }}>
-        <DanfeView danfe={danfe} />
+        <DanfeView danfe={danfe} espelho={espelho} />
       </div>
     </div>
   );

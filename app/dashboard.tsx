@@ -1,6 +1,7 @@
 'use client';
 
-import { useState, useMemo, useEffect, useTransition, useDeferredValue, useCallback } from 'react';
+import { useState, useMemo, useEffect, useTransition, useDeferredValue, useCallback, useRef } from 'react';
+import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import type { Cnpj, NotaFiscal } from '@prisma/client';
 import {
@@ -27,25 +28,31 @@ import {
   anexarComprovanteLote,
   type PreviewPagamentoSitram,
   atualizarSitramPorChaves,
+  consultarPagamentoIcmsNota,
+  consultarPagamentoIcmsLote,
   listarChavesSitramParaAtualizacao,
   atualizarTransporteNotasExistentes,
   type ActionResult,
   type CertificadoComStatus,
   type ResultadoImportChave,
   type ResultadoManifestoLote,
+  type ResultadoPagamentoIcmsLote,
   type NotaRelatorio,
   type ResultadoSitramManifesto,
+  type ResumoInicio,
 } from '@/lib/actions';
 import type { DanfeData } from '@/lib/sefaz/detalhe';
 import {
   chaveDataLocal,
   diasAteVencimento,
+  extrairPagamentoIcmsSitram,
   extrairResumoDae,
   lancamentosVisiveisDae,
   type DaeCompartilhadoInfo,
   statusDaeEfetivo,
   type LancamentoDaeNormalizado,
 } from '@/lib/sitram/dae';
+import { extrairEspelhoSitram } from '@/lib/sitram/espelho';
 import type { UsuarioLogado } from '@/lib/usuarios/auth';
 import {
   listarUsuariosAdmin,
@@ -59,18 +66,45 @@ import {
   excluirAnexo,
   type AnexoInfo,
 } from '@/lib/anexos/actions';
-import DanfeView from './components/DanfeView';
+import DanfeView from './components/DanfeViewResizable';
 import ItensView from './components/ItensView';
+import SitramEspelhoView from './components/SitramEspelhoView';
+import SitramItensView from './components/SitramItensView';
 import MapaBrasil, { nomeUf, type ValorUf } from './components/MapaBrasil';
 import { useIdioma } from '@/lib/i18n';
 
 type NotaComCnpj = NotaFiscal & { cnpj: { cnpj: string; razaoSocial: string | null }; situacaoSefaz?: string };
 type CnpjComContagem = Cnpj & { _count: { notas: number } };
-type FiltroDaeSitram = 'todos' | 'consultado' | 'com-dae' | 'a-pagar' | 'em-aberto' | 'pago' | 'sem-dae' | 'nao-encontrada';
+type FiltroDaeSitram = 'todos' | 'consultado' | 'com-dae' | 'a-pagar' | 'em-aberto' | 'pago' | 'duplicidade' | 'sem-dae' | 'nao-encontrada';
 type SecaoApp = 'home' | 'notas' | 'relatorios' | 'empresas' | 'usuarios' | 'configuracao';
+type ColunaRedimensionavel = 'nf' | 'emitente' | 'destinatario' | 'valores' | 'transporte' | 'sitram' | 'status';
 
 // DAE "a pagar" = DAE em aberto ou ainda a gerar (imposto pendente de pagamento)
 const DAE_A_PAGAR = ['EM_ABERTO', 'LIBERADA_PARA_GERAR'];
+const RAIZES_RELATORIO_PADRAO = ['50767035', '62803717'];
+const SITUACOES_RELATORIO_OPCOES = [
+  { valor: 'AUTORIZADA', label: 'Autorizada' },
+  { valor: 'CANCELADA', label: 'Cancelada' },
+  { valor: 'DENEGADA', label: 'Denegada' },
+];
+const DAE_RELATORIO_OPCOES = [
+  { valor: 'pago', label: 'Pago' },
+  { valor: 'pendente', label: 'Pendente' },
+  { valor: 'vencido', label: 'Vencido' },
+  { valor: 'vence7', label: 'Vence em 7 dias' },
+  { valor: 'sem-consulta', label: 'Sem consulta' },
+  { valor: 'sem-dae', label: 'Sem DAE' },
+  { valor: 'consultado', label: 'Consultado' },
+];
+const LARGURAS_COLUNAS_PADRAO: Record<ColunaRedimensionavel, number> = {
+  nf: 130,
+  emitente: 240,
+  destinatario: 260,
+  valores: 170,
+  transporte: 220,
+  sitram: 160,
+  status: 160,
+};
 
 interface DashboardProps {
   usuario: UsuarioLogado;
@@ -81,10 +115,11 @@ interface DashboardProps {
   totalNotas: number;
   paginaAtual: number;
   porPagina: number;
+  resumoInicio: ResumoInicio;
 }
 
-const CACHE_DANFE_PREFIX = 'danfe-cache:';
-const CACHE_DANFE_INDEX = 'danfe-cache:index';
+const CACHE_DANFE_PREFIX = 'danfe-cache:v2:';
+const CACHE_DANFE_INDEX = 'danfe-cache:v2:index';
 const CACHE_DANFE_MAX = 12;
 const cacheDanfeMemoria = new Map<number, DanfeData>();
 
@@ -113,6 +148,27 @@ function dataHora(d: Date | string | null | undefined): string {
   });
 }
 
+function raizCnpj(valor: string | null | undefined): string {
+  return (valor ?? '').replace(/\D/g, '').slice(0, 8);
+}
+
+function nomeEmpresaRelatorioPorRaiz(raiz: string, fallback?: string | null): string {
+  if (raiz === '45998339') return 'Newshop';
+  if (raiz === '50767035') return 'Facil';
+  if (raiz === '62803717') return 'Soye';
+  return fallback || raiz || 'Empresa';
+}
+
+const LARGURA_MIN_COLUNA: Record<ColunaRedimensionavel, number> = {
+  nf: 90,
+  emitente: 140,
+  destinatario: 160,
+  valores: 130,
+  transporte: 160,
+  sitram: 130,
+  status: 130,
+};
+
 function nomeGrupoEmpresa(cnpj: string | null | undefined): string {
   const raiz = (cnpj ?? '').replace(/\D/g, '').slice(0, 8);
   if (raiz === '50767035' || raiz === '62803717') return 'GRUPO SF';
@@ -127,6 +183,33 @@ function nomeEmpresaCurta(nota: NotaComCnpj): string {
   if (cnpj === '62803717000129') return 'Soye';
   if (cnpj.startsWith('45998339')) return nota.cnpj.razaoSocial || 'Newshop';
   return nota.cnpj.razaoSocial || formatarCnpj(nota.cnpj.cnpj);
+}
+
+function numeroNotaDaChave(chave: string | null | undefined): string | null {
+  const normalizada = String(chave ?? '').replace(/\D/g, '');
+  if (normalizada.length !== 44) return null;
+  const numero = normalizada.slice(25, 34);
+  return numero.replace(/^0+/, '') || numero;
+}
+
+function serieNotaDaChave(chave: string | null | undefined): string | null {
+  const normalizada = String(chave ?? '').replace(/\D/g, '');
+  if (normalizada.length !== 44) return null;
+  const serie = normalizada.slice(22, 25);
+  return serie.replace(/^0+/, '') || serie;
+}
+
+function numeroNotaSistema(nota: Pick<NotaComCnpj, 'numero' | 'chave'>): string {
+  return nota.numero || numeroNotaDaChave(nota.chave) || '';
+}
+
+function serieNotaSistema(nota: Pick<NotaComCnpj, 'serie' | 'chave'>): string {
+  return nota.serie || serieNotaDaChave(nota.chave) || '';
+}
+
+function numeroNotaBusca(nota: Pick<NotaComCnpj, 'numero' | 'chave'>): string {
+  const numero = numeroNotaSistema(nota);
+  return String(Number(numero) || numero.replace(/^0+/, '') || '');
 }
 
 function lerDanfeCacheLocal(notaId: number): DanfeData | null {
@@ -222,6 +305,46 @@ function notaForaCeMais15DiasSemDaeOuPagamento(nota: NotaComCnpj, referencia = n
   return statusDae !== 'PAGO' && statusDae !== 'EM_ABERTO';
 }
 
+const DIAS_RECONSULTA_DAE_NOVO = 30;
+
+function dentroJanelaReconsultaDaeNovo(
+  emitidaEm: Date | string,
+  lancamentos: Array<Pick<LancamentoDaeNormalizado, 'vencimento'>>
+): boolean {
+  const corte = new Date();
+  corte.setHours(0, 0, 0, 0);
+  corte.setDate(corte.getDate() - DIAS_RECONSULTA_DAE_NOVO);
+
+  const datas = lancamentos
+    .map((lancamento) => lancamento.vencimento ? new Date(lancamento.vencimento) : null)
+    .filter((data): data is Date => !!data && !Number.isNaN(data.getTime()));
+
+  const referencia = datas.length > 0
+    ? new Date(Math.max(...datas.map((data) => data.getTime())))
+    : new Date(emitidaEm);
+
+  return !Number.isNaN(referencia.getTime()) && referencia.getTime() >= corte.getTime();
+}
+
+function notaElegivelConsultaPagamentoIcms(nota: NotaComCnpj): boolean {
+  if (nota.situacaoSefaz === 'CANCELADA' || nota.situacaoSefaz === 'DENEGADA') return false;
+  const lancamentos = lancamentosVisiveisDae(extrairResumoDae(nota).lancamentos);
+  if (lancamentos.length === 0) return false;
+
+  const pagamento = extrairPagamentoIcmsSitram(nota);
+  const daePago = statusDaeEfetivo(nota) === 'PAGO' || lancamentos.every((lancamento) => lancamento.pago);
+  if (daePago && pagamento.consultadoEm && !dentroJanelaReconsultaDaeNovo(nota.emitidaEm, lancamentos)) return false;
+
+  return true;
+}
+
+function notaDentroPrazoManifestacao(nota: NotaComCnpj, referencia = new Date()): boolean {
+  const limite = new Date(referencia);
+  limite.setHours(0, 0, 0, 0);
+  limite.setDate(limite.getDate() - 10);
+  return new Date(nota.emitidaEm).getTime() >= limite.getTime();
+}
+
 export default function Dashboard({
   usuario,
   cnpjs,
@@ -231,6 +354,7 @@ export default function Dashboard({
   totalNotas,
   paginaAtual,
   porPagina,
+  resumoInicio,
 }: DashboardProps) {
   const router = useRouter();
   const { idioma, setIdioma, t } = useIdioma();
@@ -467,10 +591,12 @@ export default function Dashboard({
 
   // Busca rápida por número da NF (ou chave)
   const [filtroNumero, setFiltroNumero] = useState('');
+  const [largurasColunas, setLargurasColunas] = useState<Record<ColunaRedimensionavel, number>>(LARGURAS_COLUNAS_PADRAO);
+  const resizeColunaRef = useRef<{ coluna: ColunaRedimensionavel; inicioX: number; larguraInicial: number } | null>(null);
 
   // Carrega TODAS as notas em memória para busca/filtro funcionar sobre o
   // conjunto inteiro (e não só a página atual de 50).
-  const [todasCarregadas, setTodasCarregadas] = useState(false);
+  const [todasCarregadas, setTodasCarregadas] = useState(() => notasIniciais.length >= totalNotas);
   const [carregandoTodas, setCarregandoTodas] = useState(false);
 
   // Filtros avançados
@@ -638,10 +764,11 @@ export default function Dashboard({
 
   // Paginação no servidor só na visão padrão (sem filtro e sem ter carregado tudo).
   const usandoPaginacaoServidor =
+    porPagina > 0 &&
     anoCarregado === null &&
     !todasCarregadas &&
     !algumFiltroAtivo;
-  const totalPaginasServidor = Math.max(1, Math.ceil(totalNotas / porPagina));
+  const totalPaginasServidor = porPagina > 0 ? Math.max(1, Math.ceil(totalNotas / porPagina)) : 1;
 
   // Assim que o usuário busca/filtra, garante TODAS as notas em memória para
   // que o filtro atue sobre o conjunto inteiro — não só as 50 da página.
@@ -650,25 +777,29 @@ export default function Dashboard({
     setCarregandoTodas(true);
     listarTodasNotas()
       .then((todas) => {
-        setNotas(todas as NotaComCnpj[]);
-        setNotasAlerta(todas as NotaComCnpj[]);
-        setTodasCarregadas(true);
+        startTransition(() => {
+          setNotas(todas as NotaComCnpj[]);
+          setNotasAlerta(todas as NotaComCnpj[]);
+          setTodasCarregadas(true);
+        });
       })
       .finally(() => setCarregandoTodas(false));
-  }, [algumFiltroAtivo, todasCarregadas, carregandoTodas, anoCarregado]);
+  }, [algumFiltroAtivo, todasCarregadas, carregandoTodas, anoCarregado, startTransition]);
 
   const carregarMaisRelatorio = useCallback(async () => {
     if (carregandoRelatorio || !temMaisRelatorio) return;
     setCarregandoRelatorio(true);
     try {
       const resultado = await listarNotasRelatorio(paginaRelatorio + 1, 120);
-      setNotasRelatorio((atuais) => {
-        const ids = new Set(atuais.map((nota) => nota.id));
-        return [...atuais, ...resultado.notas.filter((nota) => !ids.has(nota.id))];
+      startTransition(() => {
+        setNotasRelatorio((atuais) => {
+          const ids = new Set(atuais.map((nota) => nota.id));
+          return [...atuais, ...resultado.notas.filter((nota) => !ids.has(nota.id))];
+        });
+        setPaginaRelatorio(resultado.pagina);
+        setTotalRelatorio(resultado.total);
+        setTemMaisRelatorio(resultado.temMais);
       });
-      setPaginaRelatorio(resultado.pagina);
-      setTotalRelatorio(resultado.total);
-      setTemMaisRelatorio(resultado.temMais);
     } catch (error: unknown) {
       setStatus({
         success: false,
@@ -677,13 +808,50 @@ export default function Dashboard({
     } finally {
       setCarregandoRelatorio(false);
     }
-  }, [carregandoRelatorio, temMaisRelatorio, paginaRelatorio]);
+  }, [carregandoRelatorio, temMaisRelatorio, paginaRelatorio, startTransition]);
 
   useEffect(() => {
     if (secaoAtual === 'relatorios' && paginaRelatorio === 0 && !carregandoRelatorio) {
       void carregarMaisRelatorio();
     }
   }, [secaoAtual, paginaRelatorio, carregandoRelatorio, carregarMaisRelatorio]);
+
+  useEffect(() => {
+    function handleMouseMove(event: MouseEvent) {
+      const atual = resizeColunaRef.current;
+      if (!atual) return;
+      const delta = event.clientX - atual.inicioX;
+      setLargurasColunas((prev) => ({
+        ...prev,
+        [atual.coluna]: Math.max(LARGURA_MIN_COLUNA[atual.coluna], atual.larguraInicial + delta),
+      }));
+    }
+
+    function handleMouseUp() {
+      resizeColunaRef.current = null;
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    }
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, []);
+
+  function iniciarResizeColuna(coluna: ColunaRedimensionavel, event: React.MouseEvent<HTMLSpanElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    resizeColunaRef.current = {
+      coluna,
+      inicioX: event.clientX,
+      larguraInicial: largurasColunas[coluna],
+    };
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  }
 
   function limparFiltrosAvancados() {
     setFiltroNumero('');
@@ -812,7 +980,8 @@ export default function Dashboard({
   const notasBuscaIndex = useMemo(() => new Map(notas.map((n) => [
     n.id,
     {
-      numero: String(Number(n.numero ?? '') || ''),
+      numero: numeroNotaBusca(n),
+      serie: String(Number(serieNotaSistema(n)) || serieNotaSistema(n).replace(/^0+/, '') || ''),
       emitenteNome: (n.emitenteNome ?? '').toLowerCase(),
       emitenteCnpj: n.emitenteCnpj ?? '',
       destNome: (n.destNome ?? '').toLowerCase(),
@@ -820,6 +989,7 @@ export default function Dashboard({
       emitidaEm: new Date(n.emitidaEm),
       etiquetas: parseEtiquetas(n.etiqueta),
       dae: statusDaeEfetivo(n),
+      suspeitasDuplicidade: extrairPagamentoIcmsSitram(n).suspeitasDuplicidade.length,
     },
   ])), [notas]);
 
@@ -845,8 +1015,9 @@ export default function Dashboard({
       if (numeroBuscaDigitos) {
         const alvoBusca = String(Number(numeroBuscaDigitos) || '');
         const matchNumero = idx.numero.length > 0 && idx.numero.includes(alvoBusca);
+        const matchNumeroSerie = idx.numero.length > 0 && idx.serie.length > 0 && `${idx.numero}${idx.serie}`.includes(alvoBusca);
         const matchChave = numeroBuscaDigitos.length >= 8 && n.chave.includes(numeroBuscaDigitos);
-        if (!matchNumero && !matchChave) return false;
+        if (!matchNumero && !matchNumeroSerie && !matchChave) return false;
       }
 
       if (emitenteBusca) {
@@ -910,6 +1081,7 @@ export default function Dashboard({
         if (filtroDaeSitram === 'a-pagar' && !DAE_A_PAGAR.includes(dae)) return false;
         if (filtroDaeSitram === 'em-aberto' && dae !== 'EM_ABERTO') return false;
         if (filtroDaeSitram === 'pago' && dae !== 'PAGO') return false;
+        if (filtroDaeSitram === 'duplicidade' && idx.suspeitasDuplicidade === 0) return false;
         if (filtroDaeSitram === 'sem-dae' && dae !== 'SEM_DAE') return false;
         if (filtroDaeSitram === 'nao-encontrada' && dae !== 'NAO_ENCONTRADA') return false;
       }
@@ -984,19 +1156,42 @@ export default function Dashboard({
     filtroExcluirEmitentes,
   ]);
 
-  const totalPaginasCliente = Math.max(1, Math.ceil(notasFiltradas.length / porPagina));
-  const paginaClienteSegura = Math.min(paginaCliente, totalPaginasCliente);
+  const semPaginacaoCliente = porPagina <= 0;
+  const totalPaginasCliente = semPaginacaoCliente ? 1 : Math.max(1, Math.ceil(notasFiltradas.length / porPagina));
+  const paginaClienteSegura = semPaginacaoCliente ? 1 : Math.min(paginaCliente, totalPaginasCliente);
   const notasVisiveis = useMemo(() => {
+    if (semPaginacaoCliente) return notasFiltradas;
     const inicio = (paginaClienteSegura - 1) * porPagina;
     return notasFiltradas.slice(inicio, inicio + porPagina);
-  }, [notasFiltradas, paginaClienteSegura, porPagina]);
+  }, [notasFiltradas, paginaClienteSegura, porPagina, semPaginacaoCliente]);
   const totalFiltrado = useMemo(
     () => notasFiltradas.reduce((acc, n) => acc + (n.valorTotal ?? 0), 0),
     [notasFiltradas]
   );
-  const valorGeral = useMemo(() => notas.reduce((a, n) => a + (n.valorTotal ?? 0), 0), [notas]);
-  const pendentes = useMemo(
-    () => notas.filter((n) => n.status === 'RESUMO' && !n.manifestadaEm).length,
+  const resumoOperacionalHome = useMemo(() => {
+    const agora = new Date();
+    const daeAbertos = notasAlerta.filter((nota) => DAE_A_PAGAR.includes(statusDaeEfetivo(nota))).length;
+    const daeVencidos = notasAlerta.filter((nota) => {
+      const lancamentos = lancamentosVisiveisDae(extrairResumoDae(nota).lancamentos);
+      return lancamentos.some((lancamento) => !lancamento.pago && (diasAteVencimento(lancamento.vencimento) ?? 0) < 0);
+    }).length;
+    const empresasAtivas = cnpjs.filter((cnpj) => cnpj.ativo).length;
+    const empresasComAtencao = cnpjs.filter((cnpj) => {
+      if (!cnpj.ativo) return false;
+      if (cnpj.bloqueadoAte && new Date(cnpj.bloqueadoAte) > agora) return true;
+      return !cnpj.ultimaBusca || agora.getTime() - new Date(cnpj.ultimaBusca).getTime() > 36 * 60 * 60 * 1000;
+    }).length;
+    const ultimaSincronizacao = cnpjs.reduce<Date | null>((maisRecente, cnpj) => {
+      if (!cnpj.ultimaBusca) return maisRecente;
+      const atual = new Date(cnpj.ultimaBusca);
+      return !maisRecente || atual > maisRecente ? atual : maisRecente;
+    }, null);
+
+    return { daeAbertos, daeVencidos, empresasAtivas, empresasComAtencao, ultimaSincronizacao };
+  }, [cnpjs, notasAlerta]);
+
+  const notasRecentesHome = useMemo(
+    () => [...notas].sort((a, b) => new Date(b.emitidaEm).getTime() - new Date(a.emitidaEm).getTime()).slice(0, 5),
     [notas]
   );
   // Manifestação em lote
@@ -1004,9 +1199,24 @@ export default function Dashboard({
   const [manifestoLoteProgresso, setManifestoLoteProgresso] = useState<{ feito: number; total: number } | null>(null);
   const [manifestoLoteResumo, setManifestoLoteResumo] = useState<Record<string, number> | null>(null);
   const [manifestoLoteErros, setManifestoLoteErros] = useState<Array<{ chave: string; detalhe: string }> | null>(null);
+  const [consultandoPagamentoLote, setConsultandoPagamentoLote] = useState(false);
+  const [pagamentoLoteResultado, setPagamentoLoteResultado] = useState<ResultadoPagamentoIcmsLote | null>(null);
+
+  const notasPagamentoIcmsElegiveis = useMemo(
+    () => notasFiltradas.filter((nota) => notaElegivelConsultaPagamentoIcms(nota)),
+    [notasFiltradas]
+  );
 
   const notasManifestaveis = useMemo(
-    () => notasFiltradas.filter((n) => n.status === 'RESUMO' && !n.manifestadaEm),
+    () =>
+      notasFiltradas.filter(
+        (n) =>
+          n.status === 'RESUMO' &&
+          !n.manifestadaEm &&
+          n.situacaoSefaz !== 'CANCELADA' &&
+          n.situacaoSefaz !== 'DENEGADA' &&
+          notaDentroPrazoManifestacao(n)
+      ),
     [notasFiltradas]
   );
 
@@ -1060,20 +1270,51 @@ export default function Dashboard({
     setStatus({ success: true, message: `Manifestação em lote concluída: ${ids.length} nota(s) processada(s).` });
   }
 
+  async function handleConsultarPagamentoIcmsLote() {
+    if (consultandoPagamentoLote) return;
+
+    setConsultandoPagamentoLote(true);
+    setPagamentoLoteResultado(null);
+    try {
+      const anoConsulta = filtroAno ? Number(filtroAno) : anoCarregado ?? undefined;
+      const res = await consultarPagamentoIcmsLote({
+        cnpjId: filtroCnpjId === 'todos' ? undefined : filtroCnpjId,
+        ano: anoConsulta && Number.isFinite(anoConsulta) ? anoConsulta : undefined,
+      });
+      setPagamentoLoteResultado(res);
+      setStatus({ success: res.success, message: res.message });
+
+      if (res.success) {
+        if (anoCarregado !== null) {
+          const atualizadas = await listarNotasPorAno(anoCarregado);
+          setNotas(atualizadas as NotaComCnpj[]);
+          setNotasAlerta(atualizadas as NotaComCnpj[]);
+        } else {
+          router.refresh();
+        }
+      }
+    } catch (error: unknown) {
+      setStatus({ success: false, message: (error as Error).message || 'Erro ao consultar pagamento ICMS em lote.' });
+    } finally {
+      setConsultandoPagamentoLote(false);
+    }
+  }
+
   return (
     <div className="min-h-screen p-3 md:p-5 bg-[var(--ground)]">
       <div className="max-w-[1800px] mx-auto">
         {/* Header */}
         <header className="rounded-xl bg-[var(--surface)] border border-[var(--border)] px-5 py-3.5 mb-4 shadow-sm flex flex-wrap gap-4 justify-between items-center">
-          <div className="flex items-center gap-3">
-            <div className="hidden w-10 h-10 rounded-[10px] place-items-center text-white text-lg font-bold"
-              style={{ background: 'linear-gradient(140deg,#2a251c,#4a4234)' }}>
-              D
-            </div>
-            <div>
-              <h1 className="text-lg font-bold tracking-tight text-[var(--ink)]">DanfeCollector</h1>
-              <p className="text-[var(--ink-mut)] text-xs">{t('tagline')}</p>
-            </div>
+          <div className="flex min-w-0 items-center">
+            <Image
+              src="/brand/danfe-collect-logo.svg"
+              alt="Danfe Collect"
+              width={720}
+              height={170}
+              priority
+              className="h-auto w-[220px] max-w-[70vw]"
+            />
+            <span className="sr-only">{t('tagline')}</span>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <button
@@ -1183,48 +1424,84 @@ export default function Dashboard({
           </div>
         </nav>
 
-        {/* KPIs */}
+        {/* Início */}
         {secaoAtual === 'home' && (
-          <>
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
-              <KpiCard label={t('companies')} value={String(cnpjs.length)} sub={t('registered')} tone="neu" />
-              <KpiCard
-                label={t('invoices')}
-                value={anoCarregado ? `${notas.length}` : String(notas.length)}
-                sub={anoCarregado ? `${t('year')} ${anoCarregado}` : totalNotas > notas.length ? `de ${totalNotas} ${t('ofTotal')}` : t('ofTotal')}
-                tone="neu"
-              />
-              <KpiCard label={t('movedValue')} value={moeda(valorGeral)} sub={t('loadedInvoices')} tone="good" />
-              <KpiCard label={t('toManifest')} value={String(pendentes)} sub={t('pendingSummaries')} tone="warn" />
+          <section className="home-shell space-y-4">
+            <div className="home-hero overflow-hidden rounded-2xl px-5 py-6 text-white shadow-sm md:px-7 md:py-7">
+              <div className="relative z-10 flex flex-col gap-5 md:flex-row md:items-end md:justify-between">
+                <div>
+                  <div className="mb-3 inline-flex rounded-full border border-white/15 bg-white/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-white/75">Visão operacional</div>
+                  <h2 className="max-w-2xl text-2xl font-black tracking-tight md:text-3xl">Olá, {usuario.nome.split(' ')[0]}. Aqui está o resumo de hoje.</h2>
+                  <p className="mt-2 text-sm text-white/65">
+                    {resumoOperacionalHome.ultimaSincronizacao ? `Última sincronização em ${dataHora(resumoOperacionalHome.ultimaSincronizacao)}` : 'Nenhuma sincronização registrada até agora.'}
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button type="button" onClick={() => setSecaoAtual('notas')} className="rounded-lg bg-white px-4 py-2.5 text-sm font-bold text-[#211d16] hover:bg-[#f5f1e9]">Ver notas fiscais</button>
+                  <button type="button" onClick={() => handleRotinaMatinal(false)} disabled={pending || sitramConsultandoTudo || rotinaMatinalRodando} className="rounded-lg border border-white/20 bg-white/10 px-4 py-2.5 text-sm font-bold text-white hover:bg-white/15 disabled:opacity-50">
+                    {rotinaMatinalRodando || sitramConsultandoTudo ? t('updating') : 'Atualizar dados'}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+              <HomeKpi sigla="NF" label="Notas na base" value={String(resumoInicio.totalNotas)} sub={`${resumoInicio.emitidasHoje} hoje · ${resumoInicio.emitidasUltimos7Dias} nos últimos 7 dias`} tone="dark" />
+              <HomeKpi sigla="R$" label="Valor movimentado" value={moeda(resumoInicio.valorTotal)} sub="Soma das notas completas" tone="green" />
+              <HomeKpi sigla="OK" label="XML completos" value={String(resumoInicio.notasCompletas)} sub={`${resumoInicio.totalNotas ? Math.round((resumoInicio.notasCompletas / resumoInicio.totalNotas) * 100) : 0}% da base disponível`} tone="blue" />
+              <HomeKpi sigla="!" label="A manifestar" value={String(resumoInicio.pendentesManifestacao)} sub="Resumos aguardando ciência" tone={resumoInicio.pendentesManifestacao > 0 ? 'amber' : 'green'} />
             </div>
 
             {alertasCertificado.length > 0 && (
-              <div className={`mb-4 rounded-xl border px-4 py-3 text-sm ${
-                alertasCertificado.some((item) => item.dias < 0)
-                  ? 'border-red-300 bg-red-50 text-red-800'
-                  : 'border-amber-300 bg-amber-50 text-amber-900'
-              }`}>
-                <div className="font-bold">
-                  {alertasCertificado.some((item) => item.dias < 0)
-                    ? t('certificateExpired')
-                    : t('certificateExpiring')}
+              <button type="button" onClick={() => setSecaoAtual(podeAdministrar ? 'configuracao' : 'empresas')} className={`w-full rounded-xl border px-4 py-3 text-left text-sm ${alertasCertificado.some((item) => item.dias < 0) ? 'border-red-300 bg-red-50 text-red-800' : 'border-amber-300 bg-amber-50 text-amber-900'}`}>
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="font-bold">{alertasCertificado.some((item) => item.dias < 0) ? t('certificateExpired') : t('certificateExpiring')}</div>
+                    <div className="mt-1 text-xs opacity-80">{alertasCertificado.map(({ cnpj, dias }) => `${cnpj.razaoSocial || formatarCnpj(cnpj.cnpj)}: ${dias < 0 ? t('expiredDays', { days: Math.abs(dias) }) : dias === 0 ? t('expiresToday') : t('expiresInDays', { days: dias })}`).join(' · ')}</div>
+                  </div>
+                  <span className="shrink-0 font-bold">Revisar →</span>
                 </div>
-                <div className="mt-1 flex flex-wrap gap-2">
-                  {alertasCertificado.map(({ cnpj, dias, vencimento }) => (
-                    <span key={cnpj.id} className="rounded-lg bg-white/70 px-2.5 py-1 font-medium">
-                      {cnpj.razaoSocial || formatarCnpj(cnpj.cnpj)}: {dias < 0 ? t('expiredDays', { days: Math.abs(dias) }) : dias === 0 ? t('expiresToday') : t('expiresInDays', { days: dias })} ({data(vencimento)})
-                    </span>
-                  ))}
-                </div>
-              </div>
+              </button>
             )}
 
-            <div className="mb-6 grid gap-3 md:grid-cols-3">
-              <HomeAtalho titulo={t('invoice')} detalhe={idioma === 'zh-CN' ? '筛选、确认、DAE 和 DANFE' : 'Filtros, manifestação, DAE e DANFE'} onClick={() => setSecaoAtual('notas')} />
-              <HomeAtalho titulo={t('reports')} detalhe={idioma === 'zh-CN' ? '各州地图、金额和排名' : 'Mapa por UF, valores e ranking'} onClick={() => setSecaoAtual('relatorios')} />
-              <HomeAtalho titulo={t('companies')} detalhe={idioma === 'zh-CN' ? 'CNPJ、NSU、SEFAZ 状态和同步' : 'CNPJ, NSU, status da SEFAZ e sincronização'} onClick={() => setSecaoAtual('empresas')} />
+            <div className="grid gap-4 xl:grid-cols-[1.05fr_1.4fr]">
+              <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-5 shadow-sm">
+                <div className="mb-4 flex items-start justify-between gap-3">
+                  <div><h3 className="text-base font-black text-[var(--ink)]">Pontos de atenção</h3><p className="mt-1 text-xs text-[var(--ink-mut)]">O que merece revisão primeiro.</p></div>
+                  <span className="rounded-full bg-[var(--surface-2)] px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-[var(--ink-mut)]">Agora</span>
+                </div>
+                <div className="space-y-2">
+                  <HomePendencia titulo="Manifestações pendentes" detalhe="Resumos sem ciência da operação" valor={resumoInicio.pendentesManifestacao} tone="amber" onClick={() => setSecaoAtual('notas')} />
+                  <HomePendencia titulo="DAE em aberto ou a gerar" detalhe="Notas consultadas no SITRAM" valor={resumoOperacionalHome.daeAbertos} tone="red" onClick={() => setSecaoAtual('notas')} />
+                  <HomePendencia titulo="DAE vencido" detalhe="Lançamentos ainda sem pagamento" valor={resumoOperacionalHome.daeVencidos} tone="red" onClick={() => setSecaoAtual('notas')} />
+                  <HomePendencia titulo="Empresas com atenção" detalhe="Sem busca recente ou temporariamente bloqueadas" valor={resumoOperacionalHome.empresasComAtencao} tone="gray" onClick={() => setSecaoAtual('empresas')} />
+                </div>
+              </div>
+
+              <div className="overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--surface)] shadow-sm">
+                <div className="flex items-start justify-between gap-3 border-b border-[var(--border)] px-5 py-4">
+                  <div><h3 className="text-base font-black text-[var(--ink)]">Notas recentes</h3><p className="mt-1 text-xs text-[var(--ink-mut)]">Últimos documentos recebidos na SEFAZ.</p></div>
+                  <button type="button" onClick={() => setSecaoAtual('notas')} className="text-xs font-bold text-[var(--ink)] hover:opacity-60">Ver todas →</button>
+                </div>
+                <div className="divide-y divide-[var(--border)]">
+                  {notasRecentesHome.map((nota) => (
+                    <button key={nota.id} type="button" onClick={() => setSecaoAtual('notas')} className="grid w-full grid-cols-[1fr_auto] items-center gap-4 px-5 py-3 text-left hover:bg-[var(--surface-2)] md:grid-cols-[1.4fr_.8fr_auto]">
+                      <div className="min-w-0"><div className="truncate text-sm font-bold text-[var(--ink)]">{nota.emitenteNome || 'Emitente não informado'}</div><div className="mt-0.5 text-[11px] text-[var(--ink-mut)]">NF {numeroNotaSistema(nota) || '—'} · {nomeEmpresaCurta(nota)}</div></div>
+                      <div className="hidden text-xs text-[var(--ink-mut)] md:block">{data(nota.emitidaEm)}</div>
+                      <div className="text-right"><div className="text-sm font-black text-[var(--ink)]">{moeda(nota.valorTotal)}</div><div className={`mt-0.5 text-[10px] font-bold uppercase ${nota.status === 'COMPLETA' ? 'text-emerald-700' : 'text-amber-700'}`}>{nota.status === 'COMPLETA' ? 'Completa' : 'Resumo'}</div></div>
+                    </button>
+                  ))}
+                  {notasRecentesHome.length === 0 && <div className="px-5 py-10 text-center text-sm text-[var(--ink-mut)]">Nenhuma nota encontrada.</div>}
+                </div>
+              </div>
             </div>
-          </>
+
+            <div className="grid gap-3 md:grid-cols-3">
+              <HomeAtalho sigla="NF" titulo={t('invoice')} detalhe="Consulte, filtre, manifeste e abra DANFEs." onClick={() => setSecaoAtual('notas')} />
+              <HomeAtalho sigla="BI" titulo={t('reports')} detalhe="Acompanhe valores, estados e riscos fiscais." onClick={() => setSecaoAtual('relatorios')} />
+              <HomeAtalho sigla="CNPJ" titulo={t('companies')} detalhe={`${resumoOperacionalHome.empresasAtivas} ativas de ${cnpjs.length} cadastradas.`} onClick={() => setSecaoAtual('empresas')} />
+            </div>
+          </section>
         )}
 
         {secaoAtual === 'relatorios' && (
@@ -2005,6 +2282,7 @@ export default function Dashboard({
                     <option value="a-pagar">{t('daePayFilter')}</option>
                     <option value="em-aberto">Em aberto</option>
                     <option value="pago">Pago</option>
+                    <option value="duplicidade">Suspeita duplicidade</option>
                     <option value="sem-dae">Sem DAE</option>
                     <option value="nao-encontrada">Nao encontrada</option>
                   </select>
@@ -2109,6 +2387,47 @@ export default function Dashboard({
               <span>Total: <strong className="text-[var(--ink)]">{moeda(totalFiltrado)}</strong></span>
             </div>
 
+            <div className="mb-3 p-3 bg-sky-50 border border-sky-200 rounded-xl flex flex-wrap items-center gap-3">
+              <div className="min-w-[240px] flex-1">
+                <p className="text-sm font-bold text-sky-900">Consulta pagamento ICMS em lote</p>
+                <p className="text-xs text-sky-700">
+                  Consulta NF com DAE no SITRAM. DAE pago antigo consulta uma vez e fica gravado; DAE aberto pode reconsultar.
+                </p>
+              </div>
+              <Badge tone={notasPagamentoIcmsElegiveis.length > 0 ? 'sky' : 'gray'}>
+                {notasPagamentoIcmsElegiveis.length} visiveis para consultar
+              </Badge>
+              <button
+                onClick={handleConsultarPagamentoIcmsLote}
+                disabled={consultandoPagamentoLote || pending}
+                className="bg-sky-600 hover:bg-sky-700 text-white px-4 py-1.5 rounded-lg text-sm font-semibold disabled:opacity-50"
+              >
+                {consultandoPagamentoLote ? 'Consultando...' : 'Consultar pagamento em lote'}
+              </button>
+              {pagamentoLoteResultado && (
+                <div className="w-full flex flex-wrap gap-2 text-xs">
+                  <Badge tone="blue">{pagamentoLoteResultado.processadas} processada(s)</Badge>
+                  <Badge tone="green">{pagamentoLoteResultado.pagas} paga(s)</Badge>
+                  <Badge tone="orange">{pagamentoLoteResultado.emAberto} em aberto</Badge>
+                  {(pagamentoLoteResultado.notasComSuspeitaDuplicidade ?? 0) > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFiltroDaeSitram('duplicidade');
+                        setMostrarFiltros(true);
+                        setPaginaCliente(1);
+                      }}
+                      className="rounded-full bg-red-100 px-2 py-1 text-[10px] font-bold tracking-wide text-red-700 hover:bg-red-200"
+                    >
+                      Ver {pagamentoLoteResultado.notasComSuspeitaDuplicidade} suspeita(s) duplicidade
+                    </button>
+                  )}
+                  {pagamentoLoteResultado.erros > 0 && <Badge tone="red">{pagamentoLoteResultado.erros} erro(s)</Badge>}
+                  {pagamentoLoteResultado.limiteAplicado && <Badge tone="amber">limite aplicado</Badge>}
+                </div>
+              )}
+            </div>
+
             {notasManifestaveis.length > 0 && (
               <div className="mb-3 p-3 bg-amber-50 border border-amber-200 rounded-xl flex flex-wrap items-center gap-3">
                 <label className="flex items-center gap-2 text-sm text-amber-800 cursor-pointer">
@@ -2157,28 +2476,65 @@ export default function Dashboard({
               <table className="w-full table-fixed text-left text-sm">
                 <colgroup>
                   <col className="w-[56px]" />
-                  <col className="w-[130px]" />
-                  <col />
-                  <col className="w-[150px]" />
-                  <col className="w-[240px]" />
-                  <col className="w-[220px]" />
-                  <col className="w-[160px]" />
+                  <col style={{ width: `${largurasColunas.nf}px` }} />
+                  <col style={{ width: `${largurasColunas.emitente}px` }} />
+                  <col style={{ width: `${largurasColunas.destinatario}px` }} />
+                  <col style={{ width: `${largurasColunas.valores}px` }} />
+                  <col style={{ width: `${largurasColunas.transporte}px` }} />
+                  <col style={{ width: `${largurasColunas.sitram}px` }} />
+                  <col style={{ width: `${largurasColunas.status}px` }} />
                 </colgroup>
                 <thead>
                   <tr className="bg-[var(--surface-2)] text-[var(--ink-mut)] text-xs uppercase tracking-wide border-b border-[var(--border)]">
                     <th className="px-3 py-2 font-medium"></th>
-                    <th className="px-3 py-2 font-medium">NF</th>
-                    <th className="px-3 py-2 font-medium">Emitente</th>
-                    <th className="px-3 py-2 font-medium text-right">Valores</th>
-                    <th className="px-3 py-2 font-medium">Transporte</th>
-                    <th className="px-3 py-2 font-medium">SITRAM / DAE</th>
-                    <th className="px-3 py-2 font-medium">Status</th>
+                    <th className="px-3 py-2 font-medium text-center">
+                      <div className="relative flex items-center justify-center">
+                        <span>NF</span>
+                        <span onMouseDown={(event) => iniciarResizeColuna('nf', event)} className="absolute right-[-10px] top-[-8px] h-8 w-5 cursor-col-resize" />
+                      </div>
+                    </th>
+                    <th className="px-3 py-2 font-medium text-center">
+                      <div className="relative flex items-center justify-center">
+                        <span>Emitente</span>
+                        <span onMouseDown={(event) => iniciarResizeColuna('emitente', event)} className="absolute right-[-10px] top-[-8px] h-8 w-5 cursor-col-resize" />
+                      </div>
+                    </th>
+                    <th className="px-3 py-2 font-medium text-center">
+                      <div className="relative flex items-center justify-center">
+                        <span>Destinatário</span>
+                        <span onMouseDown={(event) => iniciarResizeColuna('destinatario', event)} className="absolute right-[-10px] top-[-8px] h-8 w-5 cursor-col-resize" />
+                      </div>
+                    </th>
+                    <th className="px-3 py-2 font-medium text-center">
+                      <div className="relative flex items-center justify-center">
+                        <span>Valores</span>
+                        <span onMouseDown={(event) => iniciarResizeColuna('valores', event)} className="absolute right-[-10px] top-[-8px] h-8 w-5 cursor-col-resize" />
+                      </div>
+                    </th>
+                    <th className="px-3 py-2 font-medium text-center">
+                      <div className="relative flex items-center justify-center">
+                        <span>Transporte</span>
+                        <span onMouseDown={(event) => iniciarResizeColuna('transporte', event)} className="absolute right-[-10px] top-[-8px] h-8 w-5 cursor-col-resize" />
+                      </div>
+                    </th>
+                    <th className="px-3 py-2 font-medium text-center">
+                      <div className="relative flex items-center justify-center">
+                        <span>SITRAM / DAE</span>
+                        <span onMouseDown={(event) => iniciarResizeColuna('sitram', event)} className="absolute right-[-10px] top-[-8px] h-8 w-5 cursor-col-resize" />
+                      </div>
+                    </th>
+                    <th className="px-3 py-2 font-medium text-center">
+                      <div className="relative flex items-center justify-center">
+                        <span>Status</span>
+                        <span onMouseDown={(event) => iniciarResizeColuna('status', event)} className="absolute right-[-10px] top-[-8px] h-8 w-5 cursor-col-resize" />
+                      </div>
+                    </th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[var(--border)]">
                   {notasFiltradas.length === 0 && (
                     <tr>
-                      <td colSpan={7} className="py-10 text-center text-[var(--ink-mut)]">
+                      <td colSpan={8} className="py-10 text-center text-[var(--ink-mut)]">
                         Nenhuma nota para o filtro selecionado.
                       </td>
                     </tr>
@@ -2189,7 +2545,13 @@ export default function Dashboard({
                       nota={n}
                       aberta={expandida === n.id}
                       onToggle={() => setExpandida(expandida === n.id ? null : n.id)}
-                      selecionavel={n.status === 'RESUMO' && !n.manifestadaEm}
+                      selecionavel={
+                        n.status === 'RESUMO' &&
+                        !n.manifestadaEm &&
+                        n.situacaoSefaz !== 'CANCELADA' &&
+                        n.situacaoSefaz !== 'DENEGADA' &&
+                        notaDentroPrazoManifestacao(n)
+                      }
                       selecionada={selecionadas.has(n.id)}
                       onToggleSelecionada={() => toggleSelecionada(n.id)}
                     />
@@ -2200,8 +2562,8 @@ export default function Dashboard({
 
             <div className="mt-3 flex flex-wrap items-center justify-between gap-3 text-sm text-[var(--ink-mut)]">
               <span>
-                Mostrando {notasFiltradas.length === 0 ? 0 : (paginaClienteSegura - 1) * porPagina + 1}
-                {' '}a {Math.min(paginaClienteSegura * porPagina, notasFiltradas.length)} de {notasFiltradas.length}
+                Mostrando {notasFiltradas.length === 0 ? 0 : semPaginacaoCliente ? 1 : (paginaClienteSegura - 1) * porPagina + 1}
+                {' '}a {semPaginacaoCliente ? notasFiltradas.length : Math.min(paginaClienteSegura * porPagina, notasFiltradas.length)} de {notasFiltradas.length}
               </span>
               {usandoPaginacaoServidor ? (
                 <div className="flex items-center gap-2">
@@ -2250,7 +2612,7 @@ export default function Dashboard({
         )}
 
         <p className="text-center text-xs text-[var(--ink-mut)] mt-8">
-          DanfeCollector · NF-e direto da SEFAZ
+          Danfe Collect - Gestao digital de documentos fiscais
         </p>
       </div>
     </div>
@@ -2284,16 +2646,168 @@ function SecaoBotao({
   );
 }
 
-function HomeAtalho({ titulo, detalhe, onClick }: { titulo: string; detalhe: string; onClick: () => void }) {
+function HomeKpi({ sigla, label, value, sub, tone }: { sigla: string; label: string; value: string; sub: string; tone: 'dark' | 'green' | 'blue' | 'amber' }) {
+  const tones = {
+    dark: 'bg-[#211d16] text-white',
+    green: 'bg-emerald-100 text-emerald-800',
+    blue: 'bg-sky-100 text-sky-800',
+    amber: 'bg-amber-100 text-amber-800',
+  };
+  return (
+    <div className="home-kpi rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4 shadow-sm md:p-5">
+      <div className="flex items-start justify-between gap-3">
+        <p className="text-[11px] font-bold uppercase tracking-[0.12em] text-[var(--ink-mut)]">{label}</p>
+        <span className={`grid h-8 min-w-8 place-items-center rounded-lg px-1.5 text-[10px] font-black ${tones[tone]}`}>{sigla}</span>
+      </div>
+      <p className="mt-3 truncate text-xl font-black tracking-tight text-[var(--ink)] md:text-2xl" style={{ fontVariantNumeric: 'tabular-nums' }}>{value}</p>
+      <p className="mt-1 truncate text-[11px] text-[var(--ink-mut)] md:text-xs">{sub}</p>
+    </div>
+  );
+}
+
+function HomePendencia({ titulo, detalhe, valor, tone, onClick }: { titulo: string; detalhe: string; valor: number; tone: 'amber' | 'red' | 'gray'; onClick: () => void }) {
+  const tones = {
+    amber: 'bg-amber-100 text-amber-800',
+    red: 'bg-red-100 text-red-800',
+    gray: 'bg-[var(--surface-2)] text-[var(--ink)]',
+  };
+  return (
+    <button type="button" onClick={onClick} className="flex w-full items-center gap-3 rounded-xl border border-transparent p-2.5 text-left hover:border-[var(--border)] hover:bg-[var(--surface-2)]">
+      <span className={`grid h-9 w-9 shrink-0 place-items-center rounded-lg text-sm font-black ${tones[tone]}`}>{valor}</span>
+      <span className="min-w-0 flex-1"><span className="block truncate text-sm font-bold text-[var(--ink)]">{titulo}</span><span className="block truncate text-[11px] text-[var(--ink-mut)]">{detalhe}</span></span>
+      <span className="text-sm text-[var(--ink-mut)]">→</span>
+    </button>
+  );
+}
+
+function HomeAtalho({ sigla, titulo, detalhe, onClick }: { sigla: string; titulo: string; detalhe: string; onClick: () => void }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4 text-left shadow-sm transition hover:border-[var(--border-strong)] hover:bg-[var(--surface-2)]"
+      className="group flex items-center gap-4 rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-[var(--border-strong)] hover:shadow-md"
     >
-      <div className="text-sm font-bold text-[var(--ink)]">{titulo}</div>
-      <div className="mt-1 text-xs text-[var(--ink-mut)]">{detalhe}</div>
+      <span className="grid h-11 min-w-11 place-items-center rounded-xl bg-[var(--accent-soft)] px-2 text-[10px] font-black text-[var(--accent)]">{sigla}</span>
+      <span className="min-w-0 flex-1"><span className="block text-sm font-black text-[var(--ink)]">{titulo}</span><span className="mt-1 block truncate text-xs text-[var(--ink-mut)]">{detalhe}</span></span>
+      <span className="text-[var(--ink-mut)] transition group-hover:translate-x-1">→</span>
     </button>
+  );
+}
+
+function alternarValorFiltro(atuais: string[], valor: string): string[] {
+  return atuais.includes(valor) ? atuais.filter((item) => item !== valor) : [...atuais, valor];
+}
+
+function ChecklistFiltro({
+  titulo,
+  opcoes,
+  selecionados,
+  onToggle,
+  onMarcarTodos,
+  onLimpar,
+  extra,
+  className = '',
+  maxHeight = 'max-h-36',
+}: {
+  titulo: string;
+  opcoes: Array<{ valor: string; label: string; sub?: string }>;
+  selecionados: string[];
+  onToggle: (valor: string) => void;
+  onMarcarTodos?: () => void;
+  onLimpar?: () => void;
+  extra?: React.ReactNode;
+  className?: string;
+  maxHeight?: string;
+}) {
+  const [aberto, setAberto] = useState(false);
+  const ref = useRef<HTMLDivElement | null>(null);
+  const marcados = new Set(selecionados);
+  const totalSelecionado = selecionados.length;
+  const resumo = totalSelecionado === 0
+    ? 'Nenhum'
+    : totalSelecionado === opcoes.length
+      ? 'Todos'
+      : `${totalSelecionado} marcados`;
+
+  useEffect(() => {
+    if (!aberto) return;
+
+    function fecharFora(event: MouseEvent) {
+      if (!ref.current?.contains(event.target as Node)) setAberto(false);
+    }
+
+    function fecharEsc(event: KeyboardEvent) {
+      if (event.key === 'Escape') setAberto(false);
+    }
+
+    document.addEventListener('mousedown', fecharFora);
+    document.addEventListener('keydown', fecharEsc);
+    return () => {
+      document.removeEventListener('mousedown', fecharFora);
+      document.removeEventListener('keydown', fecharEsc);
+    };
+  }, [aberto]);
+
+  return (
+    <div ref={ref} className={`relative min-w-[150px] ${aberto ? 'z-40' : 'z-0'} ${className}`}>
+      <button
+        type="button"
+        onClick={() => setAberto((atual) => !atual)}
+        className={`flex w-full items-center justify-between gap-3 rounded-lg border px-3 py-1.5 text-left text-sm transition ${
+          aberto
+            ? 'border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)] shadow-sm'
+            : 'border-[var(--border-strong)] bg-[var(--surface)] text-[var(--ink)] hover:bg-[var(--surface-2)]'
+        }`}
+      >
+        <span className="min-w-0">
+          <span className="block text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-mut)]">{titulo}</span>
+          <span className="block truncate font-semibold">{resumo}</span>
+        </span>
+        <span className={`text-xs transition ${aberto ? 'rotate-180' : ''}`}>▼</span>
+      </button>
+
+      {aberto && (
+        <div className="absolute left-0 top-[calc(100%+6px)] z-50 w-[min(90vw,340px)] rounded-xl border border-[var(--border)] bg-[var(--surface)] p-3 shadow-xl">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-mut)]">{titulo}</p>
+            {(onMarcarTodos || onLimpar) && (
+              <div className="flex items-center gap-1">
+                {onMarcarTodos && (
+                  <button type="button" onClick={onMarcarTodos} className="rounded-md px-2 py-1 text-[11px] font-semibold text-[var(--accent)] hover:bg-[var(--accent-soft)]">
+                    Todos
+                  </button>
+                )}
+                {onLimpar && (
+                  <button type="button" onClick={onLimpar} className="rounded-md px-2 py-1 text-[11px] font-semibold text-[var(--ink-mut)] hover:bg-[var(--surface-2)]">
+                    Limpar
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+          {extra}
+          <div className={`space-y-1 overflow-y-auto pr-1 ${maxHeight}`}>
+            {opcoes.map((opcao) => (
+              <label key={opcao.valor} className="flex cursor-pointer items-start gap-2 rounded-lg px-2 py-1.5 text-xs text-[var(--ink)] hover:bg-[var(--surface-2)]">
+                <input
+                  type="checkbox"
+                  checked={marcados.has(opcao.valor)}
+                  onChange={() => onToggle(opcao.valor)}
+                  className="mt-0.5 h-4 w-4 rounded border-[var(--border-strong)] text-[var(--accent)]"
+                />
+                <span className="min-w-0">
+                  <span className="block truncate font-semibold" title={opcao.label}>{opcao.label}</span>
+                  {opcao.sub && <span className="block truncate text-[11px] text-[var(--ink-mut)]" title={opcao.sub}>{opcao.sub}</span>}
+                </span>
+              </label>
+            ))}
+            {opcoes.length === 0 && (
+              <p className="px-2 py-2 text-xs text-[var(--ink-mut)]">Sem opcoes</p>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -2314,13 +2828,18 @@ function RelatoriosDashboard({
   const [ufSelecionada, setUfSelecionada] = useState<string | null>(null);
   const [dataInicio, setDataInicio] = useState('');
   const [dataFim, setDataFim] = useState('');
-  const [filtroEmpresaRelatorio, setFiltroEmpresaRelatorio] = useState('todas');
+  const [filtroRaizesEmpresaRelatorio, setFiltroRaizesEmpresaRelatorio] = useState<string[]>(RAIZES_RELATORIO_PADRAO);
   const [filtroTipoRelatorio, setFiltroTipoRelatorio] = useState('todos');
-  const [filtroSituacaoRelatorio, setFiltroSituacaoRelatorio] = useState('todas');
-  const [filtroDaeRelatorio, setFiltroDaeRelatorio] = useState('todos');
+  const [filtroSituacoesRelatorio, setFiltroSituacoesRelatorio] = useState<string[]>(SITUACOES_RELATORIO_OPCOES.map((opcao) => opcao.valor));
+  const [filtroDaesRelatorio, setFiltroDaesRelatorio] = useState<string[]>(DAE_RELATORIO_OPCOES.map((opcao) => opcao.valor));
+  const [filtroFornecedoresRelatorio, setFiltroFornecedoresRelatorio] = useState<string[]>([]);
+  const [fornecedorFiltroAtivo, setFornecedorFiltroAtivo] = useState(false);
+  const [buscaFornecedorRelatorio, setBuscaFornecedorRelatorio] = useState('');
   const [filtroRiscoRelatorio, setFiltroRiscoRelatorio] = useState('todos');
   const [buscaRelatorio, setBuscaRelatorio] = useState('');
   const [limiteTabela, setLimiteTabela] = useState(20);
+  const [baixandoExcelTransporte, setBaixandoExcelTransporte] = useState(false);
+  const [erroExcelTransporte, setErroExcelTransporte] = useState<string | null>(null);
   const buscaRelatorioAdiada = useDeferredValue(buscaRelatorio);
   const dataInicioBusca = useDeferredValue(dataInicio);
   const dataFimBusca = useDeferredValue(dataFim);
@@ -2365,6 +2884,7 @@ function RelatoriosDashboard({
       icms,
       impostoPago: daeStatus === 'PAGO' ? (nota.daeValorPago ?? nota.pagamentoManualValor ?? icms) : 0,
       impostoPendente: daePendente ? (nota.daeValorAberto ?? nota.daeValor ?? icms) : 0,
+      empresaRaiz: raizCnpj(nota.cnpj.cnpj),
       empresaLabel: nota.cnpj.razaoSocial || formatarCnpj(nota.cnpj.cnpj),
       tipoLabel: nota.tipoOperacao || 'Entrada',
       emitenteChave: nota.emitenteCnpj || nota.emitenteNome || `nota-${nota.id}`,
@@ -2383,6 +2903,74 @@ function RelatoriosDashboard({
     };
   }), [notas]);
 
+  const empresasRelatorio = useMemo(() => {
+    const mapa = new Map<string, { raiz: string; nome: string; sub: string; ordem: number }>();
+    for (const nota of notasIndexadas) {
+      const raiz = nota.empresaRaiz;
+      if (!raiz) continue;
+      const sub = formatarCnpj(nota.cnpj.cnpj);
+      const atual = mapa.get(raiz);
+      if (atual) {
+        if (!atual.sub.includes(sub)) atual.sub = `${atual.sub}, ${sub}`;
+        continue;
+      }
+      const ordem = raiz === '45998339' ? 1 : raiz === '50767035' ? 2 : raiz === '62803717' ? 3 : 9;
+      mapa.set(raiz, {
+        raiz,
+        nome: nomeEmpresaRelatorioPorRaiz(raiz, nota.cnpj.razaoSocial || nota.empresaLabel),
+        sub,
+        ordem,
+      });
+    }
+    return [...mapa.values()].sort((a, b) => a.ordem - b.ordem || a.nome.localeCompare(b.nome));
+  }, [notasIndexadas]);
+
+  const fornecedoresRelatorio = useMemo(() => {
+    const mapa = new Map<string, { valor: string; label: string; sub: string; qtd: number }>();
+    for (const nota of notasIndexadas) {
+      if (filtroRaizesEmpresaRelatorio.length > 0 && !filtroRaizesEmpresaRelatorio.includes(nota.empresaRaiz)) continue;
+      const valor = nota.emitenteCnpj || nota.emitenteNomeRelatorio;
+      const atual = mapa.get(valor);
+      if (atual) {
+        atual.qtd += 1;
+        continue;
+      }
+      mapa.set(valor, {
+        valor,
+        label: nota.emitenteNomeRelatorio,
+        sub: nota.emitenteCnpj ? formatarCnpj(nota.emitenteCnpj) : '',
+        qtd: 1,
+      });
+    }
+    return [...mapa.values()]
+      .sort((a, b) => a.label.localeCompare(b.label))
+      .map((item) => ({ ...item, sub: item.sub ? `${item.sub} - ${item.qtd} NF` : `${item.qtd} NF` }));
+  }, [notasIndexadas, filtroRaizesEmpresaRelatorio]);
+
+  const fornecedoresVisiveisRelatorio = useMemo(() => {
+    const busca = buscaFornecedorRelatorio.trim().toLowerCase();
+    if (!busca) return fornecedoresRelatorio;
+    return fornecedoresRelatorio.filter((item) => `${item.label} ${item.sub}`.toLowerCase().includes(busca));
+  }, [fornecedoresRelatorio, buscaFornecedorRelatorio]);
+
+  const todosFornecedoresRelatorio = useMemo(() => fornecedoresRelatorio.map((item) => item.valor), [fornecedoresRelatorio]);
+  const fornecedoresSelecionadosRelatorio = fornecedorFiltroAtivo ? filtroFornecedoresRelatorio : todosFornecedoresRelatorio;
+
+  function notaPassaFiltroDaeRelatorio(nota: (typeof notasIndexadas)[number]): boolean {
+    if (filtroDaesRelatorio.length === DAE_RELATORIO_OPCOES.length) return true;
+    if (filtroDaesRelatorio.length === 0) return false;
+    return filtroDaesRelatorio.some((filtro) => {
+      if (filtro === 'pago') return nota.daeStatus === 'PAGO';
+      if (filtro === 'pendente') return nota.daePendente;
+      if (filtro === 'vencido') return nota.daePendente && nota.diasDae !== null && nota.diasDae < 0;
+      if (filtro === 'vence7') return nota.daePendente && nota.diasDae !== null && nota.diasDae >= 0 && nota.diasDae <= 7;
+      if (filtro === 'sem-consulta') return !nota.sitramConsultadaEm;
+      if (filtro === 'sem-dae') return nota.daeStatus === 'SEM_DAE';
+      if (filtro === 'consultado') return nota.daeStatus === 'CONSULTADO';
+      return false;
+    });
+  }
+
   // Notas dentro do período escolhido (filtro por data de emissão)
   const notasPeriodo = useMemo(() => {
     const busca = buscaRelatorioAdiada.trim().toLowerCase();
@@ -2390,14 +2978,11 @@ function RelatoriosDashboard({
       if (!n.dataChave) return false;
       if (inicioPeriodo && n.dataChave < inicioPeriodo) return false;
       if (fimPeriodo && n.dataChave > fimPeriodo) return false;
-      if (filtroEmpresaRelatorio !== 'todas' && String(n.cnpjId) !== filtroEmpresaRelatorio) return false;
+      if (filtroRaizesEmpresaRelatorio.length === 0 || !filtroRaizesEmpresaRelatorio.includes(n.empresaRaiz)) return false;
+      if (fornecedoresSelecionadosRelatorio.length === 0 || !fornecedoresSelecionadosRelatorio.includes(n.emitenteCnpj || n.emitenteNomeRelatorio)) return false;
       if (filtroTipoRelatorio !== 'todos' && n.tipoLabel !== filtroTipoRelatorio) return false;
-      if (filtroSituacaoRelatorio !== 'todas' && n.situacaoSefaz !== filtroSituacaoRelatorio) return false;
-      if (filtroDaeRelatorio === 'pago' && n.daeStatus !== 'PAGO') return false;
-      if (filtroDaeRelatorio === 'pendente' && !n.daePendente) return false;
-      if (filtroDaeRelatorio === 'vencido' && !(n.daePendente && n.diasDae !== null && n.diasDae < 0)) return false;
-      if (filtroDaeRelatorio === 'vence7' && !(n.daePendente && n.diasDae !== null && n.diasDae >= 0 && n.diasDae <= 7)) return false;
-      if (filtroDaeRelatorio === 'sem-consulta' && n.sitramConsultadaEm) return false;
+      if (filtroSituacoesRelatorio.length === 0 || !filtroSituacoesRelatorio.includes(n.situacaoSefaz)) return false;
+      if (!notaPassaFiltroDaeRelatorio(n)) return false;
       if (filtroRiscoRelatorio !== 'todos' && n.risco !== filtroRiscoRelatorio) return false;
       if (busca && !n.buscaTexto.includes(busca)) return false;
       return true;
@@ -2406,10 +2991,11 @@ function RelatoriosDashboard({
     notasIndexadas,
     inicioPeriodo,
     fimPeriodo,
-    filtroEmpresaRelatorio,
+    filtroRaizesEmpresaRelatorio,
+    fornecedoresSelecionadosRelatorio,
     filtroTipoRelatorio,
-    filtroSituacaoRelatorio,
-    filtroDaeRelatorio,
+    filtroSituacoesRelatorio,
+    filtroDaesRelatorio,
     filtroRiscoRelatorio,
     buscaRelatorioAdiada,
   ]);
@@ -2463,11 +3049,6 @@ function RelatoriosDashboard({
 
   const topUf = ranking[0];
   const totalValorPeriodo = ranking.reduce((a, r) => a + r.valor, 0);
-  const empresasRelatorio = useMemo(() => {
-    const mapa = new Map<number, string>();
-    for (const nota of notasIndexadas) mapa.set(nota.cnpjId, nota.empresaLabel);
-    return [...mapa.entries()].map(([id, nome]) => ({ id, nome })).sort((a, b) => a.nome.localeCompare(b.nome));
-  }, [notasIndexadas]);
   const tiposRelatorio = useMemo(() => {
     return [...new Set(notasIndexadas.map((nota) => nota.tipoLabel))].filter(Boolean).sort();
   }, [notasIndexadas]);
@@ -2574,7 +3155,17 @@ function RelatoriosDashboard({
 
   useEffect(() => {
     setLimiteTabela(20);
-  }, [inicioPeriodo, fimPeriodo, filtroEmpresaRelatorio, filtroTipoRelatorio, filtroSituacaoRelatorio, filtroDaeRelatorio, filtroRiscoRelatorio, buscaRelatorioAdiada]);
+  }, [
+    inicioPeriodo,
+    fimPeriodo,
+    filtroRaizesEmpresaRelatorio,
+    filtroTipoRelatorio,
+    filtroSituacoesRelatorio,
+    filtroDaesRelatorio,
+    fornecedoresSelecionadosRelatorio,
+    filtroRiscoRelatorio,
+    buscaRelatorioAdiada,
+  ]);
 
   function selecionar(uf: string) {
     setUfSelecionada((atual) => (atual === uf ? null : uf));
@@ -2586,10 +3177,62 @@ function RelatoriosDashboard({
   };
   const rt = (pt: string, zh: string) => idioma === 'zh-CN' ? zh : pt;
 
+  function nomeArquivoDownload(resposta: Response): string {
+    const disposition = resposta.headers.get('content-disposition') ?? '';
+    const utf8 = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+    if (utf8?.[1]) return decodeURIComponent(utf8[1]);
+    const simples = disposition.match(/filename="?([^";]+)"?/i);
+    return simples?.[1] ?? 'relatorio-transporte.xlsx';
+  }
+
+  async function baixarExcelTransporte() {
+    setBaixandoExcelTransporte(true);
+    setErroExcelTransporte(null);
+    try {
+      const params = new URLSearchParams();
+      if (inicioPeriodo) params.set('inicio', inicioPeriodo);
+      if (fimPeriodo) params.set('fim', fimPeriodo);
+      if (filtroRaizesEmpresaRelatorio.length === 0) params.append('raizCnpj', '__none__');
+      else filtroRaizesEmpresaRelatorio.forEach((raiz) => params.append('raizCnpj', raiz));
+      if (filtroSituacoesRelatorio.length !== SITUACOES_RELATORIO_OPCOES.length) {
+        if (filtroSituacoesRelatorio.length === 0) params.append('situacao', '__none__');
+        else filtroSituacoesRelatorio.forEach((situacao) => params.append('situacao', situacao));
+      }
+      if (filtroDaesRelatorio.length !== DAE_RELATORIO_OPCOES.length) {
+        if (filtroDaesRelatorio.length === 0) params.append('dae', '__none__');
+        else filtroDaesRelatorio.forEach((dae) => params.append('dae', dae));
+      }
+      if (fornecedorFiltroAtivo) {
+        if (fornecedoresSelecionadosRelatorio.length === 0) params.append('fornecedor', '__none__');
+        else fornecedoresSelecionadosRelatorio.forEach((fornecedor) => params.append('fornecedor', fornecedor));
+      }
+
+      const resposta = await fetch(`/api/relatorios/transporte-xlsx?${params.toString()}`, { cache: 'no-store' });
+      if (!resposta.ok) {
+        const erro = await resposta.json().catch(() => null) as { message?: string } | null;
+        throw new Error(erro?.message || 'Nao foi possivel gerar o Excel.');
+      }
+
+      const blob = await resposta.blob();
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = nomeArquivoDownload(resposta);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (error: unknown) {
+      setErroExcelTransporte((error as Error).message || 'Erro ao baixar Excel.');
+    } finally {
+      setBaixandoExcelTransporte(false);
+    }
+  }
+
   return (
     <div className="report-shell mb-6 space-y-4">
       {/* Filtro por data */}
-      <div className="report-card flex flex-wrap items-end gap-3 rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4 shadow-sm">
+      <div className="report-card relative z-30 flex flex-wrap items-end gap-3 rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4 shadow-sm">
         <div>
           <label className="block text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-mut)]">{rt('De', '开始日期')}</label>
           <input
@@ -2608,19 +3251,14 @@ function RelatoriosDashboard({
             className="mt-1 rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-1.5 text-sm text-[var(--ink)]"
           />
         </div>
-        <div>
-          <label className="block text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-mut)]">{rt('Empresa', '公司')}</label>
-          <select
-            value={filtroEmpresaRelatorio}
-            onChange={(e) => setFiltroEmpresaRelatorio(e.target.value)}
-            className="mt-1 max-w-[220px] rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-1.5 text-sm text-[var(--ink)]"
-          >
-            <option value="todas">{rt('Todas', '全部')}</option>
-            {empresasRelatorio.map((empresa) => (
-              <option key={empresa.id} value={empresa.id}>{empresa.nome}</option>
-            ))}
-          </select>
-        </div>
+        <ChecklistFiltro
+          titulo="Empresa"
+          opcoes={empresasRelatorio.map((empresa) => ({ valor: empresa.raiz, label: empresa.nome.toUpperCase(), sub: empresa.sub }))}
+          selecionados={filtroRaizesEmpresaRelatorio}
+          onToggle={(valor) => setFiltroRaizesEmpresaRelatorio((atuais) => alternarValorFiltro(atuais, valor))}
+          onMarcarTodos={() => setFiltroRaizesEmpresaRelatorio(empresasRelatorio.map((empresa) => empresa.raiz))}
+          onLimpar={() => setFiltroRaizesEmpresaRelatorio([])}
+        />
         <div>
           <label className="block text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-mut)]">{rt('Tipo', '类型')}</label>
           <select
@@ -2634,34 +3272,53 @@ function RelatoriosDashboard({
             ))}
           </select>
         </div>
-        <div>
-          <label className="block text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-mut)]">{rt('Situação', '状态')}</label>
-          <select
-            value={filtroSituacaoRelatorio}
-            onChange={(e) => setFiltroSituacaoRelatorio(e.target.value)}
-            className="mt-1 rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-1.5 text-sm text-[var(--ink)]"
-          >
-            <option value="todas">{rt('Todas', '全部')}</option>
-            <option value="AUTORIZADA">{rt('Autorizada', '已授权')}</option>
-            <option value="CANCELADA">{rt('Cancelada', '已取消')}</option>
-            <option value="DENEGADA">{rt('Denegada', '已拒绝')}</option>
-          </select>
-        </div>
-        <div>
-          <label className="block text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-mut)]">DAE</label>
-          <select
-            value={filtroDaeRelatorio}
-            onChange={(e) => setFiltroDaeRelatorio(e.target.value)}
-            className="mt-1 rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-1.5 text-sm text-[var(--ink)]"
-          >
-            <option value="todos">{rt('Todos', '全部')}</option>
-            <option value="pago">{rt('Pago', '已付款')}</option>
-            <option value="pendente">{rt('Pendente', '待处理')}</option>
-            <option value="vencido">{rt('Vencido', '已逾期')}</option>
-            <option value="vence7">{rt('Vence em 7 dias', '7 天内到期')}</option>
-            <option value="sem-consulta">{rt('Sem consulta', '未查询')}</option>
-          </select>
-        </div>
+        <ChecklistFiltro
+          titulo="Situacao"
+          opcoes={SITUACOES_RELATORIO_OPCOES}
+          selecionados={filtroSituacoesRelatorio}
+          onToggle={(valor) => setFiltroSituacoesRelatorio((atuais) => alternarValorFiltro(atuais, valor))}
+          onMarcarTodos={() => setFiltroSituacoesRelatorio(SITUACOES_RELATORIO_OPCOES.map((opcao) => opcao.valor))}
+          onLimpar={() => setFiltroSituacoesRelatorio([])}
+        />
+        <ChecklistFiltro
+          titulo="DAE"
+          opcoes={DAE_RELATORIO_OPCOES}
+          selecionados={filtroDaesRelatorio}
+          onToggle={(valor) => setFiltroDaesRelatorio((atuais) => alternarValorFiltro(atuais, valor))}
+          onMarcarTodos={() => setFiltroDaesRelatorio(DAE_RELATORIO_OPCOES.map((opcao) => opcao.valor))}
+          onLimpar={() => setFiltroDaesRelatorio([])}
+          maxHeight="max-h-44"
+        />
+        <ChecklistFiltro
+          titulo="Fornecedor"
+          opcoes={fornecedoresVisiveisRelatorio}
+          selecionados={fornecedoresSelecionadosRelatorio}
+          onToggle={(valor) => {
+            setFornecedorFiltroAtivo(true);
+            setFiltroFornecedoresRelatorio((atuais) => {
+              const base = fornecedorFiltroAtivo ? atuais : todosFornecedoresRelatorio;
+              return alternarValorFiltro(base, valor);
+            });
+          }}
+          onMarcarTodos={() => {
+            setFornecedorFiltroAtivo(false);
+            setFiltroFornecedoresRelatorio([]);
+          }}
+          onLimpar={() => {
+            setFornecedorFiltroAtivo(true);
+            setFiltroFornecedoresRelatorio([]);
+          }}
+          extra={
+            <input
+              value={buscaFornecedorRelatorio}
+              onChange={(e) => setBuscaFornecedorRelatorio(e.target.value)}
+              placeholder="Buscar fornecedor"
+              className="mb-2 w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-2 py-1.5 text-xs text-[var(--ink)]"
+            />
+          }
+          className="min-w-[190px]"
+          maxHeight="max-h-44"
+        />
         <div>
           <label className="block text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-mut)]">{rt('Risco', '风险')}</label>
           <select
@@ -2701,9 +3358,20 @@ function RelatoriosDashboard({
             ← {rt('Ver todo o Brasil', '查看整个巴西')}
           </button>
         )}
+        <button
+          type="button"
+          onClick={baixarExcelTransporte}
+          disabled={baixandoExcelTransporte}
+          className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold text-white transition hover:-translate-y-0.5 hover:bg-emerald-700 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {baixandoExcelTransporte ? rt('Gerando Excel...', 'Excel...') : rt('Baixar Excel', 'Excel')}
+        </button>
         <p className="ml-auto text-xs text-[var(--ink-mut)]">
           {rt(`${notasPeriodo.length} nota(s) no período`, `当前期间 ${notasPeriodo.length} 张发票`)} · {moeda(totalValorPeriodo)}
         </p>
+        {erroExcelTransporte && (
+          <p className="w-full text-sm font-medium text-red-700">{erroExcelTransporte}</p>
+        )}
       </div>
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
@@ -2925,7 +3593,7 @@ function RelatoriosDashboard({
               <tbody className="divide-y divide-[var(--border)]">
                 {daesPrioritarios.map((nota) => (
                   <tr key={`dae-${nota.id}`}>
-                    <td className="px-2 py-2 font-semibold text-[var(--ink)]">{nota.numero || '-'}</td>
+                    <td className="px-2 py-2 font-semibold text-[var(--ink)]">{numeroNotaSistema(nota) || '-'}</td>
                     <td className="max-w-[220px] truncate px-2 py-2 text-[var(--ink)]" title={nota.emitenteNomeRelatorio}>{nota.emitenteNomeRelatorio}</td>
                     <td className="px-2 py-2 text-[var(--ink)]">{nota.daeVencimento ? data(nota.daeVencimento) : '-'}</td>
                     <td className="px-2 py-2 text-right font-semibold text-[var(--ink)]">{moeda(nota.impostoPendente)}</td>
@@ -2952,7 +3620,7 @@ function RelatoriosDashboard({
                 <div className="flex items-center justify-between gap-3">
                   <div className="min-w-0">
                     <div className="truncate text-sm font-semibold text-[var(--ink)]" title={nota.emitenteNomeRelatorio}>
-                      NF {nota.numero || '-'} - {nota.emitenteNomeRelatorio}
+                      NF {numeroNotaSistema(nota) || '-'} - {nota.emitenteNomeRelatorio}
                     </div>
                     <div className="mt-1 text-xs text-[var(--ink-mut)]">{nota.pendencias.join(' | ')}</div>
                   </div>
@@ -2998,8 +3666,8 @@ function RelatoriosDashboard({
               {notasTabela.map((nota) => (
                 <tr key={`nota-rel-${nota.id}`} className="hover:bg-[var(--surface-2)]">
                   <td className="px-2 py-2 text-[var(--ink)]">{data(nota.emitidaEm)}</td>
-                  <td className="px-2 py-2 font-semibold text-[var(--ink)]">{nota.numero || '-'}</td>
-                  <td className="px-2 py-2 text-[var(--ink-mut)]">{nota.serie || '-'}</td>
+                  <td className="px-2 py-2 font-semibold text-[var(--ink)]">{numeroNotaSistema(nota) || '-'}</td>
+                  <td className="px-2 py-2 text-[var(--ink-mut)]">{serieNotaSistema(nota) || '-'}</td>
                   <td className="max-w-[180px] truncate px-2 py-2 text-[var(--ink)]" title={nota.empresaLabel}>{nota.empresaLabel}</td>
                   <td className="max-w-[260px] truncate px-2 py-2 text-[var(--ink)]" title={nota.emitenteNomeRelatorio}>{nota.emitenteNomeRelatorio}</td>
                   <td className="px-2 py-2 text-[var(--ink)]">{nota.uf || '-'}</td>
@@ -3406,7 +4074,7 @@ function AlertaDaes({
       const cnpjCmp = a.nota.cnpj.cnpj.localeCompare(b.nota.cnpj.cnpj);
       if (cnpjCmp !== 0) return cnpjCmp;
 
-      return (a.nota.numero || a.numeroNota || '').localeCompare(b.nota.numero || b.numeroNota || '');
+      return (numeroNotaSistema(a.nota) || a.numeroNota || '').localeCompare(numeroNotaSistema(b.nota) || b.numeroNota || '');
     });
   }, [notas, cnpjId]);
 
@@ -3531,7 +4199,7 @@ function AlertaDaes({
                 {itensGrupo.map((item) => (
                   <div key={item.id} className="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-xs shadow-sm">
                     <div className="flex items-center gap-2">
-                      <strong className="text-[var(--ink)]">NF {item.nota.numero || item.numeroNota || '—'}</strong>
+                      <strong className="text-[var(--ink)]">NF {numeroNotaSistema(item.nota) || item.numeroNota || '—'}</strong>
                       <Badge tone="indigo">{item.classificacao}</Badge>
                       <strong className="ml-auto text-[var(--ink)]">{moeda(item.lancamento?.valorAberto ?? null)}</strong>
                     </div>
@@ -3591,23 +4259,30 @@ function CompactFragmentNota({
             )}
           </div>
         </td>
-        <td className="px-3 py-3 align-top">
+        <td className="px-3 py-3 align-top text-center">
           <p className="font-medium text-[var(--ink)] whitespace-nowrap">{data(nota.emitidaEm)}</p>
-          <p className="text-xs text-[var(--ink-mut)]">NF {nota.numero || dae.numeroNota || '-'}</p>
+          <p className="text-xs text-[var(--ink-mut)]">NF {numeroNotaSistema(nota) || dae.numeroNota || '-'} / Serie {serieNotaSistema(nota) || '-'}</p>
           {nota.tipoOperacao && (
             <div className="mt-1">
               <Badge tone={nota.tipoOperacao === 'Entrada' ? 'sky' : 'orange'}>{nota.tipoOperacao}</Badge>
             </div>
           )}
         </td>
-        <td className="px-3 py-3 align-top min-w-0">
+        <td className="px-3 py-3 align-top min-w-0 text-center">
           <p className="font-medium text-[var(--ink)] leading-snug line-clamp-2" title={nota.emitenteNome || ''}>
             {nota.emitenteNome || '-'}
           </p>
-          <p className="text-xs text-[var(--ink-mut)] font-mono truncate">{formatarCnpj(nota.emitenteCnpj)}</p>
-          <p className="text-xs text-[var(--ink-mut)] truncate">{nota.naturezaOp || ''}</p>
+          <p className="text-xs text-[var(--ink-mut)] font-mono truncate text-center">{formatarCnpj(nota.emitenteCnpj)}</p>
+          <p className="text-xs text-[var(--ink-mut)] truncate text-center">{nota.naturezaOp || ''}</p>
         </td>
-        <td className="px-3 py-3 align-top text-right">
+        <td className="px-3 py-3 align-top min-w-0 text-center">
+          <p className="font-medium text-[var(--ink)] leading-snug line-clamp-2" title={nota.destNome || ''}>
+            {nota.destNome || '-'}
+          </p>
+          <p className="text-xs text-[var(--ink-mut)] font-mono truncate text-center">{formatarCnpj(nota.destCnpj)}</p>
+          <p className="text-xs text-[var(--ink-mut)] truncate text-center">{nomeEmpresaCurta(nota)}</p>
+        </td>
+        <td className="px-3 py-3 align-top text-center">
           <p className="font-semibold text-[var(--ink)] whitespace-nowrap">{moeda(nota.valorTotal)}</p>
           <p className="text-xs text-[var(--ink-mut)] whitespace-nowrap">Frete {moeda(nota.valorFrete)}</p>
           <p className="text-xs text-[var(--ink-mut)]">{nota.qtdItens ?? '-'} item(ns)</p>
@@ -3663,7 +4338,7 @@ function CompactFragmentNota({
       </tr>
       {aberta && (
         <tr className="bg-[var(--surface-2)]/70">
-          <td colSpan={7} className="px-4 py-4">
+          <td colSpan={8} className="px-4 py-4">
             <DetalheNota nota={nota} />
           </td>
         </tr>
@@ -3801,8 +4476,14 @@ function DetalheNota({ nota }: { nota: NotaComCnpj }) {
   const [manifestando, setManifestando] = useState(false);
   const [msgManifesto, setMsgManifesto] = useState<{ ok: boolean; texto: string } | null>(null);
   const [salvandoEtiqueta, setSalvandoEtiqueta] = useState(false);
+  const [consultandoSitram, setConsultandoSitram] = useState(false);
+  const [msgSitramNota, setMsgSitramNota] = useState<{ ok: boolean; texto: string } | null>(null);
+  const [consultandoPagamentoIcms, setConsultandoPagamentoIcms] = useState(false);
+  const [msgPagamentoIcms, setMsgPagamentoIcms] = useState<{ ok: boolean; texto: string } | null>(null);
 
   const ehResumo = nota.status === 'RESUMO';
+  const espelhoSitram = useMemo(() => extrairEspelhoSitram(nota), [nota]);
+  const pagamentoIcms = useMemo(() => extrairPagamentoIcmsSitram(nota), [nota]);
   const tagsAtuais = parseEtiquetas(nota.etiqueta);
 
   async function handleClicarEtiqueta(tag: string) {
@@ -3837,6 +4518,24 @@ function DetalheNota({ nota }: { nota: NotaComCnpj }) {
     const res = await manifestarNota(nota.id);
     setMsgManifesto({ ok: res.success, texto: res.message });
     setManifestando(false);
+    if (res.success) router.refresh();
+  }
+
+  async function handleAtualizarSitramNota() {
+    setConsultandoSitram(true);
+    setMsgSitramNota(null);
+    const res = await atualizarSitramPorChaves([nota.chave]);
+    setMsgSitramNota({ ok: res.success, texto: res.message });
+    setConsultandoSitram(false);
+    if (res.success) router.refresh();
+  }
+
+  async function handleConsultarPagamentoIcms() {
+    setConsultandoPagamentoIcms(true);
+    setMsgPagamentoIcms(null);
+    const res = await consultarPagamentoIcmsNota(nota.id);
+    setMsgPagamentoIcms({ ok: res.success, texto: res.message });
+    setConsultandoPagamentoIcms(false);
     if (res.success) router.refresh();
   }
 
@@ -3875,6 +4574,155 @@ function DetalheNota({ nota }: { nota: NotaComCnpj }) {
     );
   }
 
+  function PainelAtualizarSitramNota() {
+    return (
+      <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
+        <p className="text-sm font-medium text-amber-900">
+          Ainda nao tenho os itens do SITRAM salvos para esta nota.
+        </p>
+        <p className="mt-1 text-sm text-amber-800">
+          Clique para reconsultar o SITRAM agora. Se o portal retornar os itens, o Espelho SITRAM aparece aqui e em tela de impressao.
+        </p>
+        <button
+          type="button"
+          onClick={handleAtualizarSitramNota}
+          disabled={consultandoSitram}
+          className="mt-3 rounded-lg bg-amber-500 px-4 py-2 text-sm font-medium text-white hover:bg-amber-600 disabled:opacity-50"
+        >
+          {consultandoSitram ? 'Consultando SITRAM...' : 'Atualizar SITRAM desta nota'}
+        </button>
+        {msgSitramNota && (
+          <p className={`mt-3 text-sm ${msgSitramNota.ok ? 'text-emerald-700' : 'text-red-700'}`}>
+            {msgSitramNota.texto}
+          </p>
+        )}
+      </div>
+    );
+  }
+
+  function PainelPagamentoIcms() {
+    const documentos = pagamentoIcms.documentos;
+    const simulacoes = pagamentoIcms.simulacoes;
+    const suspeitasDuplicidade = pagamentoIcms.suspeitasDuplicidade;
+    const temResultado = documentos.length > 0 || simulacoes.length > 0 || !!pagamentoIcms.consultadoEm;
+
+    return (
+      <section className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
+        <div className="mb-3 flex flex-wrap items-center gap-2 border-b border-[var(--border)] pb-3">
+          <div>
+            <p className="text-xs font-bold uppercase tracking-wide text-[var(--ink-mut)]">Pagamento ICMS / SITRAM</p>
+            <h3 className="font-bold text-[var(--ink)]">Consulta de DAE por lançamento</h3>
+          </div>
+          <button
+            type="button"
+            onClick={handleConsultarPagamentoIcms}
+            disabled={consultandoPagamentoIcms}
+            className="ml-auto rounded-lg bg-[var(--accent)] px-4 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
+          >
+            {consultandoPagamentoIcms ? 'Consultando...' : 'Consultar pagamento ICMS'}
+          </button>
+        </div>
+
+        {msgPagamentoIcms && (
+          <p className={`mb-3 rounded-lg px-3 py-2 text-sm ${msgPagamentoIcms.ok ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'}`}>
+            {msgPagamentoIcms.texto}
+          </p>
+        )}
+
+        {!temResultado && (
+          <p className="text-sm text-[var(--ink-mut)]">
+            Clique em consultar para verificar se o DAE ja foi pago, se existe DAE emitido ou se ainda esta apenas em aberto para geracao. Se existir DAE emitido, ele sera salvo automaticamente na aba Anexos.
+          </p>
+        )}
+
+        {pagamentoIcms.consultadoEm && (
+          <p className="mb-3 text-xs text-[var(--ink-mut)]">Ultima consulta: {dataHora(pagamentoIcms.consultadoEm)}</p>
+        )}
+
+        {suspeitasDuplicidade.length > 0 && (
+          <div className="mb-3 rounded-lg border border-red-300 bg-red-50 p-3">
+            <div className="mb-2 flex flex-wrap items-center gap-2">
+              <p className="text-sm font-black text-red-800">Possivel pagamento duplicado</p>
+              <Badge tone="red">{suspeitasDuplicidade.length} alerta(s)</Badge>
+            </div>
+            <div className="space-y-2">
+              {suspeitasDuplicidade.map((suspeita) => (
+                <div key={suspeita.id} className="rounded bg-white/70 p-2 text-xs text-red-900">
+                  <p className="font-bold">{suspeita.titulo}</p>
+                  <p>{suspeita.detalhe}</p>
+                  <p className="mt-1 text-red-700">
+                    Lancamento: <span className="font-mono">{suspeita.idLancamentoFront || '-'}</span>
+                    {' | '}DAE: <span className="font-mono">{suspeita.codigoDocumento || '-'}</span>
+                    {' | '}Esperado: {moeda(suspeita.valorEsperado)}
+                    {' | '}Pago: {moeda(suspeita.valorPago)}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {documentos.length > 0 && (
+          <div className="space-y-2">
+            {documentos.map((documento, indice) => (
+              <article key={`${documento.idLancamentoFront}-${documento.codigoDocumento ?? indice}`} className={`rounded-lg border p-3 ${documento.pago ? 'border-emerald-200 bg-emerald-50/50' : 'border-amber-200 bg-amber-50/40'}`}>
+                <div className="flex flex-wrap items-start gap-2">
+                  <div className="min-w-0 flex-1">
+                    <p className="font-bold text-[var(--ink)]">{documento.tipo}</p>
+                    <p className="text-xs text-[var(--ink-mut)]">{documento.situacao || 'Situacao nao informada'} {documento.valor ? `| ${documento.valor}` : ''}</p>
+                  </div>
+                  <Badge tone={documento.pago ? 'green' : 'orange'}>{documento.pago ? 'PAGO' : 'EMITIDO'}</Badge>
+                </div>
+                {documento.codigoDocumento && (
+                  <p className="mt-2 text-xs text-[var(--ink-mut)]">
+                    Codigo DAE: <span className="font-mono text-[var(--ink)] select-all">{documento.codigoDocumento}</span>
+                  </p>
+                )}
+                {(documento.total !== null || documento.valorPago !== null || documento.dataPagamento) && (
+                  <p className="mt-1 text-xs text-[var(--ink-mut)]">
+                    Total DAE: <strong className="text-[var(--ink)]">{moeda(documento.total)}</strong>
+                    {' | '}Valor pago: <strong className="text-[var(--ink)]">{moeda(documento.valorPago)}</strong>
+                    {' | '}Pagamento: <strong className="text-[var(--ink)]">{documento.dataPagamento ? dataHora(documento.dataPagamento) : '-'}</strong>
+                  </p>
+                )}
+                {documento.codigoBarras && (
+                  <p className="mt-1 break-all rounded bg-white/70 p-2 font-mono text-xs text-[var(--ink)] select-all">
+                    {documento.codigoBarras}
+                  </p>
+                )}
+                {documento.dataValidade && !documento.pago && (
+                  <p className="mt-2 text-xs font-medium text-amber-800">Validade: {data(documento.dataValidade)}</p>
+                )}
+              </article>
+            ))}
+          </div>
+        )}
+
+        {documentos.length === 0 && simulacoes.length > 0 && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
+            <p className="text-sm font-bold text-amber-900">DAE em aberto, ainda sem documento emitido encontrado.</p>
+            <div className="mt-2 grid gap-2 text-sm md:grid-cols-2">
+              {simulacoes.map((simulacao, indice) => (
+                <div key={indice} className="rounded bg-white/70 p-3">
+                  <Campo rotulo="Receita" valor={simulacao.receita || 'DAE SITRAM'} />
+                  <Campo rotulo="Valor simulado" valor={moeda(simulacao.total ?? simulacao.icmsDevido)} />
+                  <Campo rotulo="Vencimento" valor={simulacao.dataVencimento ? data(simulacao.dataVencimento) : '---'} />
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </section>
+    );
+  }
+
+  function rotuloAba(a: Aba): string {
+    if (a === 'dados') return 'Dados';
+    if (a === 'danfe') return ehResumo ? 'Espelho SITRAM' : 'DANFE';
+    if (a === 'itens') return !danfe && espelhoSitram ? 'Itens SITRAM' : 'Itens';
+    return 'Anexos';
+  }
+
   return (
     <div>
       <div className="flex gap-1 mb-4 bg-[var(--surface-2)] p-1 rounded-lg w-fit">
@@ -3886,7 +4734,7 @@ function DetalheNota({ nota }: { nota: NotaComCnpj }) {
               aba === a ? 'bg-[var(--surface)] text-[var(--accent)] shadow-sm' : 'text-[var(--ink-mut)] hover:text-[var(--ink)]'
             }`}
           >
-            {a === 'dados' ? 'Dados' : a === 'danfe' ? 'DANFE' : a === 'itens' ? 'Itens' : 'Anexos'}
+            {rotuloAba(a)}
           </button>
         ))}
       </div>
@@ -3898,7 +4746,7 @@ function DetalheNota({ nota }: { nota: NotaComCnpj }) {
               <h3 className="font-bold text-[var(--ink)]">Nota Fiscal</h3>
               <Badge tone={nota.status === 'COMPLETA' ? 'green' : 'blue'}>{nota.status}</Badge>
               <span className="ml-auto text-sm font-semibold text-[var(--ink-mut)]">
-                NF {nota.numero || '—'} / Série {nota.serie || '—'}
+                NF {numeroNotaSistema(nota) || '—'} / Série {serieNotaSistema(nota) || '—'}
               </span>
             </div>
             <div className="grid grid-cols-1 gap-x-8 gap-y-3 text-sm md:grid-cols-2 lg:grid-cols-3">
@@ -3915,6 +4763,7 @@ function DetalheNota({ nota }: { nota: NotaComCnpj }) {
           </section>
 
           {nota.sitramConsultadaEm && <ResumoDaeVisual nota={nota} />}
+          <PainelPagamentoIcms />
 
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
             <section className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
@@ -3992,32 +4841,52 @@ function DetalheNota({ nota }: { nota: NotaComCnpj }) {
       )}
 
       {(aba === 'danfe' || aba === 'itens') && (
-        <div>
+        <div className="space-y-3">
           {ehResumo && <BannerManifestar />}
           {!ehResumo && carregando && (
             <p className="text-sm text-[var(--ink-mut)] py-6 text-center">Carregando XML…</p>
           )}
           {!ehResumo && erro && (
-            <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-3">{erro}</p>
+            <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-3">
+              {erro}
+              {espelhoSitram ? ' Mostrando o Espelho SITRAM como alternativa operacional.' : ''}
+            </p>
           )}
           {danfe && aba === 'danfe' && (
             <div>
               <div className="flex justify-end gap-4 mb-2">
-                <a href={`/danfe/${nota.chave}/pdf`} target="_blank" rel="noopener noreferrer"
-                  className="text-emerald-600 text-sm font-medium hover:underline">
-                  DANFE oficial (MeuDanfe) ↗
-                </a>
                 <a href={`/danfe/${nota.chave}`} target="_blank" rel="noopener noreferrer"
                   className="text-[var(--accent)] text-sm hover:underline">
-                  Abrir / Imprimir (PDF) ↗
+                  Abrir DANFE / Ctrl+P ↗
                 </a>
               </div>
               <div className="border border-[var(--border)] rounded-xl p-4 bg-[var(--surface)] overflow-x-auto">
-                <DanfeView danfe={danfe} />
+                <DanfeView danfe={danfe} espelho={espelhoSitram} />
               </div>
             </div>
           )}
-          {danfe && aba === 'itens' && <ItensView danfe={danfe} />}
+          {!danfe && espelhoSitram && aba === 'danfe' && (
+            <div>
+              <div className="flex justify-end gap-4 mb-2">
+                <a href={`/danfe-sitram/${nota.chave}`} target="_blank" rel="noopener noreferrer"
+                  className="text-[var(--accent)] text-sm hover:underline">
+                  Abrir Espelho SITRAM / Ctrl+P
+                </a>
+              </div>
+              <div className="border border-[var(--border)] rounded-xl p-4 bg-[var(--surface)] overflow-x-auto">
+                <SitramEspelhoView espelho={espelhoSitram} />
+              </div>
+            </div>
+          )}
+          {!danfe && !espelhoSitram && !carregando && aba === 'danfe' && <PainelAtualizarSitramNota />}
+          {danfe && aba === 'itens' && (
+            <div className="space-y-4">
+              <ItensView danfe={danfe} espelho={espelhoSitram} />
+              {espelhoSitram && <SitramItensView espelho={espelhoSitram} />}
+            </div>
+          )}
+          {!danfe && espelhoSitram && aba === 'itens' && <SitramItensView espelho={espelhoSitram} />}
+          {!danfe && !espelhoSitram && !carregando && aba === 'itens' && <PainelAtualizarSitramNota />}
         </div>
       )}
 
@@ -4027,7 +4896,7 @@ function DetalheNota({ nota }: { nota: NotaComCnpj }) {
 }
 
 const ACCEPT_ANEXOS =
-  '.pdf,.jpg,.jpeg,.png,.webp,.heic,.gif,.xlsx,.xls,.csv,application/pdf,image/*';
+  '.pdf,.html,.htm,.jpg,.jpeg,.png,.webp,.heic,.gif,.xlsx,.xls,.csv,application/pdf,text/html,image/*';
 
 function formatarTamanho(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -4036,6 +4905,7 @@ function formatarTamanho(bytes: number): string {
 }
 
 function iconeAnexo(mime: string): string {
+  if (mime === 'text/html') return 'HTML';
   if (mime === 'application/pdf') return '📄';
   if (mime.startsWith('image/')) return '🖼️';
   if (mime.includes('sheet') || mime.includes('excel') || mime.includes('csv')) return '📊';
@@ -4177,7 +5047,7 @@ function AnexosView({ nota }: { nota: NotaComCnpj }) {
             />
           </div>
           <div className="flex-1">
-            <label className="mb-1 block text-xs text-[var(--ink-mut)]">Arquivo (PDF, imagem ou planilha)</label>
+            <label className="mb-1 block text-xs text-[var(--ink-mut)]">Arquivo (PDF, HTML, imagem ou planilha)</label>
             <input
               id={`anexo-file-${nota.id}`}
               type="file"
@@ -4291,7 +5161,7 @@ function ResumoDaeVisual({ nota }: { nota: NotaComCnpj }) {
         <div className="mb-4 flex flex-wrap items-center gap-2 border-b border-[var(--border)] pb-3">
           <div>
             <p className="text-xs font-bold uppercase tracking-wide text-[var(--ink-mut)]">SITRAM / DAE</p>
-            <h3 className="text-lg font-black text-[var(--ink)]">NF {nota.numero || resumo.numeroNota || '—'} — {resumo.classificacao}</h3>
+            <h3 className="text-lg font-black text-[var(--ink)]">NF {numeroNotaSistema(nota) || resumo.numeroNota || '—'} / Série {serieNotaSistema(nota) || '—'} — {resumo.classificacao}</h3>
           </div>
           <div className="ml-auto flex flex-wrap gap-2">
             <Badge tone={resumo.classificacao === 'Sem ST' ? 'gray' : 'indigo'}>{resumo.classificacao}</Badge>

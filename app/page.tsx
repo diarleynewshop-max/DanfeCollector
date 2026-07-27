@@ -1,10 +1,11 @@
 import { redirect } from 'next/navigation';
 import {
   listarCnpjs,
-  listarNotas,
+  listarTodasNotas,
   listarNotasAlertaDae,
   listarAnosDisponiveis,
   contarNotasTotal,
+  obterResumoInicio,
 } from '@/lib/actions';
 import { obterUsuarioAtual } from '@/lib/usuarios/auth';
 import Dashboard from './dashboard';
@@ -18,16 +19,17 @@ export default async function Page({
 }) {
   const usuario = await obterUsuarioAtual();
   if (!usuario) redirect('/login');
-  const params = await searchParams;
-  const paginaAtual = Math.max(1, Math.trunc(Number(params.page) || 1));
-  const porPagina = 50;
+  await searchParams;
+  const paginaAtual = 1;
+  const porPagina = 0;
 
-  const [cnpjs, notas, notasAlerta, anosDisponiveis, totalNotas] = await Promise.all([
+  const [cnpjs, notas, notasAlerta, anosDisponiveis, totalNotas, resumoInicio] = await Promise.all([
     listarCnpjs(),
-    listarNotas(paginaAtual, porPagina),
+    listarTodasNotas(),
     listarNotasAlertaDae(),
     listarAnosDisponiveis(),
     contarNotasTotal(),
+    obterResumoInicio(),
   ]);
   return (
     <Dashboard
@@ -39,6 +41,7 @@ export default async function Page({
       totalNotas={totalNotas}
       paginaAtual={paginaAtual}
       porPagina={porPagina}
+      resumoInicio={resumoInicio}
     />
   );
 }
