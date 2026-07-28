@@ -4480,10 +4480,22 @@ function DetalheNota({ nota }: { nota: NotaComCnpj }) {
   const [msgSitramNota, setMsgSitramNota] = useState<{ ok: boolean; texto: string } | null>(null);
   const [consultandoPagamentoIcms, setConsultandoPagamentoIcms] = useState(false);
   const [msgPagamentoIcms, setMsgPagamentoIcms] = useState<{ ok: boolean; texto: string } | null>(null);
+  const [anexosDaePagamento, setAnexosDaePagamento] = useState<Record<string, AnexoInfo>>({});
+  const [carregandoAnexosDaePagamento, setCarregandoAnexosDaePagamento] = useState(false);
 
   const ehResumo = nota.status === 'RESUMO';
   const espelhoSitram = useMemo(() => extrairEspelhoSitram(nota), [nota]);
   const pagamentoIcms = useMemo(() => extrairPagamentoIcmsSitram(nota), [nota]);
+  const codigosDaePagamento = useMemo(() => {
+    return Array.from(
+      new Set(
+        pagamentoIcms.documentos
+          .map((documento) => normalizarCodigoDae(documento.codigoDocumento))
+          .filter(Boolean),
+      ),
+    );
+  }, [pagamentoIcms.documentos]);
+  const codigosDaePagamentoChave = codigosDaePagamento.join('|');
   const tagsAtuais = parseEtiquetas(nota.etiqueta);
 
   async function handleClicarEtiqueta(tag: string) {
@@ -4530,13 +4542,43 @@ function DetalheNota({ nota }: { nota: NotaComCnpj }) {
     if (res.success) router.refresh();
   }
 
+  const carregarAnexosDaePagamento = useCallback(async () => {
+    if (!codigosDaePagamentoChave) {
+      setAnexosDaePagamento({});
+      return;
+    }
+
+    setCarregandoAnexosDaePagamento(true);
+    try {
+      const res = await listarAnexos(nota.id);
+      if (!res.ok) return;
+
+      const anexosPorDae: Record<string, AnexoInfo> = {};
+      for (const anexo of res.anexos) {
+        if (anexo.mime !== 'text/html') continue;
+        const match = anexo.arquivoNome.match(/^dae-sitram-(\d+)\.html$/i);
+        if (match?.[1]) anexosPorDae[match[1]] = anexo;
+      }
+      setAnexosDaePagamento(anexosPorDae);
+    } finally {
+      setCarregandoAnexosDaePagamento(false);
+    }
+  }, [codigosDaePagamentoChave, nota.id]);
+
+  useEffect(() => {
+    void carregarAnexosDaePagamento();
+  }, [carregarAnexosDaePagamento]);
+
   async function handleConsultarPagamentoIcms() {
     setConsultandoPagamentoIcms(true);
     setMsgPagamentoIcms(null);
     const res = await consultarPagamentoIcmsNota(nota.id);
     setMsgPagamentoIcms({ ok: res.success, texto: res.message });
     setConsultandoPagamentoIcms(false);
-    if (res.success) router.refresh();
+    if (res.success) {
+      await carregarAnexosDaePagamento();
+      router.refresh();
+    }
   }
 
   function BannerManifestar() {
@@ -4664,37 +4706,66 @@ function DetalheNota({ nota }: { nota: NotaComCnpj }) {
 
         {documentos.length > 0 && (
           <div className="space-y-2">
-            {documentos.map((documento, indice) => (
-              <article key={`${documento.idLancamentoFront}-${documento.codigoDocumento ?? indice}`} className={`rounded-lg border p-3 ${documento.pago ? 'border-emerald-200 bg-emerald-50/50' : 'border-amber-200 bg-amber-50/40'}`}>
-                <div className="flex flex-wrap items-start gap-2">
-                  <div className="min-w-0 flex-1">
-                    <p className="font-bold text-[var(--ink)]">{documento.tipo}</p>
-                    <p className="text-xs text-[var(--ink-mut)]">{documento.situacao || 'Situacao nao informada'} {documento.valor ? `| ${documento.valor}` : ''}</p>
+            {documentos.map((documento, indice) => {
+              const codigoDae = normalizarCodigoDae(documento.codigoDocumento);
+              const anexoDae = codigoDae ? anexosDaePagamento[codigoDae] : null;
+              const hrefDae = anexoDae ? `/danfe/${nota.chave}/anexo/${anexoDae.id}` : '';
+
+              return (
+                <article key={`${documento.idLancamentoFront}-${documento.codigoDocumento ?? indice}`} className={`rounded-lg border p-3 ${documento.pago ? 'border-emerald-200 bg-emerald-50/50' : 'border-amber-200 bg-amber-50/40'}`}>
+                  <div className="flex flex-wrap items-start gap-2">
+                    <div className="min-w-0 flex-1">
+                      <p className="font-bold text-[var(--ink)]">{documento.tipo}</p>
+                      <p className="text-xs text-[var(--ink-mut)]">{documento.situacao || 'Situacao nao informada'} {documento.valor ? `| ${documento.valor}` : ''}</p>
+                    </div>
+                    <Badge tone={documento.pago ? 'green' : 'orange'}>{documento.pago ? 'PAGO' : 'EMITIDO'}</Badge>
                   </div>
-                  <Badge tone={documento.pago ? 'green' : 'orange'}>{documento.pago ? 'PAGO' : 'EMITIDO'}</Badge>
-                </div>
-                {documento.codigoDocumento && (
-                  <p className="mt-2 text-xs text-[var(--ink-mut)]">
-                    Codigo DAE: <span className="font-mono text-[var(--ink)] select-all">{documento.codigoDocumento}</span>
-                  </p>
-                )}
-                {(documento.total !== null || documento.valorPago !== null || documento.dataPagamento) && (
-                  <p className="mt-1 text-xs text-[var(--ink-mut)]">
-                    Total DAE: <strong className="text-[var(--ink)]">{moeda(documento.total)}</strong>
-                    {' | '}Valor pago: <strong className="text-[var(--ink)]">{moeda(documento.valorPago)}</strong>
-                    {' | '}Pagamento: <strong className="text-[var(--ink)]">{documento.dataPagamento ? dataHora(documento.dataPagamento) : '-'}</strong>
-                  </p>
-                )}
-                {documento.codigoBarras && (
-                  <p className="mt-1 break-all rounded bg-white/70 p-2 font-mono text-xs text-[var(--ink)] select-all">
-                    {documento.codigoBarras}
-                  </p>
-                )}
-                {documento.dataValidade && !documento.pago && (
-                  <p className="mt-2 text-xs font-medium text-amber-800">Validade: {data(documento.dataValidade)}</p>
-                )}
-              </article>
-            ))}
+                  {documento.codigoDocumento && (
+                    <p className="mt-2 text-xs text-[var(--ink-mut)]">
+                      Codigo DAE: <span className="font-mono text-[var(--ink)] select-all">{documento.codigoDocumento}</span>
+                    </p>
+                  )}
+                  {(documento.total !== null || documento.valorPago !== null || documento.dataPagamento) && (
+                    <p className="mt-1 text-xs text-[var(--ink-mut)]">
+                      Total DAE: <strong className="text-[var(--ink)]">{moeda(documento.total)}</strong>
+                      {' | '}Valor pago: <strong className="text-[var(--ink)]">{moeda(documento.valorPago)}</strong>
+                      {' | '}Pagamento: <strong className="text-[var(--ink)]">{documento.dataPagamento ? dataHora(documento.dataPagamento) : '-'}</strong>
+                    </p>
+                  )}
+                  {(documento.codigoBarras || hrefDae) && (
+                    <div className="mt-3 rounded-lg border border-amber-200 bg-white/80 p-3">
+                      <p className="text-xs font-black uppercase tracking-wide text-amber-900">Boleto / DAE</p>
+                      {documento.codigoBarras && (
+                        <p className="mt-2 break-all rounded bg-amber-50 p-2 font-mono text-xs text-[var(--ink)] select-all">
+                          {formatarLinhaDigitavelDae(documento.codigoBarras)}
+                        </p>
+                      )}
+                      {hrefDae ? (
+                        <a
+                          href={hrefDae}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="mt-3 inline-flex rounded-lg bg-[var(--accent)] px-4 py-2 text-xs font-black uppercase text-white hover:opacity-90"
+                        >
+                          VISUALIZAR
+                        </a>
+                      ) : (
+                        <button
+                          type="button"
+                          disabled
+                          className="mt-3 inline-flex rounded-lg border border-[var(--border)] px-4 py-2 text-xs font-black uppercase text-[var(--ink-mut)] opacity-60"
+                        >
+                          {carregandoAnexosDaePagamento ? 'CARREGANDO' : 'VISUALIZAR'}
+                        </button>
+                      )}
+                    </div>
+                  )}
+                  {documento.dataValidade && !documento.pago && (
+                    <p className="mt-2 text-xs font-medium text-amber-800">Validade: {data(documento.dataValidade)}</p>
+                  )}
+                </article>
+              );
+            })}
           </div>
         )}
 
@@ -4902,6 +4973,18 @@ function formatarTamanho(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function normalizarCodigoDae(valor: string | null | undefined): string {
+  return String(valor ?? '').replace(/\D/g, '');
+}
+
+function formatarLinhaDigitavelDae(valor: string | null | undefined): string {
+  const digitos = normalizarCodigoDae(valor);
+  if (!digitos) return valor ?? '';
+  if (digitos.length === 48) return (digitos.match(/.{1,12}/g) ?? [digitos]).join(' ');
+  if (digitos.length === 44) return (digitos.match(/.{1,11}/g) ?? [digitos]).join(' ');
+  return valor ?? digitos;
 }
 
 function iconeAnexo(mime: string): string {
