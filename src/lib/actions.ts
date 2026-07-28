@@ -51,7 +51,7 @@ import {
   simularDaeNotaFiscal,
   type SitramDocumentoPagamento,
 } from './sitram/pagamento-icms-portal';
-import { salvarArquivo, mimeAceito, TAMANHO_MAX } from './anexos/storage';
+import { salvarArquivo, apagarArquivo, mimeAceito, TAMANHO_MAX } from './anexos/storage';
 
 export interface ActionResult {
   success: boolean;
@@ -2141,13 +2141,103 @@ function formatarMoedaHtml(valor: unknown): string {
   return textoJson(valor) ?? '-';
 }
 
+function apenasDigitos(valor: unknown): string {
+  return String(valor ?? '').replace(/\D/g, '');
+}
+
+function formatarDataHtml(valor: string | null | undefined): string {
+  if (!valor) return '-';
+  const dataIso = valor.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (dataIso) return `${dataIso[3]}/${dataIso[2]}/${dataIso[1]}`;
+
+  const data = new Date(valor);
+  if (Number.isNaN(data.getTime())) return valor;
+  return data.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+}
+
+function formatarLinhaDigitavelDae(valor: unknown): string {
+  const digitos = apenasDigitos(valor);
+  if (digitos.length === 48) {
+    return (digitos.match(/.{1,12}/g) ?? [digitos]).join(' ');
+  }
+  if (digitos.length === 44) {
+    return (digitos.match(/.{1,11}/g) ?? [digitos]).join(' ');
+  }
+  return textoJson(valor) ?? '';
+}
+
+function codigoBarrasDae(valor: unknown): string {
+  const digitos = apenasDigitos(valor);
+  if (digitos.length === 44) return digitos;
+  if (digitos.length === 48) {
+    const blocos = digitos.match(/.{12}/g);
+    if (blocos?.length === 4) return blocos.map((bloco) => bloco.slice(0, 11)).join('');
+  }
+  return '';
+}
+
+const I25_PATTERNS: Record<string, string> = {
+  '0': 'nnwwn',
+  '1': 'wnnnw',
+  '2': 'nwnnw',
+  '3': 'wwnnn',
+  '4': 'nnwnw',
+  '5': 'wnwnn',
+  '6': 'nwwnn',
+  '7': 'nnnww',
+  '8': 'wnnwn',
+  '9': 'nwnwn',
+};
+
+function svgCodigoBarrasI25(codigo: string): string {
+  const digitos = apenasDigitos(codigo);
+  if (!digitos || digitos.length % 2 !== 0) return '';
+
+  const fino = 2;
+  const largo = 5;
+  const altura = 68;
+  let x = 10;
+  let barras = '';
+
+  const largura = (marcador: string) => marcador === 'w' ? largo : fino;
+  const add = (preto: boolean, w: number) => {
+    if (preto) barras += `<rect x="${x}" y="0" width="${w}" height="${altura}" />`;
+    x += w;
+  };
+
+  add(true, fino);
+  add(false, fino);
+  add(true, fino);
+  add(false, fino);
+
+  for (let i = 0; i < digitos.length; i += 2) {
+    const barrasDigito = I25_PATTERNS[digitos[i]];
+    const espacosDigito = I25_PATTERNS[digitos[i + 1]];
+    if (!barrasDigito || !espacosDigito) return '';
+    for (let p = 0; p < 5; p++) {
+      add(true, largura(barrasDigito[p]));
+      add(false, largura(espacosDigito[p]));
+    }
+  }
+
+  add(true, largo);
+  add(false, fino);
+  add(true, fino);
+  const larguraTotal = x + 10;
+
+  return `<svg class="barcode-svg" viewBox="0 0 ${larguraTotal} ${altura}" preserveAspectRatio="none" aria-label="Codigo de barras"><rect x="0" y="0" width="${larguraTotal}" height="${altura}" fill="#fff"/>${barras}</svg>`;
+}
+
 function montarHtmlDaeEmitido(
   nota: { chave: string; numero: string | null },
   documento: DocumentoPagamentoIcms
 ): Buffer {
   const detalhe = registroJson(documento.detalheDae);
   const codigo = documento.codigoDocumento ?? textoJson(detalhe.codigoIdentificadorUnico) ?? '-';
-  const codigoBarras = documento.codigoBarras ?? textoJson(detalhe.numeracaoCodigoBarras) ?? '';
+  const codigoBarrasBruto = documento.codigoBarras ?? textoJson(detalhe.numeracaoCodigoBarras) ?? '';
+  const linhaDigitavel = formatarLinhaDigitavelDae(codigoBarrasBruto);
+  const codigoBarras = codigoBarrasDae(codigoBarrasBruto);
+  const barcodeSvg = svgCodigoBarrasI25(codigoBarras);
   const receita = [
     textoJson(detalhe.codigoReceitaCodigo),
     textoJson(detalhe.codigoReceitaDescricao),
@@ -2155,7 +2245,7 @@ function montarHtmlDaeEmitido(
   const status = documento.situacao ?? textoJson(detalhe.descricaoSituacaoDebito) ?? '-';
   const vencimento = documento.dataValidade ?? textoJson(detalhe.dataVencimento);
   const pagamento = textoJson(detalhe.dataPagamento);
-  const total = numeroJson(detalhe.total) ?? numeroJson(detalhe.valorPrincipal) ?? documento.valor;
+  const total = totalDaeDetalheJson(detalhe, documento.valor) ?? documento.total ?? documento.valor;
 
   const html = `<!doctype html>
 <html lang="pt-BR">
@@ -2163,33 +2253,78 @@ function montarHtmlDaeEmitido(
   <meta charset="utf-8" />
   <title>DAE SITRAM ${escaparHtml(codigo)}</title>
   <style>
-    body{font-family:Arial,sans-serif;margin:24px;color:#111827}
-    .box{border:1px solid #d1d5db;border-radius:12px;padding:18px;max-width:820px}
-    h1{font-size:20px;margin:0 0 4px}
-    p{margin:6px 0}
-    .muted{color:#6b7280;font-size:12px}
-    .grid{display:grid;grid-template-columns:180px 1fr;gap:8px 12px;margin-top:16px}
-    .label{font-size:11px;text-transform:uppercase;color:#6b7280}
-    .value{font-weight:700}
-    .barcode{font-family:monospace;word-break:break-all;background:#f3f4f6;border-radius:8px;padding:10px;margin-top:8px}
-    @media print{body{margin:0}.box{border-radius:0;border:none}}
+    *{box-sizing:border-box}
+    body{font-family:Arial,Helvetica,sans-serif;margin:0;background:#f3f4f6;color:#111827}
+    .page{width:860px;max-width:100%;margin:24px auto;background:#fff;border:1px solid #111827}
+    .top{display:grid;grid-template-columns:1fr 180px;border-bottom:2px solid #111827}
+    .brand{padding:14px 16px}
+    .brand h1{font-size:18px;margin:0;text-transform:uppercase;letter-spacing:.04em}
+    .brand p{margin:4px 0 0;color:#4b5563;font-size:12px}
+    .doc-code{border-left:1px solid #111827;padding:10px 12px;text-align:center}
+    .doc-code .label{font-size:10px;color:#4b5563;text-transform:uppercase}
+    .doc-code .value{font-size:18px;font-weight:800;margin-top:4px}
+    .notice{padding:8px 16px;border-bottom:1px solid #111827;background:#fef3c7;font-size:11px;color:#78350f}
+    .section-title{background:#111827;color:#fff;font-size:11px;font-weight:800;text-transform:uppercase;padding:6px 10px}
+    .grid{display:grid;grid-template-columns:150px 1fr 140px 1fr;border-bottom:1px solid #111827}
+    .cell{min-height:46px;padding:7px 9px;border-right:1px solid #d1d5db;border-bottom:1px solid #d1d5db}
+    .cell:nth-child(4n){border-right:0}
+    .label{font-size:9px;text-transform:uppercase;color:#6b7280;margin-bottom:3px}
+    .value{font-size:13px;font-weight:700;word-break:break-word}
+    .wide{grid-column:span 3}
+    .full{grid-column:1/-1}
+    .money{font-size:18px}
+    .barcode-box{padding:14px 16px 16px;border-bottom:1px dashed #111827}
+    .linha{font-family:"Courier New",monospace;font-size:17px;font-weight:800;letter-spacing:.02em;text-align:center;word-break:break-all;margin:4px 0 12px}
+    .barcode-svg{width:100%;height:78px;display:block;border:1px solid #d1d5db;background:#fff}
+    .barcode-num{font-family:"Courier New",monospace;font-size:12px;text-align:center;margin-top:7px;word-break:break-all}
+    .receipt{display:grid;grid-template-columns:1fr 220px;border-top:1px solid #111827}
+    .receipt .left{padding:14px 16px}
+    .receipt .right{border-left:1px solid #111827;padding:14px 16px;min-height:82px}
+    .small{font-size:11px;color:#4b5563;margin:0}
+    @media print{body{background:#fff}.page{margin:0;border-color:#000;width:100%}.notice{background:#fff;border-bottom:1px solid #000;color:#111827}}
   </style>
 </head>
 <body>
-  <section class="box">
-    <h1>DAE emitido no SITRAM</h1>
-    <p class="muted">Anexo gerado automaticamente pelo DanfeCollector. Nao emite DAE novo; apenas registra o DAE que ja existia na consulta do SITRAM.</p>
-    <div class="grid">
-      <div class="label">NF</div><div class="value">${escaparHtml(nota.numero ?? '-')}</div>
-      <div class="label">Chave NF-e</div><div class="value">${escaparHtml(nota.chave)}</div>
-      <div class="label">Codigo DAE</div><div class="value">${escaparHtml(codigo)}</div>
-      <div class="label">Receita</div><div class="value">${escaparHtml(receita)}</div>
-      <div class="label">Status</div><div class="value">${escaparHtml(status)}</div>
-      <div class="label">Valor</div><div class="value">${escaparHtml(formatarMoedaHtml(total))}</div>
-      <div class="label">Vencimento</div><div class="value">${escaparHtml(vencimento ?? '-')}</div>
-      <div class="label">Pagamento</div><div class="value">${escaparHtml(pagamento ?? '-')}</div>
+  <section class="page">
+    <div class="top">
+      <div class="brand">
+        <h1>Documento de Arrecadacao Estadual - DAE SITRAM</h1>
+        <p>Espelho operacional gerado pelo DanfeCollector a partir dos dados retornados pelo SITRAM.</p>
+      </div>
+      <div class="doc-code">
+        <div class="label">Codigo DAE</div>
+        <div class="value">${escaparHtml(codigo)}</div>
+      </div>
     </div>
-    ${codigoBarras ? `<p class="label" style="margin-top:18px">Codigo de barras</p><div class="barcode">${escaparHtml(codigoBarras)}</div>` : ''}
+    <div class="notice">Este HTML nao substitui o DAE oficial da SEFAZ/SITRAM. Use para conferencia interna, impressao e leitura do codigo informado pelo SITRAM.</div>
+
+    <div class="section-title">Recibo do contribuinte</div>
+    <div class="grid">
+      <div class="cell"><div class="label">Nota fiscal</div><div class="value">${escaparHtml(nota.numero ?? '-')}</div></div>
+      <div class="cell wide"><div class="label">Chave NF-e</div><div class="value">${escaparHtml(nota.chave)}</div></div>
+      <div class="cell"><div class="label">Receita</div><div class="value">${escaparHtml(receita)}</div></div>
+      <div class="cell"><div class="label">Situacao</div><div class="value">${escaparHtml(status)}</div></div>
+      <div class="cell"><div class="label">Vencimento</div><div class="value">${escaparHtml(formatarDataHtml(vencimento))}</div></div>
+      <div class="cell"><div class="label">Valor</div><div class="value money">${escaparHtml(formatarMoedaHtml(total))}</div></div>
+      <div class="cell"><div class="label">Pagamento</div><div class="value">${escaparHtml(formatarDataHtml(pagamento))}</div></div>
+      <div class="cell wide"><div class="label">Identificacao</div><div class="value">${escaparHtml(textoJson(detalhe.descricaoIdentificacaoContribuinte) ?? '-')}</div></div>
+    </div>
+
+    <div class="section-title">Ficha de pagamento</div>
+    <div class="barcode-box">
+      <div class="label">Linha digitavel</div>
+      <div class="linha">${escaparHtml(linhaDigitavel || '-')}</div>
+      ${barcodeSvg || '<p class="small">Codigo de barras visual indisponivel para a numeracao retornada.</p>'}
+      ${codigoBarras ? `<div class="barcode-num">${escaparHtml(codigoBarras)}</div>` : ''}
+    </div>
+    <div class="receipt">
+      <div class="left">
+        <p class="small">Autenticacao mecanica</p>
+      </div>
+      <div class="right">
+        <p class="small">Uso interno / controle</p>
+      </div>
+    </div>
   </section>
 </body>
 </html>`;
@@ -2210,12 +2345,20 @@ async function anexarDaesEmitidosSeNovo(
     const arquivoNome = `dae-sitram-${codigo}.html`;
     const jaExiste = await prisma.anexo.findFirst({
       where: { notaId: nota.id, arquivoNome },
-      select: { id: true },
+      select: { id: true, caminho: true },
     });
-    if (jaExiste) continue;
 
     const bytes = montarHtmlDaeEmitido(nota, documento);
     const caminho = await salvarArquivo(nota.id, 'text/html', bytes);
+    if (jaExiste) {
+      await prisma.anexo.update({
+        where: { id: jaExiste.id },
+        data: { tamanho: bytes.length, caminho },
+      });
+      await apagarArquivo(jaExiste.caminho);
+      continue;
+    }
+
     await prisma.anexo.create({
       data: {
         notaId: nota.id,
