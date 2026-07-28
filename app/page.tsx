@@ -1,7 +1,7 @@
 import { redirect } from 'next/navigation';
 import {
   listarCnpjs,
-  listarTodasNotas,
+  listarNotas,
   listarNotasAlertaDae,
   listarAnosDisponiveis,
   contarNotasTotal,
@@ -19,13 +19,13 @@ export default async function Page({
 }) {
   const usuario = await obterUsuarioAtual();
   if (!usuario) redirect('/login');
-  await searchParams;
-  const paginaAtual = 1;
-  const porPagina = 0;
+  const params = await searchParams;
+  const paginaAtual = Math.max(1, Math.trunc(Number(params.page) || 1));
+  const porPagina = 50;
 
   const [cnpjs, notas, notasAlerta, anosDisponiveis, totalNotas, resumoInicio] = await Promise.all([
     listarCnpjs(),
-    listarTodasNotas(),
+    listarNotas(paginaAtual, porPagina),
     listarNotasAlertaDae(),
     listarAnosDisponiveis(),
     contarNotasTotal(),

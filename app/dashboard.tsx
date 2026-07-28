@@ -641,20 +641,6 @@ export default function Dashboard({
   const [filtroDaeVencFim, setFiltroDaeVencFim] = useState('');
   const [filtroForaCe15SemDae, setFiltroForaCe15SemDae] = useState(false);
 
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const agora = new Date();
-    if (agora.getHours() < 6 || agora.getHours() >= 12) return;
-
-    const chave = `danfe-rotina-matinal:${agora.toISOString().slice(0, 10)}`;
-    if (window.localStorage.getItem(chave)) return;
-
-    window.localStorage.setItem(chave, 'rodando');
-    void handleRotinaMatinal(true);
-    // A rotina deve rodar uma vez por abertura matinal; nao depende dos filtros da tela.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
   const daePorNota = useMemo(
     () => new Map(notas.map((nota) => [nota.id, extrairResumoDae(nota)])),
     [notas]
