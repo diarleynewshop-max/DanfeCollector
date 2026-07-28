@@ -81,6 +81,7 @@ type ColunaRedimensionavel = 'nf' | 'emitente' | 'destinatario' | 'valores' | 't
 
 // DAE "a pagar" = DAE em aberto ou ainda a gerar (imposto pendente de pagamento)
 const DAE_A_PAGAR = ['EM_ABERTO', 'LIBERADA_PARA_GERAR'];
+const TAMANHO_PAGINA_RELATORIO = 200;
 const RAIZES_RELATORIO_PADRAO = ['50767035', '62803717'];
 const SITUACOES_RELATORIO_OPCOES = [
   { valor: 'AUTORIZADA', label: 'Autorizada' },
@@ -756,27 +757,51 @@ export default function Dashboard({
     !algumFiltroAtivo;
   const totalPaginasServidor = porPagina > 0 ? Math.max(1, Math.ceil(totalNotas / porPagina)) : 1;
 
+  const carregarTodasNotasEmSegundoPlano = useCallback(async () => {
+    if (todasCarregadas || carregandoTodas || anoCarregado !== null) return;
+    setCarregandoTodas(true);
+    try {
+      const todas = await listarTodasNotas();
+      startTransition(() => {
+        setNotas(todas as NotaComCnpj[]);
+        setNotasAlerta(todas as NotaComCnpj[]);
+        setTodasCarregadas(true);
+      });
+    } finally {
+      setCarregandoTodas(false);
+    }
+  }, [todasCarregadas, carregandoTodas, anoCarregado, startTransition]);
+
   // Assim que o usuário busca/filtra, garante TODAS as notas em memória para
   // que o filtro atue sobre o conjunto inteiro — não só as 50 da página.
   useEffect(() => {
-    if (!algumFiltroAtivo || todasCarregadas || carregandoTodas || anoCarregado !== null) return;
-    setCarregandoTodas(true);
-    listarTodasNotas()
-      .then((todas) => {
-        startTransition(() => {
-          setNotas(todas as NotaComCnpj[]);
-          setNotasAlerta(todas as NotaComCnpj[]);
-          setTodasCarregadas(true);
-        });
-      })
-      .finally(() => setCarregandoTodas(false));
-  }, [algumFiltroAtivo, todasCarregadas, carregandoTodas, anoCarregado, startTransition]);
+    if (!algumFiltroAtivo) return;
+    void carregarTodasNotasEmSegundoPlano();
+  }, [algumFiltroAtivo, carregarTodasNotasEmSegundoPlano]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (secaoAtual !== 'notas' || algumFiltroAtivo || todasCarregadas || carregandoTodas || anoCarregado !== null) return;
+
+    const timer = window.setTimeout(() => {
+      void carregarTodasNotasEmSegundoPlano();
+    }, 1200);
+
+    return () => window.clearTimeout(timer);
+  }, [
+    secaoAtual,
+    algumFiltroAtivo,
+    todasCarregadas,
+    carregandoTodas,
+    anoCarregado,
+    carregarTodasNotasEmSegundoPlano,
+  ]);
 
   const carregarMaisRelatorio = useCallback(async () => {
     if (carregandoRelatorio || !temMaisRelatorio) return;
     setCarregandoRelatorio(true);
     try {
-      const resultado = await listarNotasRelatorio(paginaRelatorio + 1, 120);
+      const resultado = await listarNotasRelatorio(paginaRelatorio + 1, TAMANHO_PAGINA_RELATORIO);
       startTransition(() => {
         setNotasRelatorio((atuais) => {
           const ids = new Set(atuais.map((nota) => nota.id));
@@ -797,10 +822,15 @@ export default function Dashboard({
   }, [carregandoRelatorio, temMaisRelatorio, paginaRelatorio, startTransition]);
 
   useEffect(() => {
-    if (secaoAtual === 'relatorios' && paginaRelatorio === 0 && !carregandoRelatorio) {
+    if (typeof window === 'undefined') return;
+    if (secaoAtual !== 'relatorios' || carregandoRelatorio || !temMaisRelatorio) return;
+
+    const timer = window.setTimeout(() => {
       void carregarMaisRelatorio();
-    }
-  }, [secaoAtual, paginaRelatorio, carregandoRelatorio, carregarMaisRelatorio]);
+    }, paginaRelatorio === 0 ? 0 : 250);
+
+    return () => window.clearTimeout(timer);
+  }, [secaoAtual, paginaRelatorio, carregandoRelatorio, temMaisRelatorio, carregarMaisRelatorio]);
 
   useEffect(() => {
     function handleMouseMove(event: MouseEvent) {
@@ -2352,11 +2382,11 @@ export default function Dashboard({
               <div className="mb-3 flex items-center gap-3 bg-amber-50 border border-amber-200 rounded-xl px-4 py-2.5 text-sm text-amber-800">
                 <span>⚠️</span>
                 <span>
-                  Exibindo <strong>{notas.length} notas por página</strong> de <strong>{totalNotas} no total</strong>.
-                  Sem selecionar <strong>Ano</strong>, a busca e os filtros atuam só nesta página.
+                  Exibindo <strong>{notas.length} notas</strong> de <strong>{totalNotas} no total</strong>.
+                  A base completa esta carregando em segundo plano para busca, filtros e totais.
                 </span>
                 <button
-                  onClick={() => { setMostrarFiltros(true); }}
+                  onClick={() => { setMostrarFiltros(true); void carregarTodasNotasEmSegundoPlano(); }}
                   className="ml-auto shrink-0 bg-amber-500 hover:bg-amber-600 text-white text-xs font-medium px-3 py-1 rounded-lg"
                 >
                   Abrir filtros
@@ -3395,7 +3425,7 @@ function RelatoriosDashboard({
           </span>
           {temMais && (
             <button type="button" onClick={onCarregarMais} disabled={carregando} className="rounded-lg bg-[var(--accent)] px-4 py-2 text-xs font-bold text-white transition hover:-translate-y-0.5 hover:shadow-md disabled:opacity-50">
-              {carregando ? rt('Carregando...', '加载中...') : rt('Carregar mais 120', '再加载 120 条')}
+              {carregando ? rt('Carregando...', '加载中...') : rt(`Carregar mais ${TAMANHO_PAGINA_RELATORIO}`, `再加载 ${TAMANHO_PAGINA_RELATORIO} 条`)}
             </button>
           )}
         </div>
