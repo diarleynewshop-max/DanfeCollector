@@ -1,25 +1,25 @@
 # Credenciais e dados locais: nunca enviar para a Vercel.
 .env
 .env.*
-certs/
+/certs/
 *.pfx
 *.pem
 *.key
 
 # Dados gerados pelo worker e caches locais.
-downloads/
-anexos/
-node_modules/
-.next/
-.next-dev/
-.vercel/
-.git/
-.agents/
-.codex/
+/downloads/
+/anexos/
+/node_modules/
+/.next/
+/.next-dev/
+/.vercel/
+/.git/
+/.agents/
+/.codex/
 *.tsbuildinfo
 *.log
 
 # Material operacional que nao participa do runtime web.
-docs/
-supabase/
+/docs/
+/supabase/
 PROJECT_MEMORY.md
