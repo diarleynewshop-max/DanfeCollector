@@ -15,8 +15,17 @@ DANFE_SUPABASE_KEY="jwt-da-role-danfe_api"
 DANFE_STORAGE_XML_BUCKET="danfe-xml"
 DANFE_STORAGE_ANEXOS_BUCKET="danfe-anexos"
 DANFE_STORAGE_READ_TIMEOUT_MS="20000"
+
+# Proxy fiscal: a Vercel chama a VPS para operacoes que exigem PFX/certificado.
+DANFE_FISCAL_WORKER_URL="https://187.127.45.197"
+DANFE_FISCAL_WORKER_HOST_HEADER="danfe.newgrup.cloud"
+DANFE_FISCAL_WORKER_SERVERNAME="danfe.newgrup.cloud"
+DANFE_FISCAL_WORKER_SECRET="mesmo-segredo-configurado-na-vps"
+DANFE_FISCAL_WORKER_TIMEOUT_MS="120000"
 ```
 
 Nao cadastrar na Vercel `SUPABASE_SERVICE_ROLE_KEY`, `CERT_PFX_*`, certificados PFX ou segredos do cron. Eles ficam apenas no worker fiscal/VPS. O adaptador le primeiro o Storage privado e cai no disco local enquanto houver objetos ainda nao migrados.
+
+Na VPS, deixe `DANFE_FISCAL_WORKER_LOCAL=1` para garantir que chamadas locais nunca tentem voltar para a Vercel. O endpoint interno usado pelo proxy e `/api/internal/fiscal`; ele aceita somente `Authorization: Bearer <segredo>`.
 
 Com essas variaveis, novos XMLs e anexos sao gravados no Storage e no disco quando ambos estao disponiveis. Se o Storage configurado falhar, a operacao falha em vez de registrar uma copia apenas no filesystem efemero da Vercel. Sem elas, o comportamento continua somente em disco. O worker fiscal continua responsavel pelo certificado PFX e pela comunicacao com a SEFAZ. Antes de apontar `danfe.newgrup.cloud` para a Vercel, valide login, DANFE, anexo e relatorio com um objeto ja migrado.

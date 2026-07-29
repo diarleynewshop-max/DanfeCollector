@@ -52,6 +52,7 @@ import {
   type SitramDocumentoPagamento,
 } from './sitram/pagamento-icms-portal';
 import { salvarArquivoComFallback, apagarArquivo, mimeAceito, TAMANHO_MAX } from './anexos/storage';
+import { chamarFiscalWorker, usarProxyFiscal } from './fiscalProxy';
 
 export interface ActionResult {
   success: boolean;
@@ -123,6 +124,10 @@ async function checarUsuarioAction(): Promise<ActionResult | null> {
   } catch (error: unknown) {
     return { success: false, message: (error as Error).message };
   }
+}
+
+function erroWorkerFiscal(error: unknown): string {
+  return (error as Error).message || 'Worker fiscal indisponivel.';
 }
 
 // ---------------------------------------------------------------------------
@@ -484,6 +489,17 @@ export async function sincronizarNotas(cnpjId: number): Promise<ActionResult> {
   const usuario = await exigirUsuario().catch(() => null);
   if (!usuario) return { success: false, message: 'Sessao expirada. Faca login novamente.' };
   if (!usuarioPodeAcessarCnpj(usuario, cnpjId)) return { success: false, message: 'Acesso negado para esta loja.' };
+
+  if (usarProxyFiscal()) {
+    try {
+      const resultado = await chamarFiscalWorker<ActionResult>('sincronizarNotas', { cnpjId });
+      revalidatePath('/');
+      return resultado;
+    } catch (error: unknown) {
+      return { success: false, message: `VPS fiscal indisponivel: ${erroWorkerFiscal(error)}` };
+    }
+  }
+
   return sincronizarNotasInterno(cnpjId);
 }
 
@@ -712,9 +728,32 @@ export async function vincularCertificados(): Promise<ActionResult> {
 // ---------------------------------------------------------------------------
 
 export async function manifestarNota(notaId: number): Promise<ActionResult> {
-  const negado = await checarUsuarioAction();
-  if (negado) return negado;
+  const usuario = await exigirUsuario().catch(() => null);
+  if (!usuario) return { success: false, message: 'Sessao expirada. Faca login novamente.' };
 
+  const permissao = await prisma.notaFiscal.findUnique({
+    where: { id: notaId },
+    select: { cnpjId: true },
+  });
+  if (!permissao) return { success: false, message: 'Nota nÃ£o encontrada.' };
+  if (!usuarioPodeAcessarCnpj(usuario, permissao.cnpjId)) {
+    return { success: false, message: 'Acesso negado para esta loja.' };
+  }
+
+  if (usarProxyFiscal()) {
+    try {
+      const resultado = await chamarFiscalWorker<ActionResult>('manifestarNota', { notaId });
+      revalidatePath('/');
+      return resultado;
+    } catch (error: unknown) {
+      return { success: false, message: `VPS fiscal indisponivel: ${erroWorkerFiscal(error)}` };
+    }
+  }
+
+  return manifestarNotaInterno(notaId);
+}
+
+export async function manifestarNotaInterno(notaId: number): Promise<ActionResult> {
   const nota = await prisma.notaFiscal.findUnique({
     where: { id: notaId },
     include: { cnpj: true },
@@ -742,7 +781,7 @@ export async function manifestarNota(notaId: number): Promise<ActionResult> {
 
     // A manifestação gera novos documentos no DFe — libera a consulta imediata
     await prisma.cnpj.update({ where: { id: nota.cnpjId }, data: { bloqueadoAte: null } });
-    await sincronizarNotas(nota.cnpjId);
+    await sincronizarNotasInterno(nota.cnpjId);
 
     const atual = await prisma.notaFiscal.findUnique({ where: { id: notaId } });
     revalidatePath('/');
@@ -845,12 +884,40 @@ export async function importarChavesLote(
   chaves: string[],
   manifestarResumos: boolean
 ): Promise<ResultadoImportChave[]> {
-  try {
-    await exigirUsuario();
-  } catch (error: unknown) {
-    return chaves.map((chave) => ({ chave, status: 'erro', detalhe: (error as Error).message }));
+  const usuario = await exigirUsuario().catch(() => null);
+  if (!usuario) {
+    return chaves.map((chave) => ({ chave, status: 'erro', detalhe: 'Sessao expirada. Faca login novamente.' }));
+  }
+  if (!usuarioPodeAcessarCnpj(usuario, cnpjId)) {
+    return chaves.map((chave) => ({ chave, status: 'erro', detalhe: 'Acesso negado para esta loja.' }));
   }
 
+  if (usarProxyFiscal()) {
+    try {
+      const resultados = await chamarFiscalWorker<ResultadoImportChave[]>('importarChavesLote', {
+        cnpjId,
+        chaves,
+        manifestarResumos,
+      });
+      revalidatePath('/');
+      return resultados;
+    } catch (error: unknown) {
+      return chaves.map((chave) => ({
+        chave,
+        status: 'erro',
+        detalhe: `VPS fiscal indisponivel: ${erroWorkerFiscal(error)}`,
+      }));
+    }
+  }
+
+  return importarChavesLoteInterno(cnpjId, chaves, manifestarResumos);
+}
+
+export async function importarChavesLoteInterno(
+  cnpjId: number,
+  chaves: string[],
+  manifestarResumos: boolean
+): Promise<ResultadoImportChave[]> {
   const registro = await prisma.cnpj.findUnique({ where: { id: cnpjId } });
   if (!registro) return chaves.map((chave) => ({ chave, status: 'erro', detalhe: 'CNPJ não encontrado' }));
 
@@ -1220,6 +1287,17 @@ export async function obterResumoInicio(): Promise<ResumoInicio> {
 export async function sincronizarCnpjsAtivos(): Promise<ActionResult> {
   const negado = await checarUsuarioAction();
   if (negado) return negado;
+
+  if (usarProxyFiscal()) {
+    try {
+      const resultado = await chamarFiscalWorker<ActionResult>('sincronizarCnpjsAtivos');
+      revalidatePath('/');
+      return resultado;
+    } catch (error: unknown) {
+      return { success: false, message: `VPS fiscal indisponivel: ${erroWorkerFiscal(error)}` };
+    }
+  }
+
   return sincronizarCnpjsAtivosInterno();
 }
 
@@ -1768,6 +1846,24 @@ export async function atualizarSitramPorManifestos(chavesMdfe: string[]): Promis
   const negado = await checarUsuarioAction();
   if (negado) return { ...negado, resultados: [] };
 
+  if (usarProxyFiscal()) {
+    try {
+      const resultado = await chamarFiscalWorker<ResultadoSitramLote>('atualizarSitramPorManifestos', { chavesMdfe });
+      revalidatePath('/');
+      return resultado;
+    } catch (error: unknown) {
+      return {
+        success: false,
+        message: `VPS fiscal indisponivel: ${erroWorkerFiscal(error)}`,
+        resultados: [],
+      };
+    }
+  }
+
+  return atualizarSitramPorManifestosInterno(chavesMdfe);
+}
+
+export async function atualizarSitramPorManifestosInterno(chavesMdfe: string[]): Promise<ResultadoSitramLote> {
   const chaves = [...new Set(chavesMdfe.map((c) => c.replace(/\D/g, '')).filter(Boolean))];
   if (chaves.length === 0) {
     return { success: false, message: 'Informe ao menos uma chave de MDF-e com 44 digitos.', resultados: [] };
@@ -1826,6 +1922,36 @@ export async function atualizarSitramPorChaves(
   const negado = await checarUsuarioAction();
   if (negado) return { ...negado, resultados: [] };
 
+  const chaves = [...new Set(chavesEntrada.map((c) => c.replace(/\D/g, '')).filter(Boolean))];
+  if (chaves.length === 0) {
+    return { success: false, message: 'Informe ao menos uma chave NF-e ou MDF-e com 44 digitos.', resultados: [] };
+  }
+
+  const contemMdfe = chaves.some((chave) => chave.length === 44 && chave.slice(20, 22) === '58');
+  if (contemMdfe && usarProxyFiscal()) {
+    try {
+      const resultado = await chamarFiscalWorker<ResultadoSitramLote>('atualizarSitramPorChaves', {
+        chavesEntrada: chaves,
+        revalidarPagina,
+      });
+      if (revalidarPagina) revalidatePath('/');
+      return resultado;
+    } catch (error: unknown) {
+      return {
+        success: false,
+        message: `VPS fiscal indisponivel: ${erroWorkerFiscal(error)}`,
+        resultados: [],
+      };
+    }
+  }
+
+  return atualizarSitramPorChavesInterno(chaves, revalidarPagina);
+}
+
+export async function atualizarSitramPorChavesInterno(
+  chavesEntrada: string[],
+  revalidarPagina = true
+): Promise<ResultadoSitramLote> {
   const chaves = [...new Set(chavesEntrada.map((c) => c.replace(/\D/g, '')).filter(Boolean))];
   if (chaves.length === 0) {
     return { success: false, message: 'Informe ao menos uma chave NF-e ou MDF-e com 44 digitos.', resultados: [] };
@@ -2865,6 +2991,25 @@ export async function manifestarNotasLote(notaIds: number[]): Promise<ResultadoM
     }));
   }
 
+  if (usarProxyFiscal()) {
+    try {
+      const resultados = await chamarFiscalWorker<ResultadoManifestoLote[]>('manifestarNotasLote', { notaIds });
+      revalidatePath('/');
+      return resultados;
+    } catch (error: unknown) {
+      return notaIds.map((notaId) => ({
+        notaId,
+        chave: '',
+        status: 'erro',
+        detalhe: `VPS fiscal indisponivel: ${erroWorkerFiscal(error)}`,
+      }));
+    }
+  }
+
+  return manifestarNotasLoteInterno(notaIds);
+}
+
+export async function manifestarNotasLoteInterno(notaIds: number[]): Promise<ResultadoManifestoLote[]> {
   const resultados: ResultadoManifestoLote[] = [];
   const cnpjsAfetados = new Set<number>();
 
@@ -2900,7 +3045,7 @@ export async function manifestarNotasLote(notaIds: number[]): Promise<ResultadoM
   // Libera a consulta e sincroniza uma vez por CNPJ afetado, para tentar baixar o XML completo
   for (const cnpjId of cnpjsAfetados) {
     await prisma.cnpj.update({ where: { id: cnpjId }, data: { bloqueadoAte: null } });
-    await sincronizarNotas(cnpjId);
+    await sincronizarNotasInterno(cnpjId);
   }
 
   revalidatePath('/');
