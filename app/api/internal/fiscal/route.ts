@@ -31,6 +31,10 @@ function autorizado(req: Request): boolean {
   return bearer === segredo || header === segredo;
 }
 
+function workerLocal(): boolean {
+  return process.env.DANFE_FISCAL_WORKER_LOCAL === '1';
+}
+
 function numeroObrigatorio(payload: FiscalPayload, campo: string): number {
   const valor = Number(payload[campo]);
   if (!Number.isInteger(valor) || valor <= 0) {
@@ -46,6 +50,13 @@ function strings(payload: FiscalPayload, campo: string): string[] {
 }
 
 export async function POST(req: Request) {
+  if (!workerLocal()) {
+    return NextResponse.json(
+      { success: false, message: 'Endpoint fiscal disponivel somente no worker da VPS.' },
+      { status: 404 }
+    );
+  }
+
   if (!autorizado(req)) {
     return NextResponse.json({ success: false, message: 'Nao autorizado.' }, { status: 401 });
   }
