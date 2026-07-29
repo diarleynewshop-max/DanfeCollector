@@ -58,7 +58,7 @@ const prisma = new PrismaClient();
 
     if (ret.cStat === 138) {
       for (const doc of ret.documentos) {
-        const nota = processarDocumento(doc, registro.cnpj);
+        const nota = await processarDocumento(doc, registro.cnpj);
         if (!nota) continue;
         const existente = await prisma.notaFiscal.findUnique({ where: { chave: nota.chave } });
         if (!existente) {
@@ -67,7 +67,14 @@ const prisma = new PrismaClient();
         } else if (existente.status === 'RESUMO' && nota.status === 'COMPLETA') {
           await prisma.notaFiscal.update({
             where: { chave: nota.chave },
-            data: { status: 'COMPLETA', numero: nota.numero, serie: nota.serie, xmlPath: nota.xmlPath, nsu: nota.nsu },
+            data: {
+              status: 'COMPLETA',
+              numero: nota.numero,
+              serie: nota.serie,
+              xmlPath: nota.xmlPath,
+              xmlStorageKey: nota.xmlStorageKey,
+              nsu: nota.nsu,
+            },
           });
         }
       }
@@ -96,4 +103,3 @@ const prisma = new PrismaClient();
   console.error('ERRO:', e.message);
   process.exit(1);
 });
-

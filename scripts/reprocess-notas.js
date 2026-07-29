@@ -28,7 +28,7 @@ const prisma = new PrismaClient();
     }
     const xml = fs.readFileSync(nota.xmlPath, 'utf8');
     const schema = nota.status === 'COMPLETA' ? 'procNFe_v4.00' : 'resNFe_v1.01';
-    const extraida = processarDocumento({ nsu: nota.nsu || '', schema, xml }, nota.cnpj.cnpj);
+    const extraida = await processarDocumento({ nsu: nota.nsu || '', schema, xml }, nota.cnpj.cnpj);
     if (!extraida) continue;
 
     const { chave, status, ...campos } = extraida;

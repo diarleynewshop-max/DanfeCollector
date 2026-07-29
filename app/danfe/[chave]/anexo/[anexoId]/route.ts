@@ -1,5 +1,5 @@
 import { prisma } from '@/lib/prisma';
-import { lerArquivo } from '@/lib/anexos/storage';
+import { lerArquivoComFallback } from '@/lib/anexos/storage';
 import { opcoesCompartilhadasDae } from '@/lib/sitram/dae';
 import { obterUsuarioAtual, usuarioPodeAcessarCnpj } from '@/lib/usuarios/auth';
 
@@ -49,9 +49,9 @@ export async function GET(
 
   let bytes: Buffer;
   try {
-    bytes = lerArquivo(anexo.caminho);
+    bytes = await lerArquivoComFallback(anexo.caminho, anexo.storageKey);
   } catch {
-    return new Response('Arquivo do anexo nao esta mais no disco.', { status: 404 });
+    return new Response('Arquivo do anexo nao esta disponivel no Storage nem no disco.', { status: 404 });
   }
 
   const baixar = new URL(req.url).searchParams.get('download') === '1';

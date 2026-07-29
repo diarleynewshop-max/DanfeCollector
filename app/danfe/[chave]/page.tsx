@@ -1,9 +1,8 @@
 import { notFound, redirect } from 'next/navigation';
-import * as fs from 'fs';
 import { prisma } from '@/lib/prisma';
 import { parseDanfe } from '@/lib/sefaz/detalhe';
 import { extrairEspelhoSitram } from '@/lib/sitram/espelho';
-import { resolverXmlPath } from '@/lib/xmlpath';
+import { lerXmlComFallback } from '@/lib/xmlpath';
 import { obterUsuarioAtual, usuarioPodeAcessarCnpj } from '@/lib/usuarios/auth';
 import DanfeView from '../../components/DanfeViewResizable';
 import BotaoImprimir from './BotaoImprimir';
@@ -17,12 +16,14 @@ export default async function DanfePage({ params }: { params: Promise<{ chave: s
   const { chave } = await params;
   const nota = await prisma.notaFiscal.findUnique({ where: { chave } });
   if (nota && !usuarioPodeAcessarCnpj(usuario, nota.cnpjId)) notFound();
-  const xmlPath = nota && nota.status === 'COMPLETA' ? resolverXmlPath(nota.xmlPath) : null;
-  if (!xmlPath) {
+  const xml = nota && nota.status === 'COMPLETA'
+    ? await lerXmlComFallback(nota.xmlStorageKey, nota.xmlPath)
+    : null;
+  if (!xml) {
     notFound();
   }
 
-  const danfe = parseDanfe(fs.readFileSync(xmlPath, 'utf8'));
+  const danfe = parseDanfe(xml);
   if (!danfe) notFound();
   const espelho = nota ? extrairEspelhoSitram(nota) : null;
 

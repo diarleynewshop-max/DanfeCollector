@@ -60,7 +60,7 @@ const ts = () => new Date().toLocaleTimeString('pt-BR');
 
     if (ret.cStat === 138) {
       for (const doc of ret.documentos) {
-        const nota = processarDocumento(doc, reg.cnpj);
+        const nota = await processarDocumento(doc, reg.cnpj);
         if (!nota) continue;
         const existe = await prisma.notaFiscal.findUnique({ where: { chave: nota.chave } });
         if (!existe) { await prisma.notaFiscal.create({ data: { ...nota, cnpjId: reg.id } }); novas++; }

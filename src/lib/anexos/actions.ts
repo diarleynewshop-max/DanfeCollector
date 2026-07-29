@@ -12,7 +12,7 @@ import {
   MIMES_ACEITOS,
   TAMANHO_MAX,
   mimeAceito,
-  salvarArquivo,
+  salvarArquivoComFallback,
   apagarArquivo,
 } from './storage';
 
@@ -160,12 +160,12 @@ export async function enviarAnexo(
   }
 
   const bytes = Buffer.from(await arquivo.arrayBuffer());
-  const caminho = await salvarArquivo(notaId, arquivo.type, bytes);
+  const arquivoSalvo = await salvarArquivoComFallback(notaId, arquivo.type, bytes);
 
   if (escopo === 'dae') {
     const daeInfo = daeSelecionado;
     if (!daeInfo) {
-      await apagarArquivo(caminho);
+      await apagarArquivo(arquivoSalvo.caminho, arquivoSalvo.storageKey);
       return { success: false, message: 'Selecione um DAE válido para compartilhar o anexo.' };
     }
 
@@ -196,7 +196,8 @@ export async function enviarAnexo(
         arquivoNome: arquivo.name,
         mime: arquivo.type,
         tamanho: arquivo.size,
-        caminho,
+        caminho: arquivoSalvo.caminho,
+        storageKey: arquivoSalvo.storageKey,
         criadoPor: usuario.login,
         daeCompartilhadoId: dae.id,
       },
@@ -213,7 +214,8 @@ export async function enviarAnexo(
       arquivoNome: arquivo.name,
       mime: arquivo.type,
       tamanho: arquivo.size,
-      caminho,
+      caminho: arquivoSalvo.caminho,
+      storageKey: arquivoSalvo.storageKey,
       criadoPor: usuario.login,
     },
   });
@@ -236,7 +238,7 @@ export async function excluirAnexo(anexoId: number): Promise<ResultadoAnexo> {
     return { success: false, message: 'Sem permissão para excluir este anexo.' };
   }
 
-  await apagarArquivo(anexo.caminho);
+  await apagarArquivo(anexo.caminho, anexo.storageKey);
   await prisma.anexo.delete({ where: { id: anexoId } });
 
   revalidatePath('/');

@@ -12,17 +12,17 @@ param(
 $ErrorActionPreference = 'Stop'
 $chave   = "$HOME\.ssh\newshop_vps"
 $vps     = "root@187.127.45.197"
-$remoto  = "/home/danfe/backups/danfe-backup-latest.tgz"
+$remoto  = "/home/danfe/backups/danfe-supabase-latest.tgz"
 
 if (-not (Test-Path $Destino)) { New-Item -ItemType Directory -Path $Destino -Force | Out-Null }
 
 if ($Novo) {
     Write-Host "Gerando backup novo na VPS..." -ForegroundColor Cyan
-    ssh -i $chave $vps "sudo -u danfe bash /home/danfe/backup-danfe.sh"
+    ssh -i $chave $vps "sudo /usr/local/sbin/backup-danfe-supabase"
 }
 
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-$local = Join-Path $Destino "danfe-backup-$stamp.tgz"
+$local = Join-Path $Destino "danfe-supabase-backup-$stamp.tgz"
 
 Write-Host "Baixando $remoto ..." -ForegroundColor Cyan
 scp -i $chave "${vps}:$remoto" $local

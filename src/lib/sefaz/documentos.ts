@@ -2,6 +2,11 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { XMLParser } from 'fast-xml-parser';
 import type { DocumentoDFe } from './distribuicao';
+import {
+  bucketXmlDanfe,
+  salvarObjetoSupabase,
+  storageSupabaseConfigurado,
+} from '../supabaseStorage';
 
 export interface NotaExtraida {
   chave: string;
@@ -32,6 +37,7 @@ export interface NotaExtraida {
   status: 'RESUMO' | 'COMPLETA';
   situacaoSefaz: 'AUTORIZADA' | 'DENEGADA';
   xmlPath: string;
+  xmlStorageKey: string | null;
 }
 
 export interface TransporteExtraido {
@@ -55,9 +61,66 @@ function pastaDestino(cnpj: string, data: Date): string {
   const base = process.env.DOWNLOAD_PATH || './downloads';
   const ano = String(data.getFullYear());
   const mes = String(data.getMonth() + 1).padStart(2, '0');
-  const destino = path.resolve(process.cwd(), base, cnpj, ano, mes);
-  fs.mkdirSync(destino, { recursive: true });
-  return destino;
+  return path.resolve(process.cwd(), base, cnpj, ano, mes);
+}
+
+function chaveStorageXml(cnpj: string, data: Date, nomeArquivo: string): string {
+  const ano = String(data.getFullYear());
+  const mes = String(data.getMonth() + 1).padStart(2, '0');
+  return `downloads/${cnpj}/${ano}/${mes}/${nomeArquivo}`;
+}
+
+/**
+ * Mantem o XML no disco da VPS e no Storage quando ele estiver configurado.
+ * Com Storage configurado, o upload remoto e obrigatorio para nao depender do
+ * filesystem efemero da Vercel.
+ */
+async function salvarXmlComFallback(
+  destino: string,
+  xmlPath: string,
+  storageKey: string,
+  xml: string,
+): Promise<string | null> {
+  const storageConfigurado = storageSupabaseConfigurado();
+  let salvoNoDisco = false;
+  let erroDisco: unknown = null;
+  try {
+    await fs.promises.mkdir(destino, { recursive: true });
+    await fs.promises.writeFile(xmlPath, xml, 'utf8');
+    salvoNoDisco = true;
+  } catch (erro) {
+    erroDisco = erro;
+  }
+
+  let salvoNoStorage = false;
+  let erroStorage: unknown = null;
+  try {
+    salvoNoStorage = await salvarObjetoSupabase(
+      bucketXmlDanfe(),
+      storageKey,
+      Buffer.from(xml, 'utf8'),
+      'application/xml',
+    );
+  } catch (erro) {
+    erroStorage = erro;
+  }
+
+  if (storageConfigurado && !salvoNoStorage) {
+    const detalheStorage = erroStorage instanceof Error ? erroStorage.message : 'falha no upload';
+    throw new Error(`Nao foi possivel salvar o XML no Storage configurado: ${detalheStorage}`);
+  }
+
+  if (!salvoNoDisco && !salvoNoStorage) {
+    const detalheDisco = erroDisco instanceof Error ? erroDisco.message : 'falha no disco';
+    const detalheStorage = erroStorage instanceof Error ? erroStorage.message : 'Storage indisponivel ou nao configurado';
+    throw new Error(`Nao foi possivel salvar o XML: ${detalheDisco}; ${detalheStorage}`);
+  }
+
+  if (erroDisco && salvoNoStorage) {
+    console.warn('[danfe-storage] XML salvo no Storage; copia local indisponivel.', erroDisco);
+  }
+
+  return salvoNoStorage ? storageKey : null;
 }
 
 function tipoOperacao(tpNF: unknown): string | undefined {
@@ -161,7 +224,7 @@ export function interpretarEventoCancelamento(
  * Extrai todos os campos do cabeçalho da NF-e — exceto os produtos/itens (det).
  * Retorna null para schemas que não são notas (eventos, etc.).
  */
-export function processarDocumento(doc: DocumentoDFe, cnpjInteressado: string): NotaExtraida | null {
+export async function processarDocumento(doc: DocumentoDFe, cnpjInteressado: string): Promise<NotaExtraida | null> {
   const json = parser.parse(doc.xml);
 
   // Resumo de NF-e (resNFe): dados limitados que a SEFAZ libera antes da manifestação
@@ -170,8 +233,14 @@ export function processarDocumento(doc: DocumentoDFe, cnpjInteressado: string): 
     if (!res) return null;
     const emitidaEm = new Date(res.dhEmi);
     const destino = pastaDestino(cnpjInteressado, emitidaEm);
-    const xmlPath = path.join(destino, `${res.chNFe}-res.xml`);
-    fs.writeFileSync(xmlPath, doc.xml, 'utf8');
+    const arquivoXml = `${res.chNFe}-res.xml`;
+    const xmlPath = path.join(destino, arquivoXml);
+    const xmlStorageKey = await salvarXmlComFallback(
+      destino,
+      xmlPath,
+      chaveStorageXml(cnpjInteressado, emitidaEm, arquivoXml),
+      doc.xml,
+    );
 
     return {
       chave: String(res.chNFe),
@@ -185,6 +254,7 @@ export function processarDocumento(doc: DocumentoDFe, cnpjInteressado: string): 
       status: 'RESUMO',
       situacaoSefaz: 'AUTORIZADA',
       xmlPath,
+      xmlStorageKey,
     };
   }
 
@@ -197,8 +267,14 @@ export function processarDocumento(doc: DocumentoDFe, cnpjInteressado: string): 
     );
     const emitidaEm = new Date(inf.ide?.dhEmi ?? inf.ide?.dEmi);
     const destino = pastaDestino(cnpjInteressado, emitidaEm);
-    const xmlPath = path.join(destino, `${chave}.xml`);
-    fs.writeFileSync(xmlPath, doc.xml, 'utf8');
+    const arquivoXml = `${chave}.xml`;
+    const xmlPath = path.join(destino, arquivoXml);
+    const xmlStorageKey = await salvarXmlComFallback(
+      destino,
+      xmlPath,
+      chaveStorageXml(cnpjInteressado, emitidaEm, arquivoXml),
+      doc.xml,
+    );
 
     const dest = inf.dest ?? {};
     const tot = inf.total?.ICMSTot ?? {};
@@ -238,11 +314,19 @@ export function processarDocumento(doc: DocumentoDFe, cnpjInteressado: string): 
       status: 'COMPLETA',
       situacaoSefaz,
       xmlPath,
+      xmlStorageKey,
     };
   }
 
   // Outros schemas (resEvento, procEventoNFe...): grava para auditoria, sem registro de nota
-  const destino = pastaDestino(cnpjInteressado, new Date());
-  fs.writeFileSync(path.join(destino, `NSU-${doc.nsu}-${doc.schema.split('_')[0]}.xml`), doc.xml, 'utf8');
+  const emitidaEm = new Date();
+  const destino = pastaDestino(cnpjInteressado, emitidaEm);
+  const arquivoXml = `NSU-${doc.nsu}-${doc.schema.split('_')[0]}.xml`;
+  await salvarXmlComFallback(
+    destino,
+    path.join(destino, arquivoXml),
+    chaveStorageXml(cnpjInteressado, emitidaEm, arquivoXml),
+    doc.xml,
+  );
   return null;
 }

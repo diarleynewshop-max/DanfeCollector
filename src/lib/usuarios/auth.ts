@@ -18,14 +18,33 @@ export interface UsuarioLogado {
 
 const COOKIE_USUARIO = 'danfe_usuario';
 
-const USUARIOS_INICIAIS = [
-  { login: 'Diarley', senha: '1212', nome: 'Diarley', perfil: 'admin' as PerfilUsuario, acessoTodosCnpjs: true },
-  { login: 'Clara', senha: '2004', nome: 'Clara', perfil: 'operador' as PerfilUsuario, acessoTodosCnpjs: true },
-  { login: 'Rafa', senha: '1316', nome: 'Rafa', perfil: 'operador' as PerfilUsuario, acessoTodosCnpjs: true },
-];
-
 function segredoSessao(): string {
-  return process.env.AUTH_SECRET || 'danfe-collector-local-auth-v1';
+  const segredo = process.env.AUTH_SECRET?.trim();
+  if (segredo && segredo.length >= 32) return segredo;
+
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('AUTH_SECRET ausente ou fraco. Configure um segredo com pelo menos 32 caracteres.');
+  }
+
+  // Apenas desenvolvimento local; nunca assina sessao de producao.
+  return 'danfe-collector-dev-only-auth-secret-2026';
+}
+
+function usuariosBootstrap() {
+  const login = process.env.DANFE_BOOTSTRAP_ADMIN_LOGIN?.trim();
+  const senha = process.env.DANFE_BOOTSTRAP_ADMIN_PASSWORD;
+
+  if (!login || !senha || senha.length < 12) return [];
+
+  const nome = process.env.DANFE_BOOTSTRAP_ADMIN_NOME?.trim() || login;
+
+  return [{
+    login,
+    senha,
+    nome,
+    perfil: 'admin' as PerfilUsuario,
+    acessoTodosCnpjs: true,
+  }];
 }
 
 function normalizarLogin(login: string): string {
@@ -54,7 +73,7 @@ async function garantirUsuariosIniciais() {
   const total = await prisma.usuario.count();
   if (total > 0) return;
 
-  for (const usuario of USUARIOS_INICIAIS) {
+  for (const usuario of usuariosBootstrap()) {
     await prisma.usuario.create({
       data: {
         login: usuario.login,

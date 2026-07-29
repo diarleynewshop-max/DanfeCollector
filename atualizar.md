@@ -25,13 +25,11 @@
 ## Roteiro (Claude executa em ordem)
 
 ### 1. Empacotar o código local (Claude)
-No Git Bash, a partir da pasta do projeto, gerar o pacote no scratchpad (usar caminho estilo `/c/...`, senão o `tar` confunde `C:` com host remoto):
-```bash
-tar czf "<SCRATCHPAD>/danfe.tgz" \
-  --exclude=node_modules --exclude=.next --exclude=.next-dev --exclude=.git --exclude='*.log' \
-  --exclude=prisma/dev.db --exclude='prisma/dev.db-journal' --exclude=downloads \
-  --exclude=./anexos --exclude=.env --exclude=certs --exclude=tsconfig.tsbuildinfo .
+No PowerShell, a partir da pasta do projeto, rode:
+```powershell
+.\scripts\empacotar-danfe-vps.ps1
 ```
+O script cria um `.tgz` no temporário do Windows e exclui somente as pastas de dados da **raiz**. Não use `--exclude=anexos` no `tar` manual: isso também pode excluir `src/lib/anexos` do código.
 > ⚠️ O pacote **só leva código**. Dados, segredos e config vivem **só na VPS** e nunca são sobrescritos por deploy:
 > - `prisma/dev.db` / `downloads/` / `anexos/` — dados de produção (o banco agora é PostgreSQL, ver seção abaixo; o `dev.db` é só legado)
 > - `.env` — a VPS tem o seu próprio (com a `DATABASE_URL` do Postgres). O `.env` local é para desenvolvimento e **não** vai no deploy.
@@ -92,9 +90,9 @@ rm -f /tmp/danfe.tgz
 ```bash
 su - danfe -c 'export PATH=/home/danfe/.nvm/versions/node/v22.23.1/bin:$PATH; \
   cd /home/danfe/htdocs/danfe.newgrup.cloud && \
-  npm install && npx prisma generate && npx prisma db push --skip-generate && npm run build'
+  npm install && npx prisma generate && npm run build'
 ```
-> `prisma db push` aplica no PostgreSQL qualquer mudança de schema (idempotente quando já está em sync). Se a mudança for destrutiva (remover coluna/tabela), o push avisa antes — nesse caso rodar o backup manual primeiro.
+> Não rode `prisma db push` neste projeto: o PostgreSQL é compartilhado com SCAN e Catálogo. Mudanças de banco do Danfe entram somente pelas migrations versionadas em `supabase/migrations/` e são aplicadas/validadas antes do deploy.
 
 ### 5. Reiniciar o app (Claude)
 ```bash
@@ -130,27 +128,26 @@ Depois do `HTTP 200`, abrir `https://danfe.newgrup.cloud/login` e validar no nav
 - **Marcador `^[[200~` colado no comando**: terminal em bracketed-paste; digitar em vez de colar, ou apagar os caracteres.
 - **Build falha**: rodar só o `npm run build` e ler o erro; geralmente é `.env` faltando variável ou erro de tipo.
 
-## Banco de dados (PostgreSQL)
-Desde jul/2026 o banco é **PostgreSQL 16**, rodando na própria VPS num cluster dedicado na **porta 5433** (a 5432 é ocupada por uma stack Supabase em Docker — não usar).
+## Banco de dados (Supabase)
+Desde 29/jul/2026, o Danfe usa o schema isolado `danfe` no Supabase da VPS. SCAN e Catálogo continuam no schema `public` e não devem ser alterados por migrations do Danfe.
 
 | Item | Valor |
 |------|-------|
-| Host/porta | `localhost:5433` (só acessível de dentro da VPS) |
-| Banco / usuário | `danfe` / `danfe` |
-| Connection string | está no `.env` da VPS (`DATABASE_URL`) |
-| Cluster | `pg_lsclusters` → `16 main 5433` |
+| Banco/schema | `postgres` / `danfe` |
+| Runtime Vercel | `db.newgrup.cloud:6543`, Supavisor com TLS obrigatório |
+| Porta 5432 | Somente `localhost` na VPS; nunca usar na Vercel |
+| Role do app | `danfe_prisma`, limitada ao schema `danfe` |
+| Segredos da VPS | `/home/danfe/.secrets/danfe_prisma_database.env` e `danfe_supabase_api.jwt` |
 
-- **Console SQL:** `PGPASSWORD=<senha> psql -h 127.0.0.1 -p 5433 -U danfe -d danfe`
-- **Dev local contra produção:** túnel `ssh -i ~/.ssh/newshop_vps -L 5433:localhost:5433 root@187.127.45.197` e usar o `.env` local (já configurado).
-- O antigo `prisma/dev.db` (SQLite) ficou como **legado**; não é mais lido pelo app.
+- Não imprimir nem commitar a `DATABASE_URL` ou a JWT do Danfe.
+- Para a Vercel, configurar `DATABASE_URL`, `AUTH_SECRET`, `DANFE_SUPABASE_URL` e `DANFE_SUPABASE_KEY` conforme `docs/VERCEL_SUPABASE_STORAGE.md`.
+- O PostgreSQL legado na porta `5433` permanece apenas como rollback até o corte ser validado; não receber mudanças novas.
 
 ## Backups
-- **Automático:** cron do usuário `danfe`, **domingo 03:00**, script `/home/danfe/backup-danfe.sh`. Gera `.tgz` (dump do banco + `downloads/` + `anexos/` + `.env` + cert) em `/home/danfe/backups/`, mantém as 8 semanas mais recentes. Log em `/home/danfe/backups/backup.log`.
-- **Baixar pro PC:** `.\scripts\baixar-backup.ps1` (use `-Novo` para gerar um backup fresco antes de baixar).
-- **Backup manual do banco (agora):** `sudo -u danfe bash /home/danfe/backup-danfe.sh`.
-- **Restaurar o banco de um backup:** extrair `danfe-pg.sql` do `.tgz` e `psql "$DATABASE_URL_sem_?schema" < danfe-pg.sql` (num banco vazio).
-
-O `.tgz` contém o **dump `pg_dump` do PostgreSQL** (banco real) + `downloads/` + `.env` + certificado.
+- **Automático:** root cron, **domingo 03:05**, `/usr/local/sbin/backup-danfe-supabase`. Salva dump do schema `danfe`, buckets `danfe-xml`/`danfe-anexos`, `downloads`, `anexos`, `.env` e certificados em `/home/danfe/backups/`. Mantém oito cópias; log em `backup-supabase.log`.
+- **Baixar pro PC:** `.\scripts\baixar-backup.ps1` (use `-Novo` para gerar uma cópia na hora).
+- **Backup manual:** `sudo /usr/local/sbin/backup-danfe-supabase`.
+- **Restaurar:** extrair `danfe-supabase.pg.dump` e restaurar somente no schema `danfe`; recuperar os diretórios `danfe-xml` e `danfe-anexos` no Storage antes de apontar o app.
 
 ## Rollback rápido
 O deploy sobrescreve **apenas o código** (dados/`.env`/certs ficam preservados na VPS). Se precisar voltar o código, reenviar um pacote de uma versão anterior e refazer passos 3–5. Para restaurar **dados**, usar o `.tgz` de backup correspondente.

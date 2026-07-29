@@ -110,6 +110,9 @@ model NotaFiscal {
   manifestadaEm DateTime?
   xmlPath       String?
   pdfPath       String?
+  // Chaves privadas no Supabase Storage; os caminhos legados acima ficam para rollback.
+  xmlStorageKey String?
+  pdfStorageKey String?
   // Pagamento do DAE registrado manualmente (via importação da relação de pagamento SITRAM).
   // Quando preenchido, o DAE é tratado como PAGO independente do status do SITRAM.
   pagamentoManualEm    DateTime?
@@ -152,6 +155,8 @@ model Anexo {
   mime        String     // content-type
   tamanho     Int        // bytes
   caminho     String     // caminho relativo dentro de ANEXOS_PATH
+  // Chave privada no bucket danfe-anexos; caminho continua como fallback legado.
+  storageKey  String?
   criadoPor   String?    // login de quem enviou
   createdAt   DateTime   @default(now())
   notaId      Int?

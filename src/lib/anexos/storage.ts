@@ -3,6 +3,14 @@ import 'server-only';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
+import {
+  apagarObjetoSupabase,
+  bucketAnexosDanfe,
+  chaveAnexoLegada,
+  lerObjetoSupabase,
+  salvarObjetoSupabase,
+  storageSupabaseConfigurado,
+} from '../supabaseStorage';
 
 // Pasta raiz dos anexos no disco (fora do banco). Configurável por env.
 const ANEXOS_ROOT = process.env.ANEXOS_PATH || './anexos';
@@ -64,7 +72,75 @@ export async function salvarArquivo(
   return relativo.split(path.sep).join('/');
 }
 
-export async function apagarArquivo(caminhoRelativo: string): Promise<void> {
+export interface ArquivoSalvo {
+  caminho: string;
+  storageKey: string | null;
+}
+
+/**
+ * Escreve o novo anexo nos dois destinos quando o Storage estiver configurado.
+ * Nesse caso o upload remoto e obrigatorio: disco temporario da Vercel nao pode
+ * ser a unica copia de um anexo novo.
+ */
+export async function salvarArquivoComFallback(
+  notaId: number,
+  mime: string,
+  bytes: Buffer,
+): Promise<ArquivoSalvo> {
+  const ext = extensaoDoMime(mime);
+  const nomeUnico = `${Date.now()}-${crypto.randomBytes(6).toString('hex')}.${ext}`;
+  const relativo = path.join(String(notaId), nomeUnico).split(path.sep).join('/');
+  const destino = caminhoAbsoluto(relativo);
+  const chave = chaveAnexoLegada(relativo);
+  const storageConfigurado = storageSupabaseConfigurado();
+
+  let salvoNoDisco = false;
+  let erroDisco: unknown = null;
+  try {
+    await fs.promises.mkdir(path.dirname(destino), { recursive: true });
+    await fs.promises.writeFile(destino, bytes);
+    salvoNoDisco = true;
+  } catch (erro) {
+    erroDisco = erro;
+  }
+
+  let salvoNoStorage = false;
+  let erroStorage: unknown = null;
+  try {
+    salvoNoStorage = chave
+      ? await salvarObjetoSupabase(bucketAnexosDanfe(), chave, bytes, mime)
+      : false;
+  } catch (erro) {
+    erroStorage = erro;
+  }
+
+  if (storageConfigurado && !salvoNoStorage) {
+    const detalheStorage = erroStorage instanceof Error ? erroStorage.message : 'falha no upload';
+    throw new Error(`Nao foi possivel salvar o anexo no Storage configurado: ${detalheStorage}`);
+  }
+
+  if (!salvoNoDisco && !salvoNoStorage) {
+    const detalheDisco = erroDisco instanceof Error ? erroDisco.message : 'falha no disco';
+    const detalheStorage = erroStorage instanceof Error ? erroStorage.message : 'Storage indisponivel ou nao configurado';
+    throw new Error(`Nao foi possivel salvar o anexo: ${detalheDisco}; ${detalheStorage}`);
+  }
+
+  if (erroDisco && salvoNoStorage) {
+    console.warn('[danfe-storage] Anexo salvo no Storage; copia local indisponivel.', erroDisco);
+  }
+
+  return { caminho: relativo, storageKey: salvoNoStorage ? chave : null };
+}
+
+export async function apagarArquivo(
+  caminhoRelativo: string,
+  storageKey?: string | null,
+): Promise<void> {
+  const chave = storageKey || chaveAnexoLegada(caminhoRelativo);
+  if (chave) {
+    await apagarObjetoSupabase(bucketAnexosDanfe(), chave);
+  }
+
   try {
     await fs.promises.unlink(caminhoAbsoluto(caminhoRelativo));
   } catch (e) {
@@ -75,4 +151,18 @@ export async function apagarArquivo(caminhoRelativo: string): Promise<void> {
 
 export function lerArquivo(caminhoRelativo: string): Buffer {
   return fs.readFileSync(caminhoAbsoluto(caminhoRelativo));
+}
+
+/**
+ * Le o anexo privado do Supabase Storage quando a migracao ja o copiou.
+ * Mantem o disco local como fallback para a VPS atual e para objetos pendentes.
+ */
+export async function lerArquivoComFallback(
+  caminhoRelativo: string,
+  storageKey?: string | null,
+): Promise<Buffer> {
+  const chave = storageKey || chaveAnexoLegada(caminhoRelativo);
+  const remoto = await lerObjetoSupabase(bucketAnexosDanfe(), chave);
+  if (remoto) return remoto;
+  return fs.promises.readFile(caminhoAbsoluto(caminhoRelativo));
 }

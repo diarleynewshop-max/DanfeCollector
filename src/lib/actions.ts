@@ -51,7 +51,7 @@ import {
   simularDaeNotaFiscal,
   type SitramDocumentoPagamento,
 } from './sitram/pagamento-icms-portal';
-import { salvarArquivo, apagarArquivo, mimeAceito, TAMANHO_MAX } from './anexos/storage';
+import { salvarArquivoComFallback, apagarArquivo, mimeAceito, TAMANHO_MAX } from './anexos/storage';
 
 export interface ActionResult {
   success: boolean;
@@ -566,7 +566,7 @@ export async function sincronizarNotasInterno(cnpjId: number): Promise<ActionRes
             });
           }
 
-          const nota = processarDocumento(doc, registro.cnpj);
+          const nota = await processarDocumento(doc, registro.cnpj);
           if (!nota) continue;
 
           const existente = await prisma.notaFiscal.findUnique({ where: { chave: nota.chave } });
@@ -822,7 +822,7 @@ async function guardarDocumento(
   cnpjInteressado: string,
   doc: { nsu: string; schema: string; xml: string }
 ): Promise<'completa' | 'resumo' | null> {
-  const nota = processarDocumento(doc, cnpjInteressado);
+  const nota = await processarDocumento(doc, cnpjInteressado);
   if (!nota) return null;
   const existente = await prisma.notaFiscal.findUnique({ where: { chave: nota.chave } });
   if (!existente) {
@@ -2345,17 +2345,21 @@ async function anexarDaesEmitidosSeNovo(
     const arquivoNome = `dae-sitram-${codigo}.html`;
     const jaExiste = await prisma.anexo.findFirst({
       where: { notaId: nota.id, arquivoNome },
-      select: { id: true, caminho: true },
+      select: { id: true, caminho: true, storageKey: true },
     });
 
     const bytes = montarHtmlDaeEmitido(nota, documento);
-    const caminho = await salvarArquivo(nota.id, 'text/html', bytes);
+    const arquivoSalvo = await salvarArquivoComFallback(nota.id, 'text/html', bytes);
     if (jaExiste) {
       await prisma.anexo.update({
         where: { id: jaExiste.id },
-        data: { tamanho: bytes.length, caminho },
+        data: {
+          tamanho: bytes.length,
+          caminho: arquivoSalvo.caminho,
+          storageKey: arquivoSalvo.storageKey,
+        },
       });
-      await apagarArquivo(jaExiste.caminho);
+      await apagarArquivo(jaExiste.caminho, jaExiste.storageKey);
       continue;
     }
 
@@ -2366,7 +2370,8 @@ async function anexarDaesEmitidosSeNovo(
         arquivoNome,
         mime: 'text/html',
         tamanho: bytes.length,
-        caminho,
+        caminho: arquivoSalvo.caminho,
+        storageKey: arquivoSalvo.storageKey,
         criadoPor,
       },
     });
@@ -3068,7 +3073,7 @@ export async function anexarComprovanteLote(
 
   const bytes = Buffer.from(await arquivo.arrayBuffer());
   for (const notaId of ids) {
-    const caminho = await salvarArquivo(notaId, arquivo.type, bytes);
+    const arquivoSalvo = await salvarArquivoComFallback(notaId, arquivo.type, bytes);
     await prisma.anexo.create({
       data: {
         notaId,
@@ -3076,7 +3081,8 @@ export async function anexarComprovanteLote(
         arquivoNome: arquivo.name,
         mime: arquivo.type,
         tamanho: arquivo.size,
-        caminho,
+        caminho: arquivoSalvo.caminho,
+        storageKey: arquivoSalvo.storageKey,
         criadoPor: usuario.login,
       },
     });
