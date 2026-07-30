@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useEffect, useTransition, useDeferredValue, useCallback, useRef } from 'react';
+import { useState, useMemo, useEffect, useTransition, useCallback, useRef } from 'react';
 import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import type { Cnpj, NotaFiscal } from '@prisma/client';
@@ -78,6 +78,40 @@ type CnpjComContagem = Cnpj & { _count: { notas: number } };
 type FiltroDaeSitram = 'todos' | 'consultado' | 'com-dae' | 'a-pagar' | 'em-aberto' | 'pago' | 'duplicidade' | 'sem-dae' | 'nao-encontrada';
 type SecaoApp = 'home' | 'notas' | 'relatorios' | 'empresas' | 'usuarios' | 'configuracao';
 type ColunaRedimensionavel = 'nf' | 'emitente' | 'destinatario' | 'valores' | 'transporte' | 'sitram' | 'status';
+type FiltrosNotasAplicados = {
+  numero: string;
+  cnpjId: number | 'todos';
+  status: 'todos' | 'RESUMO' | 'COMPLETA';
+  emitente: string;
+  destinatario: string;
+  valorMin: string;
+  valorMax: string;
+  itensMin: string;
+  itensMax: string;
+  etiquetas: string[];
+  excluirEmitentes: string[];
+  dataInicio: string;
+  dataFim: string;
+  mes: string;
+  ano: string;
+  situacao: 'todas' | 'AUTORIZADA' | 'CANCELADA' | 'DENEGADA';
+  daeSitram: FiltroDaeSitram;
+  daeVencInicio: string;
+  daeVencFim: string;
+  foraCe15SemDae: boolean;
+};
+type FiltrosRelatorioAplicados = {
+  dataInicio: string;
+  dataFim: string;
+  raizesEmpresa: string[];
+  tipo: string;
+  situacoes: string[];
+  daes: string[];
+  fornecedores: string[];
+  fornecedorAtivo: boolean;
+  risco: string;
+  busca: string;
+};
 
 // DAE "a pagar" = DAE em aberto ou ainda a gerar (imposto pendente de pagamento)
 const DAE_A_PAGAR = ['EM_ABERTO', 'LIBERADA_PARA_GERAR'];
@@ -641,6 +675,28 @@ export default function Dashboard({
   const [filtroDaeVencInicio, setFiltroDaeVencInicio] = useState('');
   const [filtroDaeVencFim, setFiltroDaeVencFim] = useState('');
   const [filtroForaCe15SemDae, setFiltroForaCe15SemDae] = useState(false);
+  const [filtrosAplicadosNotas, setFiltrosAplicadosNotas] = useState<FiltrosNotasAplicados>({
+    numero: '',
+    cnpjId: 'todos',
+    status: 'todos',
+    emitente: '',
+    destinatario: '',
+    valorMin: '',
+    valorMax: '',
+    itensMin: '',
+    itensMax: '',
+    etiquetas: [],
+    excluirEmitentes: [],
+    dataInicio: '',
+    dataFim: '',
+    mes: '',
+    ano: '',
+    situacao: 'todas',
+    daeSitram: 'todos',
+    daeVencInicio: '',
+    daeVencFim: '',
+    foraCe15SemDae: false,
+  });
 
   const daePorNota = useMemo(
     () => new Map(notas.map((nota) => [nota.id, extrairResumoDae(nota)])),
@@ -742,12 +798,54 @@ export default function Dashboard({
     filtroEtiquetas.length > 0 ? '1' : '',
     filtroExcluirEmitentes.length > 0 ? '1' : '',
   ].filter(Boolean).length;
+
+  const filtrosAplicadosAtivos = [
+    filtrosAplicadosNotas.emitente,
+    filtrosAplicadosNotas.destinatario,
+    filtrosAplicadosNotas.valorMin,
+    filtrosAplicadosNotas.valorMax,
+    filtrosAplicadosNotas.itensMin,
+    filtrosAplicadosNotas.itensMax,
+    filtrosAplicadosNotas.dataInicio,
+    filtrosAplicadosNotas.dataFim,
+    filtrosAplicadosNotas.mes,
+    filtrosAplicadosNotas.ano,
+    filtrosAplicadosNotas.situacao !== 'todas' ? '1' : '',
+    filtrosAplicadosNotas.daeSitram !== 'todos' ? '1' : '',
+    filtrosAplicadosNotas.daeVencInicio,
+    filtrosAplicadosNotas.daeVencFim,
+    filtrosAplicadosNotas.foraCe15SemDae ? '1' : '',
+    filtrosAplicadosNotas.etiquetas.length > 0 ? '1' : '',
+    filtrosAplicadosNotas.excluirEmitentes.length > 0 ? '1' : '',
+  ].filter(Boolean).length;
+
+  const filtrosPendentes =
+    filtrosAplicadosNotas.numero !== filtroNumero ||
+    filtrosAplicadosNotas.cnpjId !== filtroCnpjId ||
+    filtrosAplicadosNotas.status !== filtroStatus ||
+    filtrosAplicadosNotas.emitente !== filtroEmitente ||
+    filtrosAplicadosNotas.destinatario !== filtroDestinatario ||
+    filtrosAplicadosNotas.valorMin !== filtroValorMin ||
+    filtrosAplicadosNotas.valorMax !== filtroValorMax ||
+    filtrosAplicadosNotas.itensMin !== filtroItensMin ||
+    filtrosAplicadosNotas.itensMax !== filtroItensMax ||
+    filtrosAplicadosNotas.dataInicio !== filtroDataInicio ||
+    filtrosAplicadosNotas.dataFim !== filtroDataFim ||
+    filtrosAplicadosNotas.mes !== filtroMes ||
+    filtrosAplicadosNotas.ano !== filtroAno ||
+    filtrosAplicadosNotas.situacao !== filtroSituacao ||
+    filtrosAplicadosNotas.daeSitram !== filtroDaeSitram ||
+    filtrosAplicadosNotas.daeVencInicio !== filtroDaeVencInicio ||
+    filtrosAplicadosNotas.daeVencFim !== filtroDaeVencFim ||
+    filtrosAplicadosNotas.foraCe15SemDae !== filtroForaCe15SemDae ||
+    filtrosAplicadosNotas.etiquetas.join('\u0001') !== filtroEtiquetas.join('\u0001') ||
+    filtrosAplicadosNotas.excluirEmitentes.join('\u0001') !== filtroExcluirEmitentes.join('\u0001');
   // Há alguma busca/filtro ativo? (inclui empresa, status e a busca por número)
   const algumFiltroAtivo =
-    filtrosAtivos > 0 ||
-    filtroNumero.trim() !== '' ||
-    filtroCnpjId !== 'todos' ||
-    filtroStatus !== 'todos';
+    filtrosAplicadosAtivos > 0 ||
+    filtrosAplicadosNotas.numero.trim() !== '' ||
+    filtrosAplicadosNotas.cnpjId !== 'todos' ||
+    filtrosAplicadosNotas.status !== 'todos';
 
   // Paginação no servidor só na visão padrão (sem filtro e sem ter carregado tudo).
   const usandoPaginacaoServidor =
@@ -771,6 +869,37 @@ export default function Dashboard({
       setCarregandoTodas(false);
     }
   }, [todasCarregadas, carregandoTodas, anoCarregado, startTransition]);
+
+  async function aplicarFiltrosNotas() {
+    if (!todasCarregadas && anoCarregado === null) {
+      await carregarTodasNotasEmSegundoPlano();
+    }
+
+    setFiltrosAplicadosNotas({
+      numero: filtroNumero,
+      cnpjId: filtroCnpjId,
+      status: filtroStatus,
+      emitente: filtroEmitente,
+      destinatario: filtroDestinatario,
+      valorMin: filtroValorMin,
+      valorMax: filtroValorMax,
+      itensMin: filtroItensMin,
+      itensMax: filtroItensMax,
+      etiquetas: [...filtroEtiquetas],
+      excluirEmitentes: [...filtroExcluirEmitentes],
+      dataInicio: filtroDataInicio,
+      dataFim: filtroDataFim,
+      mes: filtroMes,
+      ano: filtroAno,
+      situacao: filtroSituacao,
+      daeSitram: filtroDaeSitram,
+      daeVencInicio: filtroDaeVencInicio,
+      daeVencFim: filtroDaeVencFim,
+      foraCe15SemDae: filtroForaCe15SemDae,
+    });
+    setPaginaCliente(1);
+    setStatus({ success: true, message: 'Busca/filtros aplicados.' });
+  }
 
   // Assim que o usuário busca/filtra, garante TODAS as notas em memória para
   // que o filtro atue sobre o conjunto inteiro — não só as 50 da página.
@@ -886,7 +1015,7 @@ export default function Dashboard({
     setNotas(notasIniciais);
     setNotasAlerta(notasAlertaIniciais);
     setAnoCarregado(null);
-    setTodasCarregadas(false);
+    setTodasCarregadas(notasIniciais.length >= totalNotas);
     setFiltroSituacao('todas');
     setFiltroDaeSitram('todos');
     setFiltroDaeVencInicio('');
@@ -895,6 +1024,29 @@ export default function Dashboard({
     setFiltroEtiquetas([]);
     setFiltroExcluirEmitentes([]);
     setExcluirEmitenteInput('');
+    setFiltrosAplicadosNotas({
+      numero: '',
+      cnpjId: 'todos',
+      status: 'todos',
+      emitente: '',
+      destinatario: '',
+      valorMin: '',
+      valorMax: '',
+      itensMin: '',
+      itensMax: '',
+      etiquetas: [],
+      excluirEmitentes: [],
+      dataInicio: '',
+      dataFim: '',
+      mes: '',
+      ano: '',
+      situacao: 'todas',
+      daeSitram: 'todos',
+      daeVencInicio: '',
+      daeVencFim: '',
+      foraCe15SemDae: false,
+    });
+    setPaginaCliente(1);
   }
 
   function filtrarVencimentoDae(inicio: string, fim: string) {
@@ -974,25 +1126,26 @@ export default function Dashboard({
     });
   }
 
-  const filtroNumeroBusca = useDeferredValue(filtroNumero);
-  const filtroEmitenteBusca = useDeferredValue(filtroEmitente);
-  const filtroDestinatarioBusca = useDeferredValue(filtroDestinatario);
-  const filtroValorMinBusca = useDeferredValue(filtroValorMin);
-  const filtroValorMaxBusca = useDeferredValue(filtroValorMax);
-  const filtroItensMinBusca = useDeferredValue(filtroItensMin);
-  const filtroItensMaxBusca = useDeferredValue(filtroItensMax);
-  const filtroDataInicioBusca = useDeferredValue(filtroDataInicio);
-  const filtroDataFimBusca = useDeferredValue(filtroDataFim);
-  const filtroAtualizando =
-    filtroNumeroBusca !== filtroNumero ||
-    filtroEmitenteBusca !== filtroEmitente ||
-    filtroDestinatarioBusca !== filtroDestinatario ||
-    filtroValorMinBusca !== filtroValorMin ||
-    filtroValorMaxBusca !== filtroValorMax ||
-    filtroItensMinBusca !== filtroItensMin ||
-    filtroItensMaxBusca !== filtroItensMax ||
-    filtroDataInicioBusca !== filtroDataInicio ||
-    filtroDataFimBusca !== filtroDataFim;
+  const filtroNumeroBusca = filtrosAplicadosNotas.numero;
+  const filtroCnpjIdBusca = filtrosAplicadosNotas.cnpjId;
+  const filtroStatusBusca = filtrosAplicadosNotas.status;
+  const filtroEmitenteBusca = filtrosAplicadosNotas.emitente;
+  const filtroDestinatarioBusca = filtrosAplicadosNotas.destinatario;
+  const filtroValorMinBusca = filtrosAplicadosNotas.valorMin;
+  const filtroValorMaxBusca = filtrosAplicadosNotas.valorMax;
+  const filtroItensMinBusca = filtrosAplicadosNotas.itensMin;
+  const filtroItensMaxBusca = filtrosAplicadosNotas.itensMax;
+  const filtroDataInicioBusca = filtrosAplicadosNotas.dataInicio;
+  const filtroDataFimBusca = filtrosAplicadosNotas.dataFim;
+  const filtroMesBusca = filtrosAplicadosNotas.mes;
+  const filtroAnoBusca = filtrosAplicadosNotas.ano;
+  const filtroSituacaoBusca = filtrosAplicadosNotas.situacao;
+  const filtroDaeSitramBusca = filtrosAplicadosNotas.daeSitram;
+  const filtroDaeVencInicioBusca = filtrosAplicadosNotas.daeVencInicio;
+  const filtroDaeVencFimBusca = filtrosAplicadosNotas.daeVencFim;
+  const filtroForaCe15SemDaeBusca = filtrosAplicadosNotas.foraCe15SemDae;
+  const filtroEtiquetasBusca = filtrosAplicadosNotas.etiquetas;
+  const filtroExcluirEmitentesBusca = filtrosAplicadosNotas.excluirEmitentes;
   const notasBuscaIndex = useMemo(() => new Map(notas.map((n) => [
     n.id,
     {
@@ -1024,8 +1177,8 @@ export default function Dashboard({
     return notas.filter((n) => {
       const idx = notasBuscaIndex.get(n.id);
       if (!idx) return false;
-      if (filtroCnpjId !== 'todos' && n.cnpjId !== filtroCnpjId) return false;
-      if (filtroStatus !== 'todos' && n.status !== filtroStatus) return false;
+      if (filtroCnpjIdBusca !== 'todos' && n.cnpjId !== filtroCnpjIdBusca) return false;
+      if (filtroStatusBusca !== 'todos' && n.status !== filtroStatusBusca) return false;
 
       // Busca por número da NF (ignora zeros à esquerda) ou por chave de acesso.
       if (numeroBuscaDigitos) {
@@ -1057,17 +1210,17 @@ export default function Dashboard({
       if (itensMin !== null && !Number.isNaN(itensMin) && qtdItens < itensMin) return false;
       if (itensMax !== null && !Number.isNaN(itensMax) && qtdItens > itensMax) return false;
 
-      if (filtroEtiquetas.length > 0) {
-        const corresponde = filtroEtiquetas.some((f) =>
+      if (filtroEtiquetasBusca.length > 0) {
+        const corresponde = filtroEtiquetasBusca.some((f) =>
           f === 'sem-etiqueta' ? idx.etiquetas.length === 0 : idx.etiquetas.includes(f)
         );
         if (!corresponde) return false;
       }
 
-      if (filtroExcluirEmitentes.length > 0) {
+      if (filtroExcluirEmitentesBusca.length > 0) {
         const nomeEmit = (n.emitenteNome ?? '').toLowerCase();
         const cnpjEmit = n.emitenteCnpj ?? '';
-        const excluida = filtroExcluirEmitentes.some((ex) => {
+        const excluida = filtroExcluirEmitentesBusca.some((ex) => {
           const digitos = ex.replace(/\D/g, '');
           if (digitos.length >= 14) return cnpjEmit === digitos.slice(-14);
           const nomeEx = ex.split(/\s[—-]\s/)[0].trim().toLowerCase();
@@ -1079,50 +1232,50 @@ export default function Dashboard({
       // Filtros por data de emissão
       if (filtroDataInicioBusca && idx.emitidaEm < new Date(filtroDataInicioBusca)) return false;
       if (filtroDataFimBusca && idx.emitidaEm > new Date(filtroDataFimBusca + 'T23:59:59')) return false;
-      if (filtroMes && idx.emitidaEm.getMonth() + 1 !== Number(filtroMes)) return false;
-      if (filtroAno && idx.emitidaEm.getFullYear() !== Number(filtroAno)) return false;
+      if (filtroMesBusca && idx.emitidaEm.getMonth() + 1 !== Number(filtroMesBusca)) return false;
+      if (filtroAnoBusca && idx.emitidaEm.getFullYear() !== Number(filtroAnoBusca)) return false;
 
       // Filtro por situação SEFAZ
-      if (filtroSituacao !== 'todas') {
+      if (filtroSituacaoBusca !== 'todas') {
         const situacao = n.situacaoSefaz ?? 'AUTORIZADA';
-        if (situacao !== filtroSituacao) return false;
+        if (situacao !== filtroSituacaoBusca) return false;
       }
 
-      if (filtroDaeSitram !== 'todos') {
+      if (filtroDaeSitramBusca !== 'todos') {
         const dae = idx.dae;
         const consultada = !!n.sitramConsultadaEm || !!dae;
         const temDae = ['PAGO', 'EM_ABERTO', 'LIBERADA_PARA_GERAR'].includes(dae);
-        if (filtroDaeSitram === 'consultado' && !consultada) return false;
-        if (filtroDaeSitram === 'com-dae' && !temDae) return false;
-        if (filtroDaeSitram === 'a-pagar' && !DAE_A_PAGAR.includes(dae)) return false;
-        if (filtroDaeSitram === 'em-aberto' && dae !== 'EM_ABERTO') return false;
-        if (filtroDaeSitram === 'pago' && dae !== 'PAGO') return false;
-        if (filtroDaeSitram === 'duplicidade' && idx.suspeitasDuplicidade === 0) return false;
-        if (filtroDaeSitram === 'sem-dae' && dae !== 'SEM_DAE') return false;
-        if (filtroDaeSitram === 'nao-encontrada' && dae !== 'NAO_ENCONTRADA') return false;
+        if (filtroDaeSitramBusca === 'consultado' && !consultada) return false;
+        if (filtroDaeSitramBusca === 'com-dae' && !temDae) return false;
+        if (filtroDaeSitramBusca === 'a-pagar' && !DAE_A_PAGAR.includes(dae)) return false;
+        if (filtroDaeSitramBusca === 'em-aberto' && dae !== 'EM_ABERTO') return false;
+        if (filtroDaeSitramBusca === 'pago' && dae !== 'PAGO') return false;
+        if (filtroDaeSitramBusca === 'duplicidade' && idx.suspeitasDuplicidade === 0) return false;
+        if (filtroDaeSitramBusca === 'sem-dae' && dae !== 'SEM_DAE') return false;
+        if (filtroDaeSitramBusca === 'nao-encontrada' && dae !== 'NAO_ENCONTRADA') return false;
       }
 
-      if (filtroDaeVencInicio || filtroDaeVencFim) {
+      if (filtroDaeVencInicioBusca || filtroDaeVencFimBusca) {
         const lancamentos = daePorNota.get(n.id)?.lancamentos ?? [];
         const dentroDoIntervalo = lancamentos.some((lancamento) => {
           const vencimento = chaveDataLocal(lancamento.vencimento);
           if (!vencimento) return false;
-          if (filtroDaeVencInicio && vencimento < filtroDaeVencInicio) return false;
-          if (filtroDaeVencFim && vencimento > filtroDaeVencFim) return false;
+          if (filtroDaeVencInicioBusca && vencimento < filtroDaeVencInicioBusca) return false;
+          if (filtroDaeVencFimBusca && vencimento > filtroDaeVencFimBusca) return false;
           return true;
         });
         if (!dentroDoIntervalo) return false;
       }
 
-      if (filtroForaCe15SemDae && !notaForaCeMais15DiasSemDaeOuPagamento(n)) return false;
+      if (filtroForaCe15SemDaeBusca && !notaForaCeMais15DiasSemDaeOuPagamento(n)) return false;
 
       return true;
     });
   }, [
     notas,
     notasBuscaIndex,
-    filtroCnpjId,
-    filtroStatus,
+    filtroCnpjIdBusca,
+    filtroStatusBusca,
     filtroNumeroBusca,
     filtroEmitenteBusca,
     filtroDestinatarioBusca,
@@ -1132,16 +1285,16 @@ export default function Dashboard({
     filtroItensMaxBusca,
     filtroDataInicioBusca,
     filtroDataFimBusca,
-    filtroMes,
-    filtroAno,
-    filtroSituacao,
-    filtroDaeSitram,
-    filtroDaeVencInicio,
-    filtroDaeVencFim,
+    filtroMesBusca,
+    filtroAnoBusca,
+    filtroSituacaoBusca,
+    filtroDaeSitramBusca,
+    filtroDaeVencInicioBusca,
+    filtroDaeVencFimBusca,
     daePorNota,
-    filtroForaCe15SemDae,
-    filtroEtiquetas,
-    filtroExcluirEmitentes,
+    filtroForaCe15SemDaeBusca,
+    filtroEtiquetasBusca,
+    filtroExcluirEmitentesBusca,
   ]);
 
   const [paginaCliente, setPaginaCliente] = useState(1);
@@ -1150,8 +1303,8 @@ export default function Dashboard({
     setPaginaCliente(1);
   }, [
     notas,
-    filtroCnpjId,
-    filtroStatus,
+    filtroCnpjIdBusca,
+    filtroStatusBusca,
     filtroNumeroBusca,
     filtroEmitenteBusca,
     filtroDestinatarioBusca,
@@ -1161,15 +1314,15 @@ export default function Dashboard({
     filtroItensMaxBusca,
     filtroDataInicioBusca,
     filtroDataFimBusca,
-    filtroMes,
-    filtroAno,
-    filtroSituacao,
-    filtroDaeSitram,
-    filtroDaeVencInicio,
-    filtroDaeVencFim,
-    filtroForaCe15SemDae,
-    filtroEtiquetas,
-    filtroExcluirEmitentes,
+    filtroMesBusca,
+    filtroAnoBusca,
+    filtroSituacaoBusca,
+    filtroDaeSitramBusca,
+    filtroDaeVencInicioBusca,
+    filtroDaeVencFimBusca,
+    filtroForaCe15SemDaeBusca,
+    filtroEtiquetasBusca,
+    filtroExcluirEmitentesBusca,
   ]);
 
   const semPaginacaoCliente = porPagina <= 0;
@@ -2034,6 +2187,12 @@ export default function Dashboard({
                   <input
                     value={filtroNumero}
                     onChange={(e) => setFiltroNumero(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        void aplicarFiltrosNotas();
+                      }
+                    }}
                     inputMode="numeric"
                     placeholder={t('searchInvoice')}
                     className="w-full border border-[var(--border-strong)] rounded-lg pl-9 pr-8 py-2 text-sm bg-[var(--surface)] text-[var(--ink)] placeholder-[var(--ink-mut)] focus:ring-2 focus:ring-[var(--border-strong)] focus:border-[var(--accent)] outline-none"
@@ -2049,6 +2208,14 @@ export default function Dashboard({
                     </button>
                   )}
                 </div>
+                <button
+                  type="button"
+                  onClick={() => void aplicarFiltrosNotas()}
+                  disabled={carregandoTodas}
+                  className="rounded-lg bg-[var(--accent)] px-4 py-2 text-sm font-bold text-white transition hover:-translate-y-0.5 hover:shadow-md disabled:opacity-50"
+                >
+                  {carregandoTodas ? 'Carregando...' : filtrosPendentes ? 'Aplicar busca' : 'Buscar'}
+                </button>
                 <select
                   value={filtroCnpjId}
                   onChange={(e) => setFiltroCnpjId(e.target.value === 'todos' ? 'todos' : Number(e.target.value))}
@@ -2104,14 +2271,15 @@ export default function Dashboard({
                 <button
                   onClick={() => setMostrarFiltros((v) => !v)}
                   className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium border transition ${
-                    mostrarFiltros || filtrosAtivos > 0
+                    mostrarFiltros || filtrosAtivos > 0 || filtrosAplicadosAtivos > 0
                       ? 'bg-[var(--accent)] border-[var(--accent)] text-[var(--accent-ink)]'
                       : 'border-[var(--border-strong)] text-[var(--ink)] bg-[var(--surface)] hover:bg-[var(--surface-2)]'
                   }`}
                 >
-                  Filtros{filtrosAtivos > 0 ? ` · ${filtrosAtivos}` : ''}
+                  Filtros{filtrosAplicadosAtivos > 0 ? ` · ${filtrosAplicadosAtivos}` : filtrosAtivos > 0 ? ` · ${filtrosAtivos}` : ''}
+                  {filtrosPendentes ? ' *' : ''}
                 </button>
-                {(algumFiltroAtivo || mostrarFiltros) && (
+                {(algumFiltroAtivo || mostrarFiltros || filtrosPendentes) && (
                   <button
                     onClick={limparFiltrosAvancados}
                     className="px-3 py-1.5 rounded-full text-sm font-medium text-[var(--ink-mut)] hover:text-[var(--ink)] hover:bg-[var(--surface-2)] transition"
@@ -2121,6 +2289,9 @@ export default function Dashboard({
                 )}
                 {carregandoTodas && (
                   <span className="text-xs text-[var(--ink-mut)]">carregando todas as notas…</span>
+                )}
+                {filtrosPendentes && !carregandoTodas && (
+                  <span className="text-xs font-medium text-amber-700">alterações pendentes: clique em Aplicar busca</span>
                 )}
               </div>
             </div>
@@ -2260,11 +2431,11 @@ export default function Dashboard({
                     </select>
                     <select
                       value={filtroAno}
-                      onChange={(e) => setFiltroAno(e.target.value)}
+                      onChange={(e) => setFiltroAnoState(e.target.value)}
                       disabled={carregandoAno}
                       className="w-full border border-[var(--border-strong)] rounded-lg px-3 py-1.5 text-sm bg-[var(--surface)] text-[var(--ink)] focus:ring-2 focus:ring-[var(--border-strong)] outline-none disabled:opacity-60"
                     >
-                      <option value="">Todos (2000 recentes)</option>
+                      <option value="">Todos (base completa)</option>
                       {anosDisponiveis.map((ano) => (
                         <option key={ano} value={String(ano)}>{ano}{anoCarregado === ano ? ' ✓' : ''}</option>
                       ))}
@@ -2366,13 +2537,22 @@ export default function Dashboard({
                     </div>
                   )}
                 </div>
-                <div className="flex items-end">
+                <div className="flex items-end gap-2 lg:col-span-3">
                   <button
-                    onClick={limparFiltrosAvancados}
-                    disabled={filtrosAtivos === 0}
-                    className="w-full border border-dashed border-[var(--border-strong)] text-[var(--ink-mut)] text-sm font-medium hover:bg-[var(--surface-2)] hover:border-slate-400 rounded-lg py-1.5 transition disabled:opacity-40"
+                    type="button"
+                    onClick={() => void aplicarFiltrosNotas()}
+                    disabled={carregandoTodas || carregandoAno}
+                    className="flex-1 rounded-lg bg-[var(--accent)] px-4 py-2 text-sm font-bold text-white transition hover:-translate-y-0.5 hover:shadow-md disabled:opacity-50"
                   >
-                    Limpar filtros avançados
+                    {carregandoTodas || carregandoAno ? 'Carregando...' : 'Aplicar busca/filtros'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={limparFiltrosAvancados}
+                    disabled={filtrosAtivos === 0 && filtrosAplicadosAtivos === 0 && !filtroNumero.trim()}
+                    className="flex-1 border border-dashed border-[var(--border-strong)] text-[var(--ink-mut)] text-sm font-medium hover:bg-[var(--surface-2)] hover:border-slate-400 rounded-lg py-2 transition disabled:opacity-40"
+                  >
+                    Limpar filtros
                   </button>
                 </div>
               </div>
@@ -2398,7 +2578,7 @@ export default function Dashboard({
               <span>
                 {notasFiltradas.length} nota(s)
                 {anoCarregado ? ` de ${anoCarregado}` : ''}
-                {filtroAtualizando ? ' - atualizando...' : ''}
+                {filtrosPendentes ? ' - aguardando aplicar' : ''}
               </span>
               <span>Total: <strong className="text-[var(--ink)]">{moeda(totalFiltrado)}</strong></span>
             </div>
@@ -2856,11 +3036,24 @@ function RelatoriosDashboard({
   const [limiteTabela, setLimiteTabela] = useState(20);
   const [baixandoExcelTransporte, setBaixandoExcelTransporte] = useState(false);
   const [erroExcelTransporte, setErroExcelTransporte] = useState<string | null>(null);
-  const buscaRelatorioAdiada = useDeferredValue(buscaRelatorio);
-  const dataInicioBusca = useDeferredValue(dataInicio);
-  const dataFimBusca = useDeferredValue(dataFim);
-  const inicioPeriodo = dataInicioBusca && dataFimBusca && dataInicioBusca > dataFimBusca ? dataFimBusca : dataInicioBusca;
-  const fimPeriodo = dataInicioBusca && dataFimBusca && dataInicioBusca > dataFimBusca ? dataInicioBusca : dataFimBusca;
+  const [filtrosRelatorioAplicados, setFiltrosRelatorioAplicados] = useState<FiltrosRelatorioAplicados>({
+    dataInicio: '',
+    dataFim: '',
+    raizesEmpresa: RAIZES_RELATORIO_PADRAO,
+    tipo: 'todos',
+    situacoes: SITUACOES_RELATORIO_OPCOES.map((opcao) => opcao.valor),
+    daes: DAE_RELATORIO_OPCOES.map((opcao) => opcao.valor),
+    fornecedores: [],
+    fornecedorAtivo: false,
+    risco: 'todos',
+    busca: '',
+  });
+  const inicioPeriodo = filtrosRelatorioAplicados.dataInicio && filtrosRelatorioAplicados.dataFim && filtrosRelatorioAplicados.dataInicio > filtrosRelatorioAplicados.dataFim
+    ? filtrosRelatorioAplicados.dataFim
+    : filtrosRelatorioAplicados.dataInicio;
+  const fimPeriodo = filtrosRelatorioAplicados.dataInicio && filtrosRelatorioAplicados.dataFim && filtrosRelatorioAplicados.dataInicio > filtrosRelatorioAplicados.dataFim
+    ? filtrosRelatorioAplicados.dataInicio
+    : filtrosRelatorioAplicados.dataFim;
 
   const notasIndexadas = useMemo(() => notas.map((nota) => {
     const emitidaEmIso = nota.emitidaEm instanceof Date ? nota.emitidaEm.toISOString() : String(nota.emitidaEm);
@@ -2971,11 +3164,14 @@ function RelatoriosDashboard({
 
   const todosFornecedoresRelatorio = useMemo(() => fornecedoresRelatorio.map((item) => item.valor), [fornecedoresRelatorio]);
   const fornecedoresSelecionadosRelatorio = fornecedorFiltroAtivo ? filtroFornecedoresRelatorio : todosFornecedoresRelatorio;
+  const fornecedoresAplicadosRelatorio = filtrosRelatorioAplicados.fornecedorAtivo
+    ? filtrosRelatorioAplicados.fornecedores
+    : todosFornecedoresRelatorio;
 
   function notaPassaFiltroDaeRelatorio(nota: (typeof notasIndexadas)[number]): boolean {
-    if (filtroDaesRelatorio.length === DAE_RELATORIO_OPCOES.length) return true;
-    if (filtroDaesRelatorio.length === 0) return false;
-    return filtroDaesRelatorio.some((filtro) => {
+    if (filtrosRelatorioAplicados.daes.length === DAE_RELATORIO_OPCOES.length) return true;
+    if (filtrosRelatorioAplicados.daes.length === 0) return false;
+    return filtrosRelatorioAplicados.daes.some((filtro) => {
       if (filtro === 'pago') return nota.daeStatus === 'PAGO';
       if (filtro === 'pendente') return nota.daePendente;
       if (filtro === 'vencido') return nota.daePendente && nota.diasDae !== null && nota.diasDae < 0;
@@ -2989,17 +3185,17 @@ function RelatoriosDashboard({
 
   // Notas dentro do período escolhido (filtro por data de emissão)
   const notasPeriodo = useMemo(() => {
-    const busca = buscaRelatorioAdiada.trim().toLowerCase();
+    const busca = filtrosRelatorioAplicados.busca.trim().toLowerCase();
     return notasIndexadas.filter((n) => {
       if (!n.dataChave) return false;
       if (inicioPeriodo && n.dataChave < inicioPeriodo) return false;
       if (fimPeriodo && n.dataChave > fimPeriodo) return false;
-      if (filtroRaizesEmpresaRelatorio.length === 0 || !filtroRaizesEmpresaRelatorio.includes(n.empresaRaiz)) return false;
-      if (fornecedoresSelecionadosRelatorio.length === 0 || !fornecedoresSelecionadosRelatorio.includes(n.emitenteCnpj || n.emitenteNomeRelatorio)) return false;
-      if (filtroTipoRelatorio !== 'todos' && n.tipoLabel !== filtroTipoRelatorio) return false;
-      if (filtroSituacoesRelatorio.length === 0 || !filtroSituacoesRelatorio.includes(n.situacaoSefaz)) return false;
+      if (filtrosRelatorioAplicados.raizesEmpresa.length === 0 || !filtrosRelatorioAplicados.raizesEmpresa.includes(n.empresaRaiz)) return false;
+      if (fornecedoresAplicadosRelatorio.length === 0 || !fornecedoresAplicadosRelatorio.includes(n.emitenteCnpj || n.emitenteNomeRelatorio)) return false;
+      if (filtrosRelatorioAplicados.tipo !== 'todos' && n.tipoLabel !== filtrosRelatorioAplicados.tipo) return false;
+      if (filtrosRelatorioAplicados.situacoes.length === 0 || !filtrosRelatorioAplicados.situacoes.includes(n.situacaoSefaz)) return false;
       if (!notaPassaFiltroDaeRelatorio(n)) return false;
-      if (filtroRiscoRelatorio !== 'todos' && n.risco !== filtroRiscoRelatorio) return false;
+      if (filtrosRelatorioAplicados.risco !== 'todos' && n.risco !== filtrosRelatorioAplicados.risco) return false;
       if (busca && !n.buscaTexto.includes(busca)) return false;
       return true;
     });
@@ -3007,13 +3203,8 @@ function RelatoriosDashboard({
     notasIndexadas,
     inicioPeriodo,
     fimPeriodo,
-    filtroRaizesEmpresaRelatorio,
-    fornecedoresSelecionadosRelatorio,
-    filtroTipoRelatorio,
-    filtroSituacoesRelatorio,
-    filtroDaesRelatorio,
-    filtroRiscoRelatorio,
-    buscaRelatorioAdiada,
+    filtrosRelatorioAplicados,
+    fornecedoresAplicadosRelatorio,
   ]);
 
   // Agregação por UF do emitente
@@ -3171,17 +3362,7 @@ function RelatoriosDashboard({
 
   useEffect(() => {
     setLimiteTabela(20);
-  }, [
-    inicioPeriodo,
-    fimPeriodo,
-    filtroRaizesEmpresaRelatorio,
-    filtroTipoRelatorio,
-    filtroSituacoesRelatorio,
-    filtroDaesRelatorio,
-    fornecedoresSelecionadosRelatorio,
-    filtroRiscoRelatorio,
-    buscaRelatorioAdiada,
-  ]);
+  }, [inicioPeriodo, fimPeriodo, filtrosRelatorioAplicados, fornecedoresAplicadosRelatorio]);
 
   function selecionar(uf: string) {
     setUfSelecionada((atual) => (atual === uf ? null : uf));
@@ -3192,6 +3373,65 @@ function RelatoriosDashboard({
     return new Date(Number(ano), Number(mes) - 1, 1).toLocaleDateString(idioma, { month: 'short', year: '2-digit' });
   };
   const rt = (pt: string, zh: string) => idioma === 'zh-CN' ? zh : pt;
+
+  const filtrosRelatorioPendentes =
+    filtrosRelatorioAplicados.dataInicio !== dataInicio ||
+    filtrosRelatorioAplicados.dataFim !== dataFim ||
+    filtrosRelatorioAplicados.raizesEmpresa.join('\u0001') !== filtroRaizesEmpresaRelatorio.join('\u0001') ||
+    filtrosRelatorioAplicados.tipo !== filtroTipoRelatorio ||
+    filtrosRelatorioAplicados.situacoes.join('\u0001') !== filtroSituacoesRelatorio.join('\u0001') ||
+    filtrosRelatorioAplicados.daes.join('\u0001') !== filtroDaesRelatorio.join('\u0001') ||
+    filtrosRelatorioAplicados.fornecedores.join('\u0001') !== filtroFornecedoresRelatorio.join('\u0001') ||
+    filtrosRelatorioAplicados.fornecedorAtivo !== fornecedorFiltroAtivo ||
+    filtrosRelatorioAplicados.risco !== filtroRiscoRelatorio ||
+    filtrosRelatorioAplicados.busca !== buscaRelatorio;
+
+  function aplicarFiltrosRelatorio() {
+    setFiltrosRelatorioAplicados({
+      dataInicio,
+      dataFim,
+      raizesEmpresa: [...filtroRaizesEmpresaRelatorio],
+      tipo: filtroTipoRelatorio,
+      situacoes: [...filtroSituacoesRelatorio],
+      daes: [...filtroDaesRelatorio],
+      fornecedores: [...filtroFornecedoresRelatorio],
+      fornecedorAtivo: fornecedorFiltroAtivo,
+      risco: filtroRiscoRelatorio,
+      busca: buscaRelatorio,
+    });
+    setUfSelecionada(null);
+    setLimiteTabela(20);
+  }
+
+  function limparFiltrosRelatorio() {
+    const situacoes = SITUACOES_RELATORIO_OPCOES.map((opcao) => opcao.valor);
+    const daes = DAE_RELATORIO_OPCOES.map((opcao) => opcao.valor);
+    setDataInicio('');
+    setDataFim('');
+    setFiltroRaizesEmpresaRelatorio(RAIZES_RELATORIO_PADRAO);
+    setFiltroTipoRelatorio('todos');
+    setFiltroSituacoesRelatorio(situacoes);
+    setFiltroDaesRelatorio(daes);
+    setFiltroFornecedoresRelatorio([]);
+    setFornecedorFiltroAtivo(false);
+    setBuscaFornecedorRelatorio('');
+    setFiltroRiscoRelatorio('todos');
+    setBuscaRelatorio('');
+    setFiltrosRelatorioAplicados({
+      dataInicio: '',
+      dataFim: '',
+      raizesEmpresa: RAIZES_RELATORIO_PADRAO,
+      tipo: 'todos',
+      situacoes,
+      daes,
+      fornecedores: [],
+      fornecedorAtivo: false,
+      risco: 'todos',
+      busca: '',
+    });
+    setUfSelecionada(null);
+    setLimiteTabela(20);
+  }
 
   function nomeArquivoDownload(resposta: Response): string {
     const disposition = resposta.headers.get('content-disposition') ?? '';
@@ -3208,19 +3448,19 @@ function RelatoriosDashboard({
       const params = new URLSearchParams();
       if (inicioPeriodo) params.set('inicio', inicioPeriodo);
       if (fimPeriodo) params.set('fim', fimPeriodo);
-      if (filtroRaizesEmpresaRelatorio.length === 0) params.append('raizCnpj', '__none__');
-      else filtroRaizesEmpresaRelatorio.forEach((raiz) => params.append('raizCnpj', raiz));
-      if (filtroSituacoesRelatorio.length !== SITUACOES_RELATORIO_OPCOES.length) {
-        if (filtroSituacoesRelatorio.length === 0) params.append('situacao', '__none__');
-        else filtroSituacoesRelatorio.forEach((situacao) => params.append('situacao', situacao));
+      if (filtrosRelatorioAplicados.raizesEmpresa.length === 0) params.append('raizCnpj', '__none__');
+      else filtrosRelatorioAplicados.raizesEmpresa.forEach((raiz) => params.append('raizCnpj', raiz));
+      if (filtrosRelatorioAplicados.situacoes.length !== SITUACOES_RELATORIO_OPCOES.length) {
+        if (filtrosRelatorioAplicados.situacoes.length === 0) params.append('situacao', '__none__');
+        else filtrosRelatorioAplicados.situacoes.forEach((situacao) => params.append('situacao', situacao));
       }
-      if (filtroDaesRelatorio.length !== DAE_RELATORIO_OPCOES.length) {
-        if (filtroDaesRelatorio.length === 0) params.append('dae', '__none__');
-        else filtroDaesRelatorio.forEach((dae) => params.append('dae', dae));
+      if (filtrosRelatorioAplicados.daes.length !== DAE_RELATORIO_OPCOES.length) {
+        if (filtrosRelatorioAplicados.daes.length === 0) params.append('dae', '__none__');
+        else filtrosRelatorioAplicados.daes.forEach((dae) => params.append('dae', dae));
       }
-      if (fornecedorFiltroAtivo) {
-        if (fornecedoresSelecionadosRelatorio.length === 0) params.append('fornecedor', '__none__');
-        else fornecedoresSelecionadosRelatorio.forEach((fornecedor) => params.append('fornecedor', fornecedor));
+      if (filtrosRelatorioAplicados.fornecedorAtivo) {
+        if (fornecedoresAplicadosRelatorio.length === 0) params.append('fornecedor', '__none__');
+        else fornecedoresAplicadosRelatorio.forEach((fornecedor) => params.append('fornecedor', fornecedor));
       }
 
       const resposta = await fetch(`/api/relatorios/transporte-xlsx?${params.toString()}`, { cache: 'no-store' });
@@ -3354,10 +3594,30 @@ function RelatoriosDashboard({
           <input
             value={buscaRelatorio}
             onChange={(e) => setBuscaRelatorio(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                aplicarFiltrosRelatorio();
+              }
+            }}
             placeholder={rt('Nota, chave, fornecedor ou CNPJ', '发票、密钥、供应商或 CNPJ')}
             className="mt-1 w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-1.5 text-sm text-[var(--ink)]"
           />
         </div>
+        <button
+          type="button"
+          onClick={aplicarFiltrosRelatorio}
+          className="rounded-lg bg-[var(--accent)] px-4 py-2 text-sm font-bold text-white transition hover:-translate-y-0.5 hover:shadow-md"
+        >
+          {filtrosRelatorioPendentes ? rt('Aplicar filtros', 'åº”ç”¨ç­›é€‰') : rt('Confirmar busca', 'ç¡®è®¤æœç´¢')}
+        </button>
+        <button
+          type="button"
+          onClick={limparFiltrosRelatorio}
+          className="rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-1.5 text-sm font-medium text-[var(--ink-mut)] hover:bg-[var(--surface-2)]"
+        >
+          {rt('Limpar filtros', 'æ¸…é™¤ç­›é€‰')}
+        </button>
         {(dataInicio || dataFim) && (
           <button
             onClick={() => { setDataInicio(''); setDataFim(''); }}
@@ -3391,7 +3651,7 @@ function RelatoriosDashboard({
       </div>
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <KpiCard label={rt('Notas no período', '期间发票')} value={String(notasPeriodo.length)} sub={dataInicio || dataFim ? rt('Filtrado por data', '按日期筛选') : rt('Base carregada', '已加载数据')} tone="neu" />
+        <KpiCard label={rt('Notas no período', '期间发票')} value={String(notasPeriodo.length)} sub={inicioPeriodo || fimPeriodo ? rt('Filtrado por data', '按日期筛选') : rt('Base carregada', '已加载数据')} tone="neu" />
         <KpiCard label={rt('Valor total', '总金额')} value={moeda(totalValorPeriodo)} sub={rt('Soma das NF emitidas', '已开发票合计')} tone="good" />
         <KpiCard label={rt('UFs com movimento', '有交易的州')} value={String(ranking.length)} sub={rt('Estados com nota', '有发票的州')} tone="neu" />
         <KpiCard label={rt('Maior UF', '金额最高的州')} value={topUf?.uf ?? '—'} sub={topUf ? moeda(topUf.valor) : rt('Sem dados', '无数据')} tone="warn" />

@@ -12,16 +12,11 @@ import Dashboard from './dashboard';
 
 export const dynamic = 'force-dynamic';
 
-export default async function Page({
-  searchParams,
-}: {
-  searchParams: Promise<{ page?: string }>;
-}) {
+export default async function Page() {
   const usuario = await obterUsuarioAtual();
   if (!usuario) redirect('/login');
-  const params = await searchParams;
-  const paginaAtual = Math.max(1, Math.trunc(Number(params.page) || 1));
-  const porPagina = 50;
+  const paginaAtual = 1;
+  const porPagina = 5000;
 
   const [cnpjs, notas, notasAlerta, anosDisponiveis, totalNotas, resumoInicio] = await Promise.all([
     listarCnpjs(),

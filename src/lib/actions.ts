@@ -1058,7 +1058,7 @@ export async function listarNotas(pagina = 1, porPagina = 50) {
   const usuario = await exigirUsuario();
   const include = { cnpj: { select: { cnpj: true, razaoSocial: true } } } as const;
   const paginaSegura = Math.max(1, Math.trunc(Number(pagina) || 1));
-  const limiteSeguro = Math.max(1, Math.min(100, Math.trunc(Number(porPagina) || 50)));
+  const limiteSeguro = Math.max(1, Math.min(5000, Math.trunc(Number(porPagina) || 50)));
   const where = {
     ...whereNotaPermitida(usuario),
     situacaoSefaz: { not: 'CANCELADA' as const },
