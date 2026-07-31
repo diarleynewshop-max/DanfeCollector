@@ -1301,9 +1301,9 @@ export default function Dashboard({
     {
       numero: numeroNotaBusca(n),
       serie: String(Number(serieNotaSistema(n)) || serieNotaSistema(n).replace(/^0+/, '') || ''),
-      emitenteNome: (n.emitenteNome ?? '').toLowerCase(),
+      emitenteNome: normalizarBuscaFiltro(n.emitenteNome ?? ''),
       emitenteCnpj: n.emitenteCnpj ?? '',
-      destNome: (n.destNome ?? '').toLowerCase(),
+      destNome: normalizarBuscaFiltro(n.destNome ?? ''),
       destCnpj: n.destCnpj ?? '',
       emitidaEm: new Date(n.emitidaEm),
       entradaEm: new Date(n.createdAt),
@@ -1319,9 +1319,9 @@ export default function Dashboard({
     const numeroBuscaDigitos = numeroBusca.replace(/\D/g, '');
     const chaveBuscaDigitos = filtroChaveBusca.replace(/\D/g, '');
     const serieBuscaNormalizada = filtroSerieBusca.replace(/\D/g, '').replace(/^0+/, '');
-    const emitenteBusca = filtroEmitenteBusca.trim().toLowerCase();
+    const emitenteBusca = normalizarBuscaFiltro(filtroEmitenteBusca);
     const emitenteBuscaDigitos = filtroEmitenteBusca.replace(/\D/g, '');
-    const destBusca = filtroDestinatarioBusca.trim().toLowerCase();
+    const destBusca = normalizarBuscaFiltro(filtroDestinatarioBusca);
     const destBuscaDigitos = filtroDestinatarioBusca.replace(/\D/g, '');
     const valorMin = filtroValorMinBusca ? Number(filtroValorMinBusca) : null;
     const valorMax = filtroValorMaxBusca ? Number(filtroValorMaxBusca) : null;
@@ -1374,13 +1374,14 @@ export default function Dashboard({
       }
 
       if (filtroExcluirEmitentesBusca.length > 0) {
-        const nomeEmit = (n.emitenteNome ?? '').toLowerCase();
+        const nomeEmit = normalizarBuscaFiltro(n.emitenteNome ?? '');
         const cnpjEmit = n.emitenteCnpj ?? '';
         const excluida = filtroExcluirEmitentesBusca.some((ex) => {
           const digitos = ex.replace(/\D/g, '');
           if (digitos.length >= 14) return cnpjEmit === digitos.slice(-14);
           const nomeEx = ex.split(/\s[—-]\s/)[0].trim().toLowerCase();
-          return nomeEx.length > 0 && nomeEmit.includes(nomeEx);
+          const nomeExBusca = normalizarBuscaFiltro(nomeEx);
+          return nomeExBusca.length > 0 && (nomeEmit.includes(nomeExBusca) || nomeExBusca.includes(nomeEmit));
         });
         if (excluida) return false;
       }
@@ -2481,28 +2482,20 @@ export default function Dashboard({
 
                   <div className="grid grid-cols-1 gap-x-2 gap-y-2 lg:grid-cols-[1.2fr_3.6fr_1.55fr_1fr_1.2fr]">
                     <CampoFiltroNotas label="Fornecedor" className="lg:col-span-2">
-                      <select
-                        value={filtroEmitente}
-                        onChange={(e) => setFiltroEmitente(e.target.value)}
-                        className={CAMPO_FILTRO_NOTAS}
-                      >
-                        <option value="">Todos os fornecedores</option>
-                        {sugestoesEmitente.map((s) => (
-                          <option key={s} value={s}>{s}</option>
-                        ))}
-                      </select>
+                      <CampoBuscaOpcoesFiltro
+                        valor={filtroEmitente}
+                        opcoes={sugestoesEmitente}
+                        placeholder="Todos os fornecedores"
+                        onChange={setFiltroEmitente}
+                      />
                     </CampoFiltroNotas>
                     <CampoFiltroNotas label="Destinatario">
-                      <select
-                        value={filtroDestinatario}
-                        onChange={(e) => setFiltroDestinatario(e.target.value)}
-                        className={CAMPO_FILTRO_NOTAS}
-                      >
-                        <option value="">Todos os destinatarios</option>
-                        {sugestoesDestinatario.map((s) => (
-                          <option key={s} value={s}>{s}</option>
-                        ))}
-                      </select>
+                      <CampoBuscaOpcoesFiltro
+                        valor={filtroDestinatario}
+                        opcoes={sugestoesDestinatario}
+                        placeholder="Todos os destinatarios"
+                        onChange={setFiltroDestinatario}
+                      />
                     </CampoFiltroNotas>
                     <CampoFiltroNotas label="Periodo(Data de entrada)">
                       <input type="date" value={filtroDataEntradaInicio} onChange={(e) => setFiltroDataEntradaInicio(e.target.value)} className={CAMPO_FILTRO_NOTAS} />
@@ -2600,16 +2593,14 @@ export default function Dashboard({
                       />
                       <CampoFiltroNotas label="Excluir fornecedor">
                         <div className="flex gap-1.5">
-                          <select
-                            value={excluirEmitenteInput}
-                            onChange={(e) => setExcluirEmitenteInput(e.target.value)}
-                            className={CAMPO_FILTRO_NOTAS}
-                          >
-                            <option value="">Selecione fornecedor</option>
-                            {sugestoesEmitente.map((s) => (
-                              <option key={s} value={s}>{s}</option>
-                            ))}
-                          </select>
+                          <div className="min-w-0 flex-1">
+                            <CampoBuscaOpcoesFiltro
+                              valor={excluirEmitenteInput}
+                              opcoes={sugestoesEmitente}
+                              placeholder="Selecione fornecedor"
+                              onChange={setExcluirEmitenteInput}
+                            />
+                          </div>
                           <button
                             type="button"
                             onClick={adicionarExclusaoEmitente}
@@ -3681,7 +3672,7 @@ function RelatoriosDashboard({
       tipoLabel: nota.tipoOperacao || 'Entrada',
       emitenteChave: nota.emitenteCnpj || nota.emitenteNome || `nota-${nota.id}`,
       emitenteNomeRelatorio: nota.emitenteNome || nota.emitenteCnpj || 'Sem emitente',
-      buscaTexto: [
+      buscaTexto: normalizarBuscaFiltro([
         nota.numero,
         nota.serie,
         nota.chave,
@@ -3691,7 +3682,7 @@ function RelatoriosDashboard({
         nota.destCnpj,
         nota.cnpj.razaoSocial,
         nota.cnpj.cnpj,
-      ].filter(Boolean).join(' ').toLowerCase(),
+      ].filter(Boolean).join(' ')),
     };
   }), [notas]);
 
@@ -3740,9 +3731,14 @@ function RelatoriosDashboard({
   }, [notasIndexadas, filtroRaizesEmpresaRelatorio]);
 
   const fornecedoresVisiveisRelatorio = useMemo(() => {
-    const busca = buscaFornecedorRelatorio.trim().toLowerCase();
-    if (!busca) return fornecedoresRelatorio;
-    return fornecedoresRelatorio.filter((item) => `${item.label} ${item.sub}`.toLowerCase().includes(busca));
+    const busca = normalizarBuscaFiltro(buscaFornecedorRelatorio);
+    const digitos = buscaFornecedorRelatorio.replace(/\D/g, '');
+    if (!busca && !digitos) return fornecedoresRelatorio;
+    return fornecedoresRelatorio.filter((item) => {
+      const texto = normalizarBuscaFiltro(`${item.label} ${item.sub}`);
+      const numeros = `${item.valor} ${item.sub}`.replace(/\D/g, '');
+      return (busca.length > 0 && texto.includes(busca)) || (digitos.length > 0 && numeros.includes(digitos));
+    });
   }, [fornecedoresRelatorio, buscaFornecedorRelatorio]);
 
   const todosFornecedoresRelatorio = useMemo(() => fornecedoresRelatorio.map((item) => item.valor), [fornecedoresRelatorio]);
@@ -3768,7 +3764,7 @@ function RelatoriosDashboard({
 
   // Notas dentro do período escolhido (filtro por data de emissão)
   const notasPeriodo = useMemo(() => {
-    const busca = filtrosRelatorioAplicados.busca.trim().toLowerCase();
+    const busca = normalizarBuscaFiltro(filtrosRelatorioAplicados.busca);
     return notasIndexadas.filter((n) => {
       if (!n.dataChave) return false;
       if (inicioPeriodo && n.dataChave < inicioPeriodo) return false;
@@ -4596,12 +4592,151 @@ function CampoFiltroNotas({
   children: React.ReactNode;
 }) {
   return (
-    <label className={`block min-w-0 ${className}`}>
+    <div className={`block min-w-0 ${className}`}>
       <span className="mb-1 block h-3.5 text-[11px] font-semibold leading-3.5 text-slate-700">
         {label.trim() ? label : ''}
       </span>
       {children}
-    </label>
+    </div>
+  );
+}
+
+function normalizarBuscaFiltro(valor: string): string {
+  return valor
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function CampoBuscaOpcoesFiltro({
+  valor,
+  opcoes,
+  placeholder,
+  onChange,
+}: {
+  valor: string;
+  opcoes: string[];
+  placeholder: string;
+  onChange: (valor: string) => void;
+}) {
+  const [aberto, setAberto] = useState(false);
+  const [busca, setBusca] = useState(valor);
+  const ref = useRef<HTMLDivElement | null>(null);
+  const usarPopup = opcoes.length > 10;
+
+  useEffect(() => {
+    setBusca(valor);
+  }, [valor]);
+
+  useEffect(() => {
+    if (!aberto || !usarPopup) return;
+    function fecharFora(event: MouseEvent) {
+      if (!ref.current?.contains(event.target as Node)) setAberto(false);
+    }
+    document.addEventListener('mousedown', fecharFora);
+    return () => document.removeEventListener('mousedown', fecharFora);
+  }, [aberto, usarPopup]);
+
+  const sugestoes = useMemo(() => {
+    const termo = normalizarBuscaFiltro(busca);
+    const digitos = busca.replace(/\D/g, '');
+    const filtradas = termo || digitos
+      ? opcoes.filter((opcao) => {
+          const normalizada = normalizarBuscaFiltro(opcao);
+          const numeros = opcao.replace(/\D/g, '');
+          return normalizada.includes(termo) || (digitos.length > 0 && numeros.includes(digitos));
+        })
+      : opcoes;
+
+    return filtradas
+      .sort((a, b) => {
+        const termoAtual = normalizarBuscaFiltro(busca);
+        const aNome = normalizarBuscaFiltro(a);
+        const bNome = normalizarBuscaFiltro(b);
+        const aInicio = termoAtual && aNome.startsWith(termoAtual) ? 0 : 1;
+        const bInicio = termoAtual && bNome.startsWith(termoAtual) ? 0 : 1;
+        return aInicio - bInicio || a.localeCompare(b, 'pt-BR');
+      })
+      .slice(0, termo || digitos ? 30 : 50);
+  }, [busca, opcoes]);
+
+  if (!usarPopup) {
+    return (
+      <select value={valor} onChange={(e) => onChange(e.target.value)} className={CAMPO_FILTRO_NOTAS}>
+        <option value="">{placeholder}</option>
+        {opcoes.map((opcao) => (
+          <option key={opcao} value={opcao}>{opcao}</option>
+        ))}
+      </select>
+    );
+  }
+
+  return (
+    <div ref={ref} className="relative">
+      <input
+        value={busca}
+        onFocus={() => setAberto(true)}
+        onChange={(e) => {
+          setBusca(e.target.value);
+          onChange(e.target.value);
+          setAberto(true);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') setAberto(false);
+        }}
+        placeholder={placeholder}
+        className={`${CAMPO_FILTRO_NOTAS} pr-8`}
+      />
+      {busca && (
+        <button
+          type="button"
+          onClick={() => {
+            setBusca('');
+            onChange('');
+            setAberto(false);
+          }}
+          className="absolute right-1 top-1 grid h-5 w-5 place-items-center rounded text-[12px] font-bold text-slate-500 hover:bg-slate-100 hover:text-slate-900"
+          aria-label="Limpar"
+        >
+          x
+        </button>
+      )}
+      {aberto && (
+        <div className="absolute left-0 right-0 top-[30px] z-50 max-h-72 overflow-y-auto rounded-md border border-slate-300 bg-white py-1 text-[12px] shadow-xl">
+          <button
+            type="button"
+            onClick={() => {
+              setBusca('');
+              onChange('');
+              setAberto(false);
+            }}
+            className="block w-full px-3 py-2 text-left font-semibold text-slate-700 hover:bg-slate-100"
+          >
+            {placeholder}
+          </button>
+          {sugestoes.map((opcao) => (
+            <button
+              key={opcao}
+              type="button"
+              onClick={() => {
+                setBusca(opcao);
+                onChange(opcao);
+                setAberto(false);
+              }}
+              className="block w-full truncate px-3 py-2 text-left font-semibold text-slate-900 hover:bg-blue-600 hover:text-white"
+              title={opcao}
+            >
+              {opcao}
+            </button>
+          ))}
+          {sugestoes.length === 0 && (
+            <div className="px-3 py-2 text-slate-500">Nenhuma recomendacao encontrada.</div>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
