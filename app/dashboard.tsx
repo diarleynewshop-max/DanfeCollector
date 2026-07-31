@@ -77,6 +77,7 @@ import ItensView from './components/ItensView';
 import SitramEspelhoView from './components/SitramEspelhoView';
 import SitramItensView from './components/SitramItensView';
 import MapaBrasil, { nomeUf, type ValorUf } from './components/MapaBrasil';
+import FornecedorIeConsulta from './components/FornecedorIeConsulta';
 import { useIdioma } from '@/lib/i18n';
 
 type NotaComCnpj = NotaFiscal & { cnpj: { cnpj: string; razaoSocial: string | null }; situacaoSefaz?: string };
@@ -86,7 +87,7 @@ type FiltroSituacaoNota = 'inconsistente' | 'efetivada' | 'denegada' | 'pendente
 type FiltroOrigemNota = 'proprio' | 'terceiro';
 type FiltroManifestoNota = 'manifestada' | 'nao-manifestada' | 'pendente-processando' | 'com-erros';
 type FiltroModalidadeNota = 'simplificada' | 'estorno' | 'devolucao' | 'transferencia' | 'normal' | 'ajuste-icms';
-type SecaoApp = 'home' | 'notas' | 'relatorios' | 'empresas' | 'usuarios' | 'configuracao';
+type SecaoApp = 'home' | 'notas' | 'relatorios' | 'ie-fornecedor' | 'empresas' | 'usuarios' | 'configuracao';
 type ColunaRedimensionavel = 'nf' | 'emitente' | 'destinatario' | 'valores' | 'transporte' | 'sitram' | 'status';
 type FiltrosNotasAplicados = {
   numero: string;
@@ -1896,6 +1897,7 @@ export default function Dashboard({
             <SecaoBotao atual={secaoAtual} alvo="home" onClick={setSecaoAtual}>{t('home')}</SecaoBotao>
             <SecaoBotao atual={secaoAtual} alvo="notas" onClick={setSecaoAtual}>{t('invoice')}</SecaoBotao>
             <SecaoBotao atual={secaoAtual} alvo="relatorios" onClick={setSecaoAtual}>{t('reports')}</SecaoBotao>
+            <SecaoBotao atual={secaoAtual} alvo="ie-fornecedor" onClick={setSecaoAtual}>IE Fornecedor</SecaoBotao>
             <SecaoBotao atual={secaoAtual} alvo="empresas" onClick={setSecaoAtual}>{t('companies')}</SecaoBotao>
             {podeAdministrar && <SecaoBotao atual={secaoAtual} alvo="usuarios" onClick={() => abrirUsuariosAdmin()}>{t('users')}</SecaoBotao>}
             {podeAdministrar && <SecaoBotao atual={secaoAtual} alvo="configuracao" onClick={setSecaoAtual}>{t('settings')}</SecaoBotao>}
@@ -1991,6 +1993,8 @@ export default function Dashboard({
             onCarregarMais={carregarMaisRelatorio}
           />
         )}
+
+        {secaoAtual === 'ie-fornecedor' && <FornecedorIeConsulta />}
 
         {podeAdministrar && secaoAtual === 'configuracao' && (
           <div className="mb-6 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-5 shadow-sm">
