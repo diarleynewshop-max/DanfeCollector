@@ -76,10 +76,16 @@ import { useIdioma } from '@/lib/i18n';
 type NotaComCnpj = NotaFiscal & { cnpj: { cnpj: string; razaoSocial: string | null }; situacaoSefaz?: string };
 type CnpjComContagem = Cnpj & { _count: { notas: number } };
 type FiltroDaeSitram = 'todos' | 'consultado' | 'com-dae' | 'a-pagar' | 'em-aberto' | 'pago' | 'duplicidade' | 'sem-dae' | 'nao-encontrada';
+type FiltroSituacaoNota = 'inconsistente' | 'efetivada' | 'denegada' | 'pendente-conferencia' | 'com-erro' | 'pendente-recepcao' | 'cancelada' | 'pendente';
+type FiltroOrigemNota = 'proprio' | 'terceiro';
+type FiltroManifestoNota = 'manifestada' | 'nao-manifestada' | 'pendente-processando' | 'com-erros';
+type FiltroModalidadeNota = 'simplificada' | 'estorno' | 'devolucao' | 'transferencia' | 'normal' | 'ajuste-icms';
 type SecaoApp = 'home' | 'notas' | 'relatorios' | 'empresas' | 'usuarios' | 'configuracao';
 type ColunaRedimensionavel = 'nf' | 'emitente' | 'destinatario' | 'valores' | 'transporte' | 'sitram' | 'status';
 type FiltrosNotasAplicados = {
   numero: string;
+  chave: string;
+  serie: string;
   cnpjId: number | 'todos';
   status: 'todos' | 'RESUMO' | 'COMPLETA';
   emitente: string;
@@ -92,6 +98,8 @@ type FiltrosNotasAplicados = {
   excluirEmitentes: string[];
   dataInicio: string;
   dataFim: string;
+  dataEntradaInicio: string;
+  dataEntradaFim: string;
   mes: string;
   ano: string;
   situacao: 'todas' | 'AUTORIZADA' | 'CANCELADA' | 'DENEGADA';
@@ -99,6 +107,10 @@ type FiltrosNotasAplicados = {
   daeVencInicio: string;
   daeVencFim: string;
   foraCe15SemDae: boolean;
+  situacoes: FiltroSituacaoNota[];
+  origens: FiltroOrigemNota[];
+  manifestos: FiltroManifestoNota[];
+  modalidades: FiltroModalidadeNota[];
 };
 type FiltrosRelatorioAplicados = {
   dataInicio: string;
@@ -131,6 +143,36 @@ const DAE_RELATORIO_OPCOES = [
   { valor: 'sem-dae', label: 'Sem DAE' },
   { valor: 'consultado', label: 'Consultado' },
 ];
+const SITUACOES_NOTA_OPCOES: Array<{ valor: FiltroSituacaoNota; label: string }> = [
+  { valor: 'inconsistente', label: 'Inconsistente' },
+  { valor: 'efetivada', label: 'Efetivada' },
+  { valor: 'denegada', label: 'Denegada' },
+  { valor: 'pendente-conferencia', label: 'Pendente de Conferencia' },
+  { valor: 'com-erro', label: 'Com Erro' },
+  { valor: 'pendente-recepcao', label: 'Pendente Recepcao' },
+  { valor: 'cancelada', label: 'Cancelada' },
+  { valor: 'pendente', label: 'Pendente' },
+];
+const ORIGEM_NOTA_OPCOES: Array<{ valor: FiltroOrigemNota; label: string }> = [
+  { valor: 'proprio', label: 'Proprio' },
+  { valor: 'terceiro', label: 'Terceiro' },
+];
+const MANIFESTO_NOTA_OPCOES: Array<{ valor: FiltroManifestoNota; label: string }> = [
+  { valor: 'manifestada', label: 'Manifestada' },
+  { valor: 'nao-manifestada', label: 'Nao Manifestada' },
+  { valor: 'pendente-processando', label: 'Pendente (Processando)' },
+  { valor: 'com-erros', label: 'Com Erros' },
+];
+const MODALIDADE_NOTA_OPCOES: Array<{ valor: FiltroModalidadeNota; label: string }> = [
+  { valor: 'simplificada', label: 'Simplificada' },
+  { valor: 'estorno', label: 'Estorno' },
+  { valor: 'devolucao', label: 'Devolucao' },
+  { valor: 'transferencia', label: 'Transferencia' },
+  { valor: 'normal', label: 'Normal' },
+  { valor: 'ajuste-icms', label: 'Ajuste - ICMS' },
+];
+const CAMPO_FILTRO_NOTAS =
+  'h-7 w-full rounded-[3px] border border-slate-300 bg-white px-2 text-[12px] text-slate-900 outline-none focus:border-slate-500 focus:ring-1 focus:ring-slate-400 disabled:bg-slate-100 disabled:text-slate-500';
 const LARGURAS_COLUNAS_PADRAO: Record<ColunaRedimensionavel, number> = {
   nf: 130,
   emitente: 240,
@@ -140,6 +182,39 @@ const LARGURAS_COLUNAS_PADRAO: Record<ColunaRedimensionavel, number> = {
   sitram: 160,
   status: 160,
 };
+
+function filtrosNotasPadrao(): FiltrosNotasAplicados {
+  return {
+    numero: '',
+    chave: '',
+    serie: '',
+    cnpjId: 'todos',
+    status: 'todos',
+    emitente: '',
+    destinatario: '',
+    valorMin: '',
+    valorMax: '',
+    itensMin: '',
+    itensMax: '',
+    etiquetas: [],
+    excluirEmitentes: [],
+    dataInicio: '',
+    dataFim: '',
+    dataEntradaInicio: '',
+    dataEntradaFim: '',
+    mes: '',
+    ano: '',
+    situacao: 'todas',
+    daeSitram: 'todos',
+    daeVencInicio: '',
+    daeVencFim: '',
+    foraCe15SemDae: false,
+    situacoes: [],
+    origens: [],
+    manifestos: [],
+    modalidades: [],
+  };
+}
 
 interface DashboardProps {
   usuario: UsuarioLogado;
@@ -371,6 +446,27 @@ function notaElegivelConsultaPagamentoIcms(nota: NotaComCnpj): boolean {
   if (daePago && pagamento.consultadoEm && !dentroJanelaReconsultaDaeNovo(nota.emitidaEm, lancamentos)) return false;
 
   return true;
+}
+
+function textoFiltroSemAcento(valor: string | null | undefined): string {
+  return (valor ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+}
+
+function modalidadesDaNota(nota: NotaComCnpj): FiltroModalidadeNota[] {
+  const texto = textoFiltroSemAcento(`${nota.naturezaOp ?? ''} ${nota.modalidadeFrete ?? ''}`);
+  const modalidades: FiltroModalidadeNota[] = [];
+
+  if (texto.includes('simplif')) modalidades.push('simplificada');
+  if (texto.includes('estorno')) modalidades.push('estorno');
+  if (texto.includes('devol')) modalidades.push('devolucao');
+  if (texto.includes('transfer')) modalidades.push('transferencia');
+  if (texto.includes('ajuste') && texto.includes('icms')) modalidades.push('ajuste-icms');
+  if (modalidades.length === 0) modalidades.push('normal');
+
+  return modalidades;
 }
 
 function notaDentroPrazoManifestacao(nota: NotaComCnpj, referencia = new Date()): boolean {
@@ -626,16 +722,15 @@ export default function Dashboard({
 
   // Busca rápida por número da NF (ou chave)
   const [filtroNumero, setFiltroNumero] = useState('');
+  const [filtroChave, setFiltroChave] = useState('');
+  const [filtroSerie, setFiltroSerie] = useState('');
   const [largurasColunas, setLargurasColunas] = useState<Record<ColunaRedimensionavel, number>>(LARGURAS_COLUNAS_PADRAO);
   const resizeColunaRef = useRef<{ coluna: ColunaRedimensionavel; inicioX: number; larguraInicial: number } | null>(null);
-
-  // Carrega TODAS as notas em memória para busca/filtro funcionar sobre o
-  // conjunto inteiro (e não só a página atual de 50).
   const [todasCarregadas, setTodasCarregadas] = useState(() => notasIniciais.length >= totalNotas);
   const [carregandoTodas, setCarregandoTodas] = useState(false);
 
   // Filtros avançados
-  const [mostrarFiltros, setMostrarFiltros] = useState(false);
+  const [mostrarFiltros, setMostrarFiltros] = useState(true);
   const [filtroEmitente, setFiltroEmitente] = useState('');
   const [filtroDestinatario, setFiltroDestinatario] = useState('');
   const [filtroValorMin, setFiltroValorMin] = useState('');
@@ -648,6 +743,8 @@ export default function Dashboard({
   // Filtros por data
   const [filtroDataInicio, setFiltroDataInicio] = useState('');
   const [filtroDataFim, setFiltroDataFim] = useState('');
+  const [filtroDataEntradaInicio, setFiltroDataEntradaInicio] = useState('');
+  const [filtroDataEntradaFim, setFiltroDataEntradaFim] = useState('');
   const [filtroMes, setFiltroMes] = useState('');
   const [filtroAno, setFiltroAnoState] = useState('');
 
@@ -675,28 +772,11 @@ export default function Dashboard({
   const [filtroDaeVencInicio, setFiltroDaeVencInicio] = useState('');
   const [filtroDaeVencFim, setFiltroDaeVencFim] = useState('');
   const [filtroForaCe15SemDae, setFiltroForaCe15SemDae] = useState(false);
-  const [filtrosAplicadosNotas, setFiltrosAplicadosNotas] = useState<FiltrosNotasAplicados>({
-    numero: '',
-    cnpjId: 'todos',
-    status: 'todos',
-    emitente: '',
-    destinatario: '',
-    valorMin: '',
-    valorMax: '',
-    itensMin: '',
-    itensMax: '',
-    etiquetas: [],
-    excluirEmitentes: [],
-    dataInicio: '',
-    dataFim: '',
-    mes: '',
-    ano: '',
-    situacao: 'todas',
-    daeSitram: 'todos',
-    daeVencInicio: '',
-    daeVencFim: '',
-    foraCe15SemDae: false,
-  });
+  const [filtroSituacoes, setFiltroSituacoes] = useState<FiltroSituacaoNota[]>([]);
+  const [filtroOrigens, setFiltroOrigens] = useState<FiltroOrigemNota[]>([]);
+  const [filtroManifestos, setFiltroManifestos] = useState<FiltroManifestoNota[]>([]);
+  const [filtroModalidades, setFiltroModalidades] = useState<FiltroModalidadeNota[]>([]);
+  const [filtrosAplicadosNotas, setFiltrosAplicadosNotas] = useState<FiltrosNotasAplicados>(() => filtrosNotasPadrao());
 
   const daePorNota = useMemo(
     () => new Map(notas.map((nota) => [nota.id, extrairResumoDae(nota)])),
@@ -768,6 +848,22 @@ export default function Dashboard({
     setFiltroEtiquetas((prev) => (prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]));
   }
 
+  function toggleFiltroSituacaoNota(valor: string) {
+    setFiltroSituacoes((atuais) => alternarValorFiltro(atuais, valor) as FiltroSituacaoNota[]);
+  }
+
+  function toggleFiltroOrigemNota(valor: string) {
+    setFiltroOrigens((atuais) => alternarValorFiltro(atuais, valor) as FiltroOrigemNota[]);
+  }
+
+  function toggleFiltroManifestoNota(valor: string) {
+    setFiltroManifestos((atuais) => alternarValorFiltro(atuais, valor) as FiltroManifestoNota[]);
+  }
+
+  function toggleFiltroModalidadeNota(valor: string) {
+    setFiltroModalidades((atuais) => alternarValorFiltro(atuais, valor) as FiltroModalidadeNota[]);
+  }
+
   function adicionarExclusaoEmitente() {
     const valor = excluirEmitenteInput.trim();
     if (!valor) return;
@@ -780,6 +876,9 @@ export default function Dashboard({
   }
 
   const filtrosAtivos = [
+    filtroNumero,
+    filtroChave,
+    filtroSerie,
     filtroEmitente,
     filtroDestinatario,
     filtroValorMin,
@@ -788,18 +887,29 @@ export default function Dashboard({
     filtroItensMax,
     filtroDataInicio,
     filtroDataFim,
+    filtroDataEntradaInicio,
+    filtroDataEntradaFim,
     filtroMes,
     filtroAno,
+    filtroCnpjId !== 'todos' ? '1' : '',
+    filtroStatus !== 'todos' ? '1' : '',
     filtroSituacao !== 'todas' ? '1' : '',
     filtroDaeSitram !== 'todos' ? '1' : '',
     filtroDaeVencInicio,
     filtroDaeVencFim,
     filtroForaCe15SemDae ? '1' : '',
+    filtroSituacoes.length > 0 ? '1' : '',
+    filtroOrigens.length > 0 ? '1' : '',
+    filtroManifestos.length > 0 ? '1' : '',
+    filtroModalidades.length > 0 ? '1' : '',
     filtroEtiquetas.length > 0 ? '1' : '',
     filtroExcluirEmitentes.length > 0 ? '1' : '',
   ].filter(Boolean).length;
 
   const filtrosAplicadosAtivos = [
+    filtrosAplicadosNotas.numero,
+    filtrosAplicadosNotas.chave,
+    filtrosAplicadosNotas.serie,
     filtrosAplicadosNotas.emitente,
     filtrosAplicadosNotas.destinatario,
     filtrosAplicadosNotas.valorMin,
@@ -808,6 +918,8 @@ export default function Dashboard({
     filtrosAplicadosNotas.itensMax,
     filtrosAplicadosNotas.dataInicio,
     filtrosAplicadosNotas.dataFim,
+    filtrosAplicadosNotas.dataEntradaInicio,
+    filtrosAplicadosNotas.dataEntradaFim,
     filtrosAplicadosNotas.mes,
     filtrosAplicadosNotas.ano,
     filtrosAplicadosNotas.situacao !== 'todas' ? '1' : '',
@@ -815,12 +927,18 @@ export default function Dashboard({
     filtrosAplicadosNotas.daeVencInicio,
     filtrosAplicadosNotas.daeVencFim,
     filtrosAplicadosNotas.foraCe15SemDae ? '1' : '',
+    filtrosAplicadosNotas.situacoes.length > 0 ? '1' : '',
+    filtrosAplicadosNotas.origens.length > 0 ? '1' : '',
+    filtrosAplicadosNotas.manifestos.length > 0 ? '1' : '',
+    filtrosAplicadosNotas.modalidades.length > 0 ? '1' : '',
     filtrosAplicadosNotas.etiquetas.length > 0 ? '1' : '',
     filtrosAplicadosNotas.excluirEmitentes.length > 0 ? '1' : '',
   ].filter(Boolean).length;
 
   const filtrosPendentes =
     filtrosAplicadosNotas.numero !== filtroNumero ||
+    filtrosAplicadosNotas.chave !== filtroChave ||
+    filtrosAplicadosNotas.serie !== filtroSerie ||
     filtrosAplicadosNotas.cnpjId !== filtroCnpjId ||
     filtrosAplicadosNotas.status !== filtroStatus ||
     filtrosAplicadosNotas.emitente !== filtroEmitente ||
@@ -831,6 +949,8 @@ export default function Dashboard({
     filtrosAplicadosNotas.itensMax !== filtroItensMax ||
     filtrosAplicadosNotas.dataInicio !== filtroDataInicio ||
     filtrosAplicadosNotas.dataFim !== filtroDataFim ||
+    filtrosAplicadosNotas.dataEntradaInicio !== filtroDataEntradaInicio ||
+    filtrosAplicadosNotas.dataEntradaFim !== filtroDataEntradaFim ||
     filtrosAplicadosNotas.mes !== filtroMes ||
     filtrosAplicadosNotas.ano !== filtroAno ||
     filtrosAplicadosNotas.situacao !== filtroSituacao ||
@@ -838,6 +958,10 @@ export default function Dashboard({
     filtrosAplicadosNotas.daeVencInicio !== filtroDaeVencInicio ||
     filtrosAplicadosNotas.daeVencFim !== filtroDaeVencFim ||
     filtrosAplicadosNotas.foraCe15SemDae !== filtroForaCe15SemDae ||
+    filtrosAplicadosNotas.situacoes.join('\u0001') !== filtroSituacoes.join('\u0001') ||
+    filtrosAplicadosNotas.origens.join('\u0001') !== filtroOrigens.join('\u0001') ||
+    filtrosAplicadosNotas.manifestos.join('\u0001') !== filtroManifestos.join('\u0001') ||
+    filtrosAplicadosNotas.modalidades.join('\u0001') !== filtroModalidades.join('\u0001') ||
     filtrosAplicadosNotas.etiquetas.join('\u0001') !== filtroEtiquetas.join('\u0001') ||
     filtrosAplicadosNotas.excluirEmitentes.join('\u0001') !== filtroExcluirEmitentes.join('\u0001');
   // Há alguma busca/filtro ativo? (inclui empresa, status e a busca por número)
@@ -847,7 +971,7 @@ export default function Dashboard({
     filtrosAplicadosNotas.cnpjId !== 'todos' ||
     filtrosAplicadosNotas.status !== 'todos';
 
-  // Paginação no servidor só na visão padrão (sem filtro e sem ter carregado tudo).
+  // Paginação no servidor só na visão padrão (sem filtro).
   const usandoPaginacaoServidor =
     porPagina > 0 &&
     anoCarregado === null &&
@@ -870,13 +994,11 @@ export default function Dashboard({
     }
   }, [todasCarregadas, carregandoTodas, anoCarregado, startTransition]);
 
-  async function aplicarFiltrosNotas() {
-    if (!todasCarregadas && anoCarregado === null) {
-      await carregarTodasNotasEmSegundoPlano();
-    }
-
-    setFiltrosAplicadosNotas({
+  function montarFiltrosNotas(overrides: Partial<FiltrosNotasAplicados> = {}): FiltrosNotasAplicados {
+    return {
       numero: filtroNumero,
+      chave: filtroChave,
+      serie: filtroSerie,
       cnpjId: filtroCnpjId,
       status: filtroStatus,
       emitente: filtroEmitente,
@@ -889,6 +1011,8 @@ export default function Dashboard({
       excluirEmitentes: [...filtroExcluirEmitentes],
       dataInicio: filtroDataInicio,
       dataFim: filtroDataFim,
+      dataEntradaInicio: filtroDataEntradaInicio,
+      dataEntradaFim: filtroDataEntradaFim,
       mes: filtroMes,
       ano: filtroAno,
       situacao: filtroSituacao,
@@ -896,13 +1020,44 @@ export default function Dashboard({
       daeVencInicio: filtroDaeVencInicio,
       daeVencFim: filtroDaeVencFim,
       foraCe15SemDae: filtroForaCe15SemDae,
-    });
+      situacoes: [...filtroSituacoes],
+      origens: [...filtroOrigens],
+      manifestos: [...filtroManifestos],
+      modalidades: [...filtroModalidades],
+      ...overrides,
+    };
+  }
+
+  async function aplicarFiltrosNotas(overrides: Partial<FiltrosNotasAplicados> = {}) {
+    if (!todasCarregadas && anoCarregado === null) {
+      await carregarTodasNotasEmSegundoPlano();
+    }
+
+    setFiltrosAplicadosNotas(montarFiltrosNotas(overrides));
     setPaginaCliente(1);
     setStatus({ success: true, message: 'Busca/filtros aplicados.' });
   }
 
-  // Assim que o usuário busca/filtra, garante TODAS as notas em memória para
-  // que o filtro atue sobre o conjunto inteiro — não só as 50 da página.
+  function filtrarErroImportacaoNotas() {
+    const situacoes: FiltroSituacaoNota[] = ['com-erro'];
+    setMostrarFiltros(true);
+    setFiltroSituacoes(situacoes);
+    setFiltroDaeSitram('nao-encontrada');
+    void aplicarFiltrosNotas({ situacoes, daeSitram: 'nao-encontrada' });
+  }
+
+  function filtrarXmlCompletoNotas() {
+    setMostrarFiltros(true);
+    setFiltroStatus('COMPLETA');
+    setFiltroSituacoes(['efetivada']);
+    void aplicarFiltrosNotas({ status: 'COMPLETA', situacoes: ['efetivada'] });
+  }
+
+  function abrirInclusaoNotas() {
+    setSecaoAtual('notas');
+    setMostrarImport(true);
+  }
+
   useEffect(() => {
     if (!algumFiltroAtivo) return;
     void carregarTodasNotasEmSegundoPlano();
@@ -1000,6 +1155,8 @@ export default function Dashboard({
 
   function limparFiltrosAvancados() {
     setFiltroNumero('');
+    setFiltroChave('');
+    setFiltroSerie('');
     setFiltroEmitente('');
     setFiltroDestinatario('');
     setFiltroValorMin('');
@@ -1008,6 +1165,8 @@ export default function Dashboard({
     setFiltroItensMax('');
     setFiltroDataInicio('');
     setFiltroDataFim('');
+    setFiltroDataEntradaInicio('');
+    setFiltroDataEntradaFim('');
     setFiltroMes('');
     setFiltroAnoState('');
     setFiltroCnpjId('todos');
@@ -1021,31 +1180,14 @@ export default function Dashboard({
     setFiltroDaeVencInicio('');
     setFiltroDaeVencFim('');
     setFiltroForaCe15SemDae(false);
+    setFiltroSituacoes([]);
+    setFiltroOrigens([]);
+    setFiltroManifestos([]);
+    setFiltroModalidades([]);
     setFiltroEtiquetas([]);
     setFiltroExcluirEmitentes([]);
     setExcluirEmitenteInput('');
-    setFiltrosAplicadosNotas({
-      numero: '',
-      cnpjId: 'todos',
-      status: 'todos',
-      emitente: '',
-      destinatario: '',
-      valorMin: '',
-      valorMax: '',
-      itensMin: '',
-      itensMax: '',
-      etiquetas: [],
-      excluirEmitentes: [],
-      dataInicio: '',
-      dataFim: '',
-      mes: '',
-      ano: '',
-      situacao: 'todas',
-      daeSitram: 'todos',
-      daeVencInicio: '',
-      daeVencFim: '',
-      foraCe15SemDae: false,
-    });
+    setFiltrosAplicadosNotas(filtrosNotasPadrao());
     setPaginaCliente(1);
   }
 
@@ -1127,6 +1269,8 @@ export default function Dashboard({
   }
 
   const filtroNumeroBusca = filtrosAplicadosNotas.numero;
+  const filtroChaveBusca = filtrosAplicadosNotas.chave;
+  const filtroSerieBusca = filtrosAplicadosNotas.serie;
   const filtroCnpjIdBusca = filtrosAplicadosNotas.cnpjId;
   const filtroStatusBusca = filtrosAplicadosNotas.status;
   const filtroEmitenteBusca = filtrosAplicadosNotas.emitente;
@@ -1137,6 +1281,8 @@ export default function Dashboard({
   const filtroItensMaxBusca = filtrosAplicadosNotas.itensMax;
   const filtroDataInicioBusca = filtrosAplicadosNotas.dataInicio;
   const filtroDataFimBusca = filtrosAplicadosNotas.dataFim;
+  const filtroDataEntradaInicioBusca = filtrosAplicadosNotas.dataEntradaInicio;
+  const filtroDataEntradaFimBusca = filtrosAplicadosNotas.dataEntradaFim;
   const filtroMesBusca = filtrosAplicadosNotas.mes;
   const filtroAnoBusca = filtrosAplicadosNotas.ano;
   const filtroSituacaoBusca = filtrosAplicadosNotas.situacao;
@@ -1144,6 +1290,10 @@ export default function Dashboard({
   const filtroDaeVencInicioBusca = filtrosAplicadosNotas.daeVencInicio;
   const filtroDaeVencFimBusca = filtrosAplicadosNotas.daeVencFim;
   const filtroForaCe15SemDaeBusca = filtrosAplicadosNotas.foraCe15SemDae;
+  const filtroSituacoesBusca = filtrosAplicadosNotas.situacoes;
+  const filtroOrigensBusca = filtrosAplicadosNotas.origens;
+  const filtroManifestosBusca = filtrosAplicadosNotas.manifestos;
+  const filtroModalidadesBusca = filtrosAplicadosNotas.modalidades;
   const filtroEtiquetasBusca = filtrosAplicadosNotas.etiquetas;
   const filtroExcluirEmitentesBusca = filtrosAplicadosNotas.excluirEmitentes;
   const notasBuscaIndex = useMemo(() => new Map(notas.map((n) => [
@@ -1156,7 +1306,9 @@ export default function Dashboard({
       destNome: (n.destNome ?? '').toLowerCase(),
       destCnpj: n.destCnpj ?? '',
       emitidaEm: new Date(n.emitidaEm),
+      entradaEm: new Date(n.createdAt),
       etiquetas: parseEtiquetas(n.etiqueta),
+      modalidades: modalidadesDaNota(n),
       dae: statusDaeEfetivo(n),
       suspeitasDuplicidade: extrairPagamentoIcmsSitram(n).suspeitasDuplicidade.length,
     },
@@ -1165,6 +1317,8 @@ export default function Dashboard({
   const notasFiltradas = useMemo(() => {
     const numeroBusca = filtroNumeroBusca.trim();
     const numeroBuscaDigitos = numeroBusca.replace(/\D/g, '');
+    const chaveBuscaDigitos = filtroChaveBusca.replace(/\D/g, '');
+    const serieBuscaNormalizada = filtroSerieBusca.replace(/\D/g, '').replace(/^0+/, '');
     const emitenteBusca = filtroEmitenteBusca.trim().toLowerCase();
     const emitenteBuscaDigitos = filtroEmitenteBusca.replace(/\D/g, '');
     const destBusca = filtroDestinatarioBusca.trim().toLowerCase();
@@ -1179,6 +1333,8 @@ export default function Dashboard({
       if (!idx) return false;
       if (filtroCnpjIdBusca !== 'todos' && n.cnpjId !== filtroCnpjIdBusca) return false;
       if (filtroStatusBusca !== 'todos' && n.status !== filtroStatusBusca) return false;
+      if (chaveBuscaDigitos && !n.chave.includes(chaveBuscaDigitos)) return false;
+      if (serieBuscaNormalizada && idx.serie !== serieBuscaNormalizada) return false;
 
       // Busca por número da NF (ignora zeros à esquerda) ou por chave de acesso.
       if (numeroBuscaDigitos) {
@@ -1232,6 +1388,8 @@ export default function Dashboard({
       // Filtros por data de emissão
       if (filtroDataInicioBusca && idx.emitidaEm < new Date(filtroDataInicioBusca)) return false;
       if (filtroDataFimBusca && idx.emitidaEm > new Date(filtroDataFimBusca + 'T23:59:59')) return false;
+      if (filtroDataEntradaInicioBusca && idx.entradaEm < new Date(filtroDataEntradaInicioBusca)) return false;
+      if (filtroDataEntradaFimBusca && idx.entradaEm > new Date(filtroDataEntradaFimBusca + 'T23:59:59')) return false;
       if (filtroMesBusca && idx.emitidaEm.getMonth() + 1 !== Number(filtroMesBusca)) return false;
       if (filtroAnoBusca && idx.emitidaEm.getFullYear() !== Number(filtroAnoBusca)) return false;
 
@@ -1239,6 +1397,38 @@ export default function Dashboard({
       if (filtroSituacaoBusca !== 'todas') {
         const situacao = n.situacaoSefaz ?? 'AUTORIZADA';
         if (situacao !== filtroSituacaoBusca) return false;
+      }
+
+      if (filtroSituacoesBusca.length > 0) {
+        const situacoes: FiltroSituacaoNota[] = [];
+        const situacaoSefaz = n.situacaoSefaz ?? 'AUTORIZADA';
+        if (idx.suspeitasDuplicidade > 0) situacoes.push('inconsistente');
+        if (n.status === 'COMPLETA' && situacaoSefaz === 'AUTORIZADA') situacoes.push('efetivada');
+        if (situacaoSefaz === 'DENEGADA') situacoes.push('denegada');
+        if (n.status === 'RESUMO' && !n.manifestadaEm) situacoes.push('pendente-conferencia');
+        if (idx.dae === 'NAO_ENCONTRADA' || idx.suspeitasDuplicidade > 0) situacoes.push('com-erro');
+        if (n.status === 'RESUMO' && n.manifestadaEm) situacoes.push('pendente-recepcao');
+        if (situacaoSefaz === 'CANCELADA') situacoes.push('cancelada');
+        if (n.status === 'RESUMO') situacoes.push('pendente');
+        if (!filtroSituacoesBusca.some((situacao) => situacoes.includes(situacao))) return false;
+      }
+
+      if (filtroOrigensBusca.length > 0) {
+        const origem: FiltroOrigemNota = raizCnpj(n.emitenteCnpj) === raizCnpj(n.cnpj.cnpj) ? 'proprio' : 'terceiro';
+        if (!filtroOrigensBusca.includes(origem)) return false;
+      }
+
+      if (filtroManifestosBusca.length > 0) {
+        const manifestos: FiltroManifestoNota[] = [];
+        if (n.manifestadaEm) manifestos.push('manifestada');
+        if (!n.manifestadaEm) manifestos.push('nao-manifestada');
+        if (n.manifestadaEm && n.status === 'RESUMO') manifestos.push('pendente-processando');
+        if (idx.dae === 'NAO_ENCONTRADA' || idx.suspeitasDuplicidade > 0) manifestos.push('com-erros');
+        if (!filtroManifestosBusca.some((manifesto) => manifestos.includes(manifesto))) return false;
+      }
+
+      if (filtroModalidadesBusca.length > 0 && !idx.modalidades.some((modalidade) => filtroModalidadesBusca.includes(modalidade))) {
+        return false;
       }
 
       if (filtroDaeSitramBusca !== 'todos') {
@@ -1277,6 +1467,8 @@ export default function Dashboard({
     filtroCnpjIdBusca,
     filtroStatusBusca,
     filtroNumeroBusca,
+    filtroChaveBusca,
+    filtroSerieBusca,
     filtroEmitenteBusca,
     filtroDestinatarioBusca,
     filtroValorMinBusca,
@@ -1285,6 +1477,8 @@ export default function Dashboard({
     filtroItensMaxBusca,
     filtroDataInicioBusca,
     filtroDataFimBusca,
+    filtroDataEntradaInicioBusca,
+    filtroDataEntradaFimBusca,
     filtroMesBusca,
     filtroAnoBusca,
     filtroSituacaoBusca,
@@ -1293,6 +1487,10 @@ export default function Dashboard({
     filtroDaeVencFimBusca,
     daePorNota,
     filtroForaCe15SemDaeBusca,
+    filtroSituacoesBusca,
+    filtroOrigensBusca,
+    filtroManifestosBusca,
+    filtroModalidadesBusca,
     filtroEtiquetasBusca,
     filtroExcluirEmitentesBusca,
   ]);
@@ -1306,6 +1504,8 @@ export default function Dashboard({
     filtroCnpjIdBusca,
     filtroStatusBusca,
     filtroNumeroBusca,
+    filtroChaveBusca,
+    filtroSerieBusca,
     filtroEmitenteBusca,
     filtroDestinatarioBusca,
     filtroValorMinBusca,
@@ -1314,6 +1514,8 @@ export default function Dashboard({
     filtroItensMaxBusca,
     filtroDataInicioBusca,
     filtroDataFimBusca,
+    filtroDataEntradaInicioBusca,
+    filtroDataEntradaFimBusca,
     filtroMesBusca,
     filtroAnoBusca,
     filtroSituacaoBusca,
@@ -1321,6 +1523,10 @@ export default function Dashboard({
     filtroDaeVencInicioBusca,
     filtroDaeVencFimBusca,
     filtroForaCe15SemDaeBusca,
+    filtroSituacoesBusca,
+    filtroOrigensBusca,
+    filtroManifestosBusca,
+    filtroModalidadesBusca,
     filtroEtiquetasBusca,
     filtroExcluirEmitentesBusca,
   ]);
@@ -2179,7 +2385,262 @@ export default function Dashboard({
               cnpjId={filtroCnpjId}
               onFiltrar={filtrarVencimentoDae}
             />
-            <div className="mb-4 pb-3 border-b border-[var(--border)] space-y-3">
+            <section className="mb-4 overflow-hidden rounded border border-slate-300 bg-slate-50 text-slate-900 shadow-sm">
+              <div className="flex min-h-9 flex-wrap items-center justify-between gap-2 border-b border-slate-300 bg-slate-100 px-2 py-1.5">
+                <button
+                  type="button"
+                  onClick={() => setMostrarFiltros((valor) => !valor)}
+                  className="grid h-6 w-6 place-items-center rounded border border-transparent text-sm font-bold text-slate-800 hover:border-slate-300 hover:bg-white"
+                  aria-label={mostrarFiltros ? 'Recolher filtros' : 'Expandir filtros'}
+                >
+                  {mostrarFiltros ? 'v' : '>'}
+                </button>
+                <div className="ml-auto flex flex-wrap items-center justify-end gap-1.5">
+                  {carregandoTodas && <span className="mr-2 text-[11px] font-semibold text-amber-700">Carregando base...</span>}
+                  {filtrosPendentes && !carregandoTodas && <span className="mr-2 text-[11px] font-semibold text-amber-700">Alteracoes pendentes</span>}
+                  <button
+                    type="button"
+                    onClick={() => void aplicarFiltrosNotas()}
+                    disabled={carregandoTodas || carregandoAno}
+                    className="h-7 rounded-[3px] border border-slate-400 bg-white px-3 text-[12px] font-semibold text-slate-800 hover:bg-slate-200 disabled:opacity-50"
+                  >
+                    Pesquisar
+                  </button>
+                  <button
+                    type="button"
+                    onClick={limparFiltrosAvancados}
+                    disabled={filtrosAtivos === 0 && filtrosAplicadosAtivos === 0}
+                    className="h-7 rounded-[3px] border border-slate-300 bg-white px-3 text-[12px] font-semibold text-slate-700 hover:bg-slate-200 disabled:opacity-50"
+                  >
+                    Limpar filtros
+                  </button>
+                  <button
+                    type="button"
+                    onClick={filtrarErroImportacaoNotas}
+                    disabled={carregandoTodas}
+                    className="h-7 rounded-[3px] bg-slate-900 px-3 text-[12px] font-bold text-white hover:bg-slate-700 disabled:opacity-50"
+                  >
+                    Erro de Importacao
+                  </button>
+                  <button
+                    type="button"
+                    onClick={filtrarXmlCompletoNotas}
+                    disabled={carregandoTodas}
+                    className="h-7 rounded-[3px] bg-slate-900 px-3 text-[12px] font-bold text-white hover:bg-slate-700 disabled:opacity-50"
+                  >
+                    XML
+                  </button>
+                  <button
+                    type="button"
+                    onClick={abrirInclusaoNotas}
+                    className="h-7 rounded-[3px] bg-slate-900 px-3 text-[12px] font-bold text-white hover:bg-slate-700"
+                  >
+                    Incluir
+                  </button>
+                </div>
+              </div>
+
+              {mostrarFiltros && (
+                <div className="space-y-3 bg-white px-5 py-4">
+                  <div className="grid grid-cols-1 gap-x-2 gap-y-2 lg:grid-cols-[1.2fr_3.6fr_1.55fr_1fr_1.2fr]">
+                    <CampoFiltroNotas label="Loja" className="lg:col-span-2">
+                      <select
+                        value={filtroCnpjId}
+                        onChange={(e) => setFiltroCnpjId(e.target.value === 'todos' ? 'todos' : Number(e.target.value))}
+                        className={CAMPO_FILTRO_NOTAS}
+                      >
+                        <option value="todos">Todas as lojas</option>
+                        {cnpjs.map((c) => (
+                          <option key={c.id} value={c.id}>{c.razaoSocial || formatarCnpj(c.cnpj)}</option>
+                        ))}
+                      </select>
+                    </CampoFiltroNotas>
+                    <CampoFiltroNotas label="Status XML">
+                      <select
+                        value={filtroStatus}
+                        onChange={(e) => setFiltroStatus(e.target.value as typeof filtroStatus)}
+                        className={CAMPO_FILTRO_NOTAS}
+                      >
+                        <option value="todos">Todos</option>
+                        <option value="RESUMO">Resumo</option>
+                        <option value="COMPLETA">Completa</option>
+                      </select>
+                    </CampoFiltroNotas>
+                    <CampoFiltroNotas label="Periodo(Data de emissao)">
+                      <input type="date" value={filtroDataInicio} onChange={(e) => setFiltroDataInicio(e.target.value)} className={CAMPO_FILTRO_NOTAS} />
+                    </CampoFiltroNotas>
+                    <CampoFiltroNotas label=" ">
+                      <input type="date" value={filtroDataFim} onChange={(e) => setFiltroDataFim(e.target.value)} className={CAMPO_FILTRO_NOTAS} />
+                    </CampoFiltroNotas>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-x-2 gap-y-2 lg:grid-cols-[1.2fr_3.6fr_1.55fr_1fr_1.2fr]">
+                    <CampoFiltroNotas label="Fornecedor" className="lg:col-span-2">
+                      <input
+                        value={filtroEmitente}
+                        onChange={(e) => setFiltroEmitente(e.target.value)}
+                        list="sugestoes-emitente"
+                        className={CAMPO_FILTRO_NOTAS}
+                      />
+                    </CampoFiltroNotas>
+                    <CampoFiltroNotas label="Destinatario">
+                      <input
+                        value={filtroDestinatario}
+                        onChange={(e) => setFiltroDestinatario(e.target.value)}
+                        list="sugestoes-destinatario"
+                        className={CAMPO_FILTRO_NOTAS}
+                      />
+                    </CampoFiltroNotas>
+                    <CampoFiltroNotas label="Periodo(Data de entrada)">
+                      <input type="date" value={filtroDataEntradaInicio} onChange={(e) => setFiltroDataEntradaInicio(e.target.value)} className={CAMPO_FILTRO_NOTAS} />
+                    </CampoFiltroNotas>
+                    <CampoFiltroNotas label=" ">
+                      <input type="date" value={filtroDataEntradaFim} onChange={(e) => setFiltroDataEntradaFim(e.target.value)} className={CAMPO_FILTRO_NOTAS} />
+                    </CampoFiltroNotas>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-x-2 gap-y-2 lg:grid-cols-[2.2fr_.6fr_.9fr_1.05fr_1.05fr]">
+                    <CampoFiltroNotas label="Chave NF-e">
+                      <input
+                        value={filtroChave}
+                        onChange={(e) => setFiltroChave(e.target.value)}
+                        inputMode="numeric"
+                        maxLength={44}
+                        className={CAMPO_FILTRO_NOTAS}
+                      />
+                    </CampoFiltroNotas>
+                    <CampoFiltroNotas label="Serie">
+                      <input value={filtroSerie} onChange={(e) => setFiltroSerie(e.target.value)} inputMode="numeric" className={CAMPO_FILTRO_NOTAS} />
+                    </CampoFiltroNotas>
+                    <CampoFiltroNotas label="Num. Documento">
+                      <input
+                        value={filtroNumero}
+                        onChange={(e) => setFiltroNumero(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            void aplicarFiltrosNotas();
+                          }
+                        }}
+                        inputMode="numeric"
+                        className={CAMPO_FILTRO_NOTAS}
+                      />
+                    </CampoFiltroNotas>
+                    <CampoFiltroNotas label="Valor NF">
+                      <div className="grid grid-cols-2 gap-1.5">
+                        <input type="number" value={filtroValorMin} onChange={(e) => setFiltroValorMin(e.target.value)} placeholder="Min." className={CAMPO_FILTRO_NOTAS} />
+                        <input type="number" value={filtroValorMax} onChange={(e) => setFiltroValorMax(e.target.value)} placeholder="Max." className={CAMPO_FILTRO_NOTAS} />
+                      </div>
+                    </CampoFiltroNotas>
+                    <CampoFiltroNotas label="Qtd. Itens">
+                      <div className="grid grid-cols-2 gap-1.5">
+                        <input type="number" min={0} value={filtroItensMin} onChange={(e) => setFiltroItensMin(e.target.value)} placeholder="Min." className={CAMPO_FILTRO_NOTAS} />
+                        <input type="number" min={0} value={filtroItensMax} onChange={(e) => setFiltroItensMax(e.target.value)} placeholder="Max." className={CAMPO_FILTRO_NOTAS} />
+                      </div>
+                    </CampoFiltroNotas>
+                  </div>
+
+                  <datalist id="sugestoes-emitente">
+                    {sugestoesEmitente.map((s) => (
+                      <option key={s} value={s} />
+                    ))}
+                  </datalist>
+                  <datalist id="sugestoes-destinatario">
+                    {sugestoesDestinatario.map((s) => (
+                      <option key={s} value={s} />
+                    ))}
+                  </datalist>
+
+                  <div className="grid gap-4 border-t border-slate-200 pt-2 lg:grid-cols-[1.5fr_.75fr_1fr_1fr]">
+                    <GrupoCheckboxFiltro titulo="Situacoes" opcoes={SITUACOES_NOTA_OPCOES} selecionados={filtroSituacoes} onToggle={toggleFiltroSituacaoNota} />
+                    <GrupoCheckboxFiltro titulo="Origem" opcoes={ORIGEM_NOTA_OPCOES} selecionados={filtroOrigens} onToggle={toggleFiltroOrigemNota} />
+                    <GrupoCheckboxFiltro titulo="Manifesto" opcoes={MANIFESTO_NOTA_OPCOES} selecionados={filtroManifestos} onToggle={toggleFiltroManifestoNota} />
+                    <GrupoCheckboxFiltro titulo="Modalidades" opcoes={MODALIDADE_NOTA_OPCOES} selecionados={filtroModalidades} onToggle={toggleFiltroModalidadeNota} />
+                  </div>
+
+                  <div className="grid gap-3 border-t border-slate-200 pt-3 lg:grid-cols-[1fr_1fr_1.3fr]">
+                    <GrupoCheckboxFiltro
+                      titulo="SITRAM / DAE"
+                      opcoes={[
+                        { valor: 'consultado', label: 'Consultado' },
+                        { valor: 'com-dae', label: 'Com DAE' },
+                        { valor: 'a-pagar', label: 'A pagar' },
+                        { valor: 'em-aberto', label: 'Em aberto' },
+                        { valor: 'pago', label: 'Pago' },
+                        { valor: 'duplicidade', label: 'Duplicidade' },
+                        { valor: 'sem-dae', label: 'Sem DAE' },
+                        { valor: 'nao-encontrada', label: 'Nao encontrada' },
+                      ]}
+                      selecionados={filtroDaeSitram === 'todos' ? [] : [filtroDaeSitram]}
+                      onToggle={(valor) => setFiltroDaeSitram(filtroDaeSitram === valor ? 'todos' : valor as FiltroDaeSitram)}
+                    />
+                    <div className="space-y-2">
+                      <CampoFiltroNotas label="Vencimento do DAE">
+                        <div className="grid grid-cols-2 gap-1.5">
+                          <input type="date" value={filtroDaeVencInicio} onChange={(e) => setFiltroDaeVencInicio(e.target.value)} className={CAMPO_FILTRO_NOTAS} />
+                          <input type="date" value={filtroDaeVencFim} onChange={(e) => setFiltroDaeVencFim(e.target.value)} className={CAMPO_FILTRO_NOTAS} />
+                        </div>
+                      </CampoFiltroNotas>
+                      <label className="flex items-center gap-2 text-[12px] font-semibold text-slate-800">
+                        <input type="checkbox" checked={filtroForaCe15SemDae} onChange={() => alternarFiltroForaCe15SemDae()} className="h-3.5 w-3.5" />
+                        Fora do CE +15 dias ({qtdForaCe15SemDae})
+                      </label>
+                    </div>
+                    <div className="space-y-2">
+                      <GrupoCheckboxFiltro
+                        titulo="Etiquetas"
+                        opcoes={[
+                          { valor: 'sem-etiqueta', label: 'Sem etiqueta' },
+                          ...etiquetasParaFiltro.map((tag) => ({ valor: tag, label: tag })),
+                        ]}
+                        selecionados={filtroEtiquetas}
+                        onToggle={toggleFiltroEtiqueta}
+                      />
+                      <CampoFiltroNotas label="Excluir fornecedor">
+                        <div className="flex gap-1.5">
+                          <input
+                            value={excluirEmitenteInput}
+                            onChange={(e) => setExcluirEmitenteInput(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault();
+                                adicionarExclusaoEmitente();
+                              }
+                            }}
+                            list="sugestoes-emitente"
+                            className={CAMPO_FILTRO_NOTAS}
+                          />
+                          <button
+                            type="button"
+                            onClick={adicionarExclusaoEmitente}
+                            disabled={!excluirEmitenteInput.trim()}
+                            className="h-7 rounded-[3px] border border-slate-300 bg-white px-2 text-[12px] font-semibold text-slate-800 hover:bg-slate-100 disabled:opacity-50"
+                          >
+                            Excluir
+                          </button>
+                        </div>
+                      </CampoFiltroNotas>
+                      {filtroExcluirEmitentes.length > 0 && (
+                        <div className="flex flex-wrap gap-1">
+                          {filtroExcluirEmitentes.map((ex) => (
+                            <button
+                              key={ex}
+                              type="button"
+                              onClick={() => removerExclusaoEmitente(ex)}
+                              className="rounded border border-red-200 bg-red-50 px-2 py-0.5 text-[11px] font-semibold text-red-700 hover:bg-red-100"
+                              title="Remover"
+                            >
+                              {ex} x
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </section>
+            <div className="hidden">
               <div className="flex flex-wrap items-center gap-2.5">
                 <h2 className="text-base font-semibold text-[var(--ink)]">{t('invoices')}</h2>
                 <div className="relative flex-1 min-w-[220px]">
@@ -2296,7 +2757,7 @@ export default function Dashboard({
               </div>
             </div>
 
-            {mostrarFiltros && (
+            {false && mostrarFiltros && (
               <div className="mb-4 p-4 bg-[var(--surface-2)] border border-[var(--border)] rounded-xl grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
                 <div>
                   <label className="block text-xs font-medium text-[var(--ink-mut)] mb-1">Emitente (nome ou CNPJ)</label>
@@ -4000,6 +4461,54 @@ function Badge({ tone, children }: { tone: 'green' | 'amber' | 'gray' | 'blue' |
     <span className={`shrink-0 text-[10px] px-2 py-1 rounded-full font-bold tracking-wide ${tones[tone]}`}>
       {children}
     </span>
+  );
+}
+
+function CampoFiltroNotas({
+  label,
+  className = '',
+  children,
+}: {
+  label: string;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <label className={`block min-w-0 ${className}`}>
+      <span className="mb-1 block text-[11px] font-semibold text-slate-700">{label}</span>
+      {children}
+    </label>
+  );
+}
+
+function GrupoCheckboxFiltro({
+  titulo,
+  opcoes,
+  selecionados,
+  onToggle,
+}: {
+  titulo: string;
+  opcoes: Array<{ valor: string; label: string }>;
+  selecionados: string[];
+  onToggle: (valor: string) => void;
+}) {
+  return (
+    <fieldset className="min-w-0">
+      <legend className="mb-1.5 text-sm font-bold text-slate-900">{titulo}</legend>
+      <div className="grid grid-cols-1 gap-x-4 gap-y-1 sm:grid-cols-2 xl:grid-cols-3">
+        {opcoes.map((opcao) => (
+          <label key={opcao.valor} className="flex min-w-0 items-center gap-1.5 text-[11px] text-slate-800">
+            <input
+              type="checkbox"
+              checked={selecionados.includes(opcao.valor)}
+              onChange={() => onToggle(opcao.valor)}
+              className="h-3.5 w-3.5 shrink-0 rounded border-slate-400 text-slate-900 focus:ring-slate-500"
+            />
+            <span className="truncate" title={opcao.label}>{opcao.label}</span>
+          </label>
+        ))}
+      </div>
+    </fieldset>
   );
 }
 
