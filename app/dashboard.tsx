@@ -4597,7 +4597,9 @@ function CampoFiltroNotas({
 }) {
   return (
     <label className={`block min-w-0 ${className}`}>
-      <span className="mb-1 block text-[11px] font-semibold text-slate-700">{label}</span>
+      <span className="mb-1 block h-3.5 text-[11px] font-semibold leading-3.5 text-slate-700">
+        {label.trim() ? label : ''}
+      </span>
       {children}
     </label>
   );
