@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import {
-  consultarIeFornecedorPublica,
+  consultarIeFornecedor,
+  LINK_CCC_SEFAZ,
   LINKS_SEFAZ_IE,
   limparCnpjFornecedor,
 } from '@/lib/ieFornecedor';
@@ -20,13 +21,14 @@ export async function GET(req: Request) {
   const uf = url.searchParams.get('uf')?.trim().toUpperCase() || '';
 
   try {
-    const consulta = await consultarIeFornecedorPublica(cnpj, uf || undefined);
+    const consulta = await consultarIeFornecedor(cnpj, uf || undefined);
     const ufLink = uf || consulta.inscricoesEstaduais[0]?.uf || consulta.uf || '';
 
     return NextResponse.json({
       success: true,
       consulta,
-      portalOficial: ufLink ? LINKS_SEFAZ_IE[ufLink] ?? null : null,
+      portalOficial: ufLink ? LINKS_SEFAZ_IE[ufLink] ?? LINK_CCC_SEFAZ : LINK_CCC_SEFAZ,
+      portalCcc: LINK_CCC_SEFAZ,
     });
   } catch (error: unknown) {
     return NextResponse.json(

@@ -2038,13 +2038,23 @@ export default function Dashboard({
                 </p>
               </div>
               {apiOrigem && (
-                <button
-                  type="button"
-                  onClick={() => copiarTexto(`${apiOrigem}/api/v1/notas/{chave}`)}
-                  className="rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-xs font-bold text-[var(--ink)] hover:bg-[var(--surface-2)]"
-                >
-                  Copiar link base
-                </button>
+                <div className="flex flex-wrap gap-2">
+                  <a
+                    href={`${apiOrigem}/api-docs`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-xs font-bold text-[var(--ink)] hover:bg-[var(--surface-2)]"
+                  >
+                    Documentacao
+                  </a>
+                  <button
+                    type="button"
+                    onClick={() => copiarTexto(`${apiOrigem}/api/v1/notas/{chave}`)}
+                    className="rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-xs font-bold text-[var(--ink)] hover:bg-[var(--surface-2)]"
+                  >
+                    Copiar link base
+                  </button>
+                </div>
               )}
             </div>
 

@@ -1,9 +1,17 @@
+import { consultarCadastroContribuinteSefaz } from './sefaz/cadastro';
+import { LINK_CCC_SEFAZ, LINKS_SEFAZ_IE, UFS_BRASIL } from './ieFornecedorConstantes';
+import { chamarFiscalWorker, usarProxyFiscal } from './fiscalProxy';
+
+export { LINK_CCC_SEFAZ, LINKS_SEFAZ_IE, UFS_BRASIL };
+
 export type InscricaoEstadualFornecedor = {
   inscricao: string;
   uf: string;
   estado: string;
   ativo: boolean;
   atualizadoEm: string | null;
+  situacao?: string | null;
+  regimeApuracao?: string | null;
 };
 
 export type ConsultaIeFornecedor = {
@@ -21,6 +29,11 @@ export type ConsultaIeFornecedor = {
   inscricoesEstaduais: InscricaoEstadualFornecedor[];
   fonte: string;
   aviso: string | null;
+  consultaOficial: {
+    tentou: boolean;
+    ok: boolean;
+    mensagem: string | null;
+  };
 };
 
 type CnpjWsIe = {
@@ -62,40 +75,7 @@ type CnpjWsResposta = {
   };
 };
 
-export const UFS_BRASIL = [
-  'AC', 'AL', 'AP', 'AM', 'BA', 'CE', 'DF', 'ES', 'GO', 'MA', 'MT', 'MS', 'MG',
-  'PA', 'PB', 'PR', 'PE', 'PI', 'RJ', 'RN', 'RS', 'RO', 'RR', 'SC', 'SP', 'SE', 'TO',
-] as const;
-
-export const LINKS_SEFAZ_IE: Record<string, string> = {
-  AC: 'https://sefazonline.ac.gov.br/',
-  AL: 'https://sintegra.sefaz.al.gov.br/',
-  AP: 'https://www.sefaz.ap.gov.br/',
-  AM: 'https://online.sefaz.am.gov.br/',
-  BA: 'https://portal.sefaz.ba.gov.br/',
-  CE: 'https://consultapublica.sefaz.ce.gov.br/',
-  DF: 'https://agnet.fazenda.df.gov.br/',
-  ES: 'https://dfe-portal.svrs.rs.gov.br/Nfe/Ccc',
-  GO: 'https://appasp.sefaz.go.gov.br/',
-  MA: 'https://sistemas1.sefaz.ma.gov.br/',
-  MT: 'https://www.sefaz.mt.gov.br/',
-  MS: 'https://servicos.efazenda.ms.gov.br/',
-  MG: 'https://dfe-portal.svrs.rs.gov.br/Nfe/Ccc',
-  PA: 'https://app.sefa.pa.gov.br/',
-  PB: 'https://www4.sefaz.pb.gov.br/',
-  PR: 'https://www.sintegra.fazenda.pr.gov.br/',
-  PE: 'https://dfe-portal.svrs.rs.gov.br/Nfe/Ccc',
-  PI: 'https://dfe-portal.svrs.rs.gov.br/Nfe/Ccc',
-  RJ: 'https://sucief-sincad-web.fazenda.rj.gov.br/',
-  RN: 'https://uvt.sefaz.rn.gov.br/',
-  RS: 'https://www.sefaz.rs.gov.br/',
-  RO: 'https://portalcontribuinte.sefin.ro.gov.br/',
-  RR: 'https://portalweb.sefaz.rr.gov.br/',
-  SC: 'https://sat.sef.sc.gov.br/',
-  SP: 'https://www.cadesp.fazenda.sp.gov.br/',
-  SE: 'https://security.sefaz.se.gov.br/',
-  TO: 'https://sintegra.sefaz.to.gov.br/',
-};
+type RetornoOficialIe = Awaited<ReturnType<typeof consultarCadastroContribuinteSefaz>>;
 
 function texto(valor: unknown): string | null {
   if (typeof valor !== 'string' && typeof valor !== 'number') return null;
@@ -122,6 +102,17 @@ export function validarCnpjFornecedor(cnpj: string): boolean {
   return cnpj[12] === String(dig1) && cnpj[13] === String(dig2);
 }
 
+async function consultarOficialIe(uf: string, cnpj: string): Promise<RetornoOficialIe> {
+  if (usarProxyFiscal()) {
+    return chamarFiscalWorker<RetornoOficialIe>('consultarIeFornecedorOficial', { uf, cnpj });
+  }
+  return consultarCadastroContribuinteSefaz(uf, cnpj);
+}
+
+function ufValida(uf: string): boolean {
+  return UFS_BRASIL.includes(uf as (typeof UFS_BRASIL)[number]);
+}
+
 function montarEndereco(estabelecimento: NonNullable<CnpjWsResposta['estabelecimento']>): string | null {
   const partes = [
     texto(estabelecimento.tipo_logradouro),
@@ -133,15 +124,26 @@ function montarEndereco(estabelecimento: NonNullable<CnpjWsResposta['estabelecim
   return partes.join(', ') || null;
 }
 
-export async function consultarIeFornecedorPublica(cnpj: string, ufFiltro?: string): Promise<ConsultaIeFornecedor> {
+export async function consultarIeFornecedor(cnpj: string, ufFiltro?: string): Promise<ConsultaIeFornecedor> {
   const cnpjLimpo = limparCnpjFornecedor(cnpj);
   if (!validarCnpjFornecedor(cnpjLimpo)) {
     throw new Error('CNPJ invalido. Verifique os digitos.');
   }
 
   const uf = ufFiltro?.trim().toUpperCase();
-  if (uf && !UFS_BRASIL.includes(uf as (typeof UFS_BRASIL)[number])) {
+  if (uf && !ufValida(uf)) {
     throw new Error('UF invalida.');
+  }
+
+  let retornoOficial: RetornoOficialIe | null = null;
+  let erroOficial: string | null = null;
+
+  if (uf) {
+    try {
+      retornoOficial = await consultarOficialIe(uf, cnpjLimpo);
+    } catch (error: unknown) {
+      erroOficial = (error as Error).message || 'Falha na consulta oficial SEFAZ.';
+    }
   }
 
   const baseUrl = process.env.CNPJ_WS_PUBLICA_URL || 'https://publica.cnpj.ws/cnpj';
@@ -167,7 +169,7 @@ export async function consultarIeFornecedorPublica(cnpj: string, ufFiltro?: stri
     ? estabelecimento.inscricoes_estaduais
     : [];
 
-  const inscricoesEstaduais = inscricoes
+  const inscricoesPublicas = inscricoes
     .map((ie) => ({
       inscricao: texto(ie.inscricao_estadual) ?? '',
       uf: texto(ie.estado?.sigla) ?? '',
@@ -177,25 +179,51 @@ export async function consultarIeFornecedorPublica(cnpj: string, ufFiltro?: stri
     }))
     .filter((ie) => ie.inscricao && (!uf || ie.uf === uf));
 
-  const cnaeId = texto(estabelecimento.atividade_principal?.id);
-  const cnaeDescricao = texto(estabelecimento.atividade_principal?.descricao);
+  const inscricoesOficiais = (retornoOficial?.cadastros ?? []).map((cad) => ({
+    inscricao: cad.ie,
+    uf: cad.uf,
+    estado: cad.uf,
+    ativo: cad.situacao === 'Habilitado',
+    atualizadoEm: cad.dataUltimaSituacao ?? retornoOficial?.consultadoEm ?? null,
+    situacao: cad.situacao,
+    regimeApuracao: cad.regimeApuracao,
+  }));
+  const inscricoesEstaduais = inscricoesOficiais.length > 0 ? inscricoesOficiais : inscricoesPublicas;
+
+  const cadastroOficial = retornoOficial?.cadastros[0] ?? null;
+  const cnaeId = cadastroOficial?.cnae ?? texto(estabelecimento.atividade_principal?.id);
+  const cnaeDescricao = cadastroOficial?.cnae ? null : texto(estabelecimento.atividade_principal?.descricao);
+  const fonte = inscricoesOficiais.length > 0
+    ? 'SEFAZ NFeConsultaCadastro'
+    : retornoOficial?.cStat
+      ? `SEFAZ sem IE (${retornoOficial.cStat}) + CNPJ.ws publica`
+      : 'CNPJ.ws publica';
 
   return {
     cnpj: texto(estabelecimento.cnpj) ?? cnpjLimpo,
-    razaoSocial: texto(dados.razao_social) ?? 'Razao social nao informada',
-    nomeFantasia: texto(estabelecimento.nome_fantasia),
+    razaoSocial: cadastroOficial?.razaoSocial ?? texto(dados.razao_social) ?? 'Razao social nao informada',
+    nomeFantasia: cadastroOficial?.nomeFantasia ?? texto(estabelecimento.nome_fantasia),
     situacaoCadastral: texto(estabelecimento.situacao_cadastral),
     uf: texto(estabelecimento.estado?.sigla),
     cidade: texto(estabelecimento.cidade?.nome),
     cep: texto(estabelecimento.cep),
-    endereco: montarEndereco(estabelecimento),
+    endereco: cadastroOficial?.endereco ?? montarEndereco(estabelecimento),
     cnaePrincipal: [cnaeId, cnaeDescricao].filter(Boolean).join(' - ') || null,
-    dataInicioAtividade: texto(estabelecimento.data_inicio_atividade),
-    atualizadoEm: texto(dados.atualizado_em),
+    dataInicioAtividade: cadastroOficial?.dataInicioAtividade ?? texto(estabelecimento.data_inicio_atividade),
+    atualizadoEm: retornoOficial?.consultadoEm ?? texto(dados.atualizado_em),
     inscricoesEstaduais,
-    fonte: 'CNPJ.ws publica',
+    fonte,
     aviso: inscricoesEstaduais.length === 0
-      ? 'Nenhuma IE retornada para este CNPJ/UF. Confirme no portal oficial da SEFAZ quando a operacao exigir validacao fiscal.'
+      ? (retornoOficial
+          ? `${retornoOficial.xMotivo || 'SEFAZ nao retornou IE para este CNPJ/UF.'} Confirme no CCC/portal oficial se a operacao exigir validacao fiscal.`
+          : `A base publica nao retornou IE para este CNPJ/UF.${erroOficial ? ` Consulta oficial nao concluida: ${erroOficial}` : ''}`)
       : null,
+    consultaOficial: {
+      tentou: Boolean(uf),
+      ok: Boolean(retornoOficial && inscricoesOficiais.length > 0),
+      mensagem: retornoOficial?.xMotivo ?? erroOficial,
+    },
   };
 }
+
+export const consultarIeFornecedorPublica = consultarIeFornecedor;

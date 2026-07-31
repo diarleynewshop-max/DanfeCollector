@@ -1,10 +1,11 @@
 'use client';
 
 import { FormEvent, useMemo, useState } from 'react';
-import { LINKS_SEFAZ_IE, UFS_BRASIL, type ConsultaIeFornecedor } from '@/lib/ieFornecedor';
+import type { ConsultaIeFornecedor } from '@/lib/ieFornecedor';
+import { LINK_CCC_SEFAZ, LINKS_SEFAZ_IE, UFS_BRASIL } from '@/lib/ieFornecedorConstantes';
 
 type ApiResposta =
-  | { success: true; consulta: ConsultaIeFornecedor; portalOficial: string | null }
+  | { success: true; consulta: ConsultaIeFornecedor; portalOficial: string | null; portalCcc: string | null }
   | { success: false; message: string };
 
 function formatarCnpj(valor: string): string {
@@ -35,9 +36,11 @@ export default function FornecedorIeConsulta() {
   const [erro, setErro] = useState<string | null>(null);
   const [resultado, setResultado] = useState<ConsultaIeFornecedor | null>(null);
   const [portalOficial, setPortalOficial] = useState<string | null>(null);
+  const [portalCcc, setPortalCcc] = useState<string | null>(null);
 
   const cnpjLimpo = useMemo(() => cnpj.replace(/\D/g, ''), [cnpj]);
   const linkPortal = portalOficial || (uf ? LINKS_SEFAZ_IE[uf] : null);
+  const linkCcc = portalCcc || LINK_CCC_SEFAZ;
 
   async function consultar(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -45,6 +48,7 @@ export default function FornecedorIeConsulta() {
     setErro(null);
     setResultado(null);
     setPortalOficial(null);
+    setPortalCcc(null);
 
     try {
       const params = new URLSearchParams({ cnpj: cnpjLimpo });
@@ -56,6 +60,7 @@ export default function FornecedorIeConsulta() {
 
       setResultado(json.consulta);
       setPortalOficial(json.portalOficial);
+      setPortalCcc(json.portalCcc);
     } catch (error: unknown) {
       setErro((error as Error).message || 'Erro ao consultar IE.');
     } finally {
@@ -74,14 +79,24 @@ export default function FornecedorIeConsulta() {
             </p>
           </div>
           {linkPortal && (
-            <a
-              href={linkPortal}
-              target="_blank"
-              rel="noreferrer"
-              className="rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-xs font-bold text-[var(--ink)] hover:bg-[var(--surface-2)]"
-            >
-              Abrir SEFAZ oficial
-            </a>
+            <div className="flex flex-wrap gap-2">
+              <a
+                href={linkCcc}
+                target="_blank"
+                rel="noreferrer"
+                className="rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-xs font-bold text-[var(--ink)] hover:bg-[var(--surface-2)]"
+              >
+                Abrir CCC oficial
+              </a>
+              <a
+                href={linkPortal}
+                target="_blank"
+                rel="noreferrer"
+                className="rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-xs font-bold text-[var(--ink)] hover:bg-[var(--surface-2)]"
+              >
+                Abrir SEFAZ/Sintegra
+              </a>
+            </div>
           )}
         </div>
 
@@ -138,6 +153,11 @@ export default function FornecedorIeConsulta() {
             <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-right">
               <p className="text-[11px] font-bold uppercase text-[var(--ink-mut)]">Fonte</p>
               <p className="text-sm font-bold text-[var(--ink)]">{resultado.fonte}</p>
+              {resultado.consultaOficial.tentou && (
+                <p className="mt-1 text-[11px] text-[var(--ink-mut)]">
+                  {resultado.consultaOficial.ok ? 'Oficial SEFAZ OK' : resultado.consultaOficial.mensagem || 'Oficial sem IE'}
+                </p>
+              )}
             </div>
           </div>
 
@@ -162,6 +182,7 @@ export default function FornecedorIeConsulta() {
                     <th className="px-3 py-2 font-bold">UF</th>
                     <th className="px-3 py-2 font-bold">Estado</th>
                     <th className="px-3 py-2 font-bold">Status</th>
+                    <th className="px-3 py-2 font-bold">Regime</th>
                     <th className="px-3 py-2 font-bold">Atualizacao</th>
                   </tr>
                 </thead>
@@ -173,15 +194,16 @@ export default function FornecedorIeConsulta() {
                       <td className="px-3 py-2 text-[var(--ink-mut)]">{ie.estado || '-'}</td>
                       <td className="px-3 py-2">
                         <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${ie.ativo ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'}`}>
-                          {ie.ativo ? 'Ativa' : 'Inativa'}
+                          {ie.situacao || (ie.ativo ? 'Ativa' : 'Inativa')}
                         </span>
                       </td>
+                      <td className="px-3 py-2 text-[var(--ink-mut)]">{ie.regimeApuracao || '-'}</td>
                       <td className="px-3 py-2 text-[var(--ink-mut)]">{dataCurta(ie.atualizadoEm)}</td>
                     </tr>
                   ))}
                   {resultado.inscricoesEstaduais.length === 0 && (
                     <tr>
-                      <td colSpan={5} className="px-3 py-6 text-center text-sm text-[var(--ink-mut)]">
+                      <td colSpan={6} className="px-3 py-6 text-center text-sm text-[var(--ink-mut)]">
                         Nenhuma inscricao estadual retornada para este filtro.
                       </td>
                     </tr>

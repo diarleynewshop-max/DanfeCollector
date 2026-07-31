@@ -8,6 +8,7 @@ import {
   sincronizarCnpjsAtivosInterno,
   sincronizarNotasInterno,
 } from '@/lib/actions';
+import { consultarCadastroContribuinteSefaz } from '@/lib/sefaz/cadastro';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -95,6 +96,13 @@ export async function POST(req: Request) {
         return NextResponse.json(
           await atualizarSitramPorChavesInterno(strings(payload, 'chavesEntrada'), payload.revalidarPagina !== false)
         );
+
+      case 'consultarIeFornecedorOficial': {
+        const uf = String(payload.uf ?? '').trim().toUpperCase();
+        const cnpj = String(payload.cnpj ?? '').replace(/\D/g, '');
+        if (!uf || cnpj.length !== 14) throw new Error('UF ou CNPJ invalido para consulta de IE.');
+        return NextResponse.json(await consultarCadastroContribuinteSefaz(uf, cnpj));
+      }
 
       default:
         return NextResponse.json({ success: false, message: 'Acao fiscal desconhecida.' }, { status: 400 });
