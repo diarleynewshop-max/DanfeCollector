@@ -17,6 +17,24 @@ CREATE TABLE IF NOT EXISTS "ApiKey" (
 
 CREATE INDEX IF NOT EXISTS "ApiKey_ativo_idx" ON "ApiKey"("ativo");
 
+-- Esta tabela e usada somente pelo servidor Next/Prisma. Nao deve ficar
+-- acessivel pela API REST do Supabase.
+ALTER TABLE "ApiKey" DISABLE ROW LEVEL SECURITY;
+
+REVOKE ALL ON TABLE "ApiKey" FROM PUBLIC;
+REVOKE ALL ON TABLE "ApiKey" FROM anon;
+REVOKE ALL ON TABLE "ApiKey" FROM authenticated;
+REVOKE ALL ON TABLE "ApiKey" FROM danfe_api;
+REVOKE ALL ON SEQUENCE "ApiKey_id_seq" FROM PUBLIC;
+REVOKE ALL ON SEQUENCE "ApiKey_id_seq" FROM anon;
+REVOKE ALL ON SEQUENCE "ApiKey_id_seq" FROM authenticated;
+REVOKE ALL ON SEQUENCE "ApiKey_id_seq" FROM danfe_api;
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "ApiKey" TO danfe_prisma;
+GRANT USAGE, SELECT, UPDATE ON SEQUENCE "ApiKey_id_seq" TO danfe_prisma;
+GRANT ALL PRIVILEGES ON TABLE "ApiKey" TO service_role;
+GRANT ALL PRIVILEGES ON SEQUENCE "ApiKey_id_seq" TO service_role;
+
 DO $$
 BEGIN
   IF NOT EXISTS (
