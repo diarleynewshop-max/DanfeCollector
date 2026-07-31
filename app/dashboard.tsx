@@ -2476,20 +2476,28 @@ export default function Dashboard({
 
                   <div className="grid grid-cols-1 gap-x-2 gap-y-2 lg:grid-cols-[1.2fr_3.6fr_1.55fr_1fr_1.2fr]">
                     <CampoFiltroNotas label="Fornecedor" className="lg:col-span-2">
-                      <input
+                      <select
                         value={filtroEmitente}
                         onChange={(e) => setFiltroEmitente(e.target.value)}
-                        list="sugestoes-emitente"
                         className={CAMPO_FILTRO_NOTAS}
-                      />
+                      >
+                        <option value="">Todos os fornecedores</option>
+                        {sugestoesEmitente.map((s) => (
+                          <option key={s} value={s}>{s}</option>
+                        ))}
+                      </select>
                     </CampoFiltroNotas>
                     <CampoFiltroNotas label="Destinatario">
-                      <input
+                      <select
                         value={filtroDestinatario}
                         onChange={(e) => setFiltroDestinatario(e.target.value)}
-                        list="sugestoes-destinatario"
                         className={CAMPO_FILTRO_NOTAS}
-                      />
+                      >
+                        <option value="">Todos os destinatarios</option>
+                        {sugestoesDestinatario.map((s) => (
+                          <option key={s} value={s}>{s}</option>
+                        ))}
+                      </select>
                     </CampoFiltroNotas>
                     <CampoFiltroNotas label="Periodo(Data de entrada)">
                       <input type="date" value={filtroDataEntradaInicio} onChange={(e) => setFiltroDataEntradaInicio(e.target.value)} className={CAMPO_FILTRO_NOTAS} />
@@ -2540,17 +2548,6 @@ export default function Dashboard({
                     </CampoFiltroNotas>
                   </div>
 
-                  <datalist id="sugestoes-emitente">
-                    {sugestoesEmitente.map((s) => (
-                      <option key={s} value={s} />
-                    ))}
-                  </datalist>
-                  <datalist id="sugestoes-destinatario">
-                    {sugestoesDestinatario.map((s) => (
-                      <option key={s} value={s} />
-                    ))}
-                  </datalist>
-
                   <div className="grid gap-4 border-t border-slate-200 pt-2 lg:grid-cols-[1.5fr_.75fr_1fr_1fr]">
                     <GrupoCheckboxFiltro titulo="Situacoes" opcoes={SITUACOES_NOTA_OPCOES} selecionados={filtroSituacoes} onToggle={toggleFiltroSituacaoNota} />
                     <GrupoCheckboxFiltro titulo="Origem" opcoes={ORIGEM_NOTA_OPCOES} selecionados={filtroOrigens} onToggle={toggleFiltroOrigemNota} />
@@ -2598,18 +2595,16 @@ export default function Dashboard({
                       />
                       <CampoFiltroNotas label="Excluir fornecedor">
                         <div className="flex gap-1.5">
-                          <input
+                          <select
                             value={excluirEmitenteInput}
                             onChange={(e) => setExcluirEmitenteInput(e.target.value)}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter') {
-                                e.preventDefault();
-                                adicionarExclusaoEmitente();
-                              }
-                            }}
-                            list="sugestoes-emitente"
                             className={CAMPO_FILTRO_NOTAS}
-                          />
+                          >
+                            <option value="">Selecione fornecedor</option>
+                            {sugestoesEmitente.map((s) => (
+                              <option key={s} value={s}>{s}</option>
+                            ))}
+                          </select>
                           <button
                             type="button"
                             onClick={adicionarExclusaoEmitente}
