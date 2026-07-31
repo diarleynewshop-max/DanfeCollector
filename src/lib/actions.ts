@@ -53,11 +53,29 @@ import {
 } from './sitram/pagamento-icms-portal';
 import { salvarArquivoComFallback, apagarArquivo, mimeAceito, TAMANHO_MAX } from './anexos/storage';
 import { chamarFiscalWorker, usarProxyFiscal } from './fiscalProxy';
+import {
+  gerarApiKey as gerarApiKeyInterno,
+  listarApiKeys as listarApiKeysInterno,
+  revogarApiKey as revogarApiKeyInterno,
+} from './apiKeys';
+export type { ApiKeyCriada, ApiKeyResumo } from './apiKeys';
 
 export interface ActionResult {
   success: boolean;
   message: string;
   data?: string;
+}
+
+export async function listarApiKeys() {
+  return listarApiKeysInterno();
+}
+
+export async function gerarApiKey(formData: FormData) {
+  return gerarApiKeyInterno(String(formData.get('nome') ?? ''));
+}
+
+export async function revogarApiKey(id: number): Promise<ActionResult> {
+  return revogarApiKeyInterno(id);
 }
 
 export type NotaRelatorio = {

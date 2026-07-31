@@ -6,6 +6,7 @@ import {
   listarAnosDisponiveis,
   contarNotasTotal,
   obterResumoInicio,
+  listarApiKeys,
 } from '@/lib/actions';
 import { obterUsuarioAtual } from '@/lib/usuarios/auth';
 import Dashboard from './dashboard';
@@ -23,13 +24,15 @@ export default async function Page({
   const paginaAtual = Math.max(1, Math.trunc(Number(params.page) || 1));
   const porPagina = 100;
 
-  const [cnpjs, notas, notasAlerta, anosDisponiveis, totalNotas, resumoInicio] = await Promise.all([
+  const apiKeysPromise = usuario.admin ? listarApiKeys() : Promise.resolve([]);
+  const [cnpjs, notas, notasAlerta, anosDisponiveis, totalNotas, resumoInicio, apiKeys] = await Promise.all([
     listarCnpjs(),
     listarNotas(paginaAtual, porPagina),
     listarNotasAlertaDae(),
     listarAnosDisponiveis(),
     contarNotasTotal(),
     obterResumoInicio(),
+    apiKeysPromise,
   ]);
   return (
     <Dashboard
@@ -42,6 +45,7 @@ export default async function Page({
       paginaAtual={paginaAtual}
       porPagina={porPagina}
       resumoInicio={resumoInicio}
+      apiKeys={apiKeys}
     />
   );
 }

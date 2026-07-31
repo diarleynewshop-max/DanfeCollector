@@ -40,6 +40,7 @@ model Usuario {
   createdAt        DateTime      @default(now())
   updatedAt        DateTime      @updatedAt
   cnpjs            UsuarioCnpj[]
+  apiKeys          ApiKey[]
 }
 
 model UsuarioCnpj {
@@ -166,4 +167,20 @@ model Anexo {
 
   @@index([notaId])
   @@index([daeCompartilhadoId])
+}
+
+model ApiKey {
+  id              Int       @id @default(autoincrement())
+  nome            String
+  prefixo         String    @unique
+  tokenHash       String    @unique
+  ativo           Boolean   @default(true)
+  ultimoUsoEm     DateTime?
+  criadaPorId     Int?
+  criadaPorLogin  String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  criadaPor       Usuario?  @relation(fields: [criadaPorId], references: [id], onDelete: SetNull)
+
+  @@index([ativo])
 }

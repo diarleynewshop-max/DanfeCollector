@@ -33,7 +33,12 @@ import {
   consultarPagamentoIcmsLote,
   listarChavesSitramParaAtualizacao,
   atualizarTransporteNotasExistentes,
+  listarApiKeys,
+  gerarApiKey,
+  revogarApiKey,
   type ActionResult,
+  type ApiKeyCriada,
+  type ApiKeyResumo,
   type CertificadoComStatus,
   type ResultadoImportChave,
   type ResultadoManifestoLote,
@@ -227,6 +232,7 @@ interface DashboardProps {
   paginaAtual: number;
   porPagina: number;
   resumoInicio: ResumoInicio;
+  apiKeys: ApiKeyResumo[];
 }
 
 const CACHE_DANFE_PREFIX = 'danfe-cache:v2:';
@@ -487,6 +493,7 @@ export default function Dashboard({
   paginaAtual,
   porPagina,
   resumoInicio,
+  apiKeys: apiKeysIniciais,
 }: DashboardProps) {
   const router = useRouter();
   const { idioma, setIdioma, t } = useIdioma();
@@ -524,6 +531,9 @@ export default function Dashboard({
   const [usuariosAdmin, setUsuariosAdmin] = useState<UsuarioAdminResumo[] | null>(null);
   const [carregandoUsuarios, setCarregandoUsuarios] = useState(false);
   const [usuarioEditando, setUsuarioEditando] = useState<UsuarioAdminResumo | null>(null);
+  const [apiKeys, setApiKeys] = useState<ApiKeyResumo[]>(apiKeysIniciais);
+  const [apiTokenGerado, setApiTokenGerado] = useState<string | null>(null);
+  const [apiOrigem, setApiOrigem] = useState('');
 
   // Importação por chave
   const [mostrarImport, setMostrarImport] = useState(false);
@@ -533,6 +543,10 @@ export default function Dashboard({
   const [importProgresso, setImportProgresso] = useState<{ feito: number; total: number } | null>(null);
   const [importResumo, setImportResumo] = useState<Record<string, number> | null>(null);
   const [pastaXml, setPastaXml] = useState('');
+
+  useEffect(() => {
+    setApiOrigem(window.location.origin);
+  }, []);
 
   // Consulta SITRAM por NF-e ou MDF-e
   const [mostrarSitram, setMostrarSitram] = useState(false);
@@ -1622,6 +1636,34 @@ export default function Dashboard({
     setSelecionadas(todasSelecionadas ? new Set() : new Set(notasManifestaveis.map((n) => n.id)));
   }
 
+  function handleGerarApiKey(formData: FormData) {
+    startTransition(async () => {
+      const res: ApiKeyCriada = await gerarApiKey(formData);
+      setStatus(res);
+      if (res.success) {
+        setApiTokenGerado(res.token ?? null);
+        setApiKeys(await listarApiKeys());
+      }
+    });
+  }
+
+  function handleRevogarApiKey(id: number) {
+    startTransition(async () => {
+      const res = await revogarApiKey(id);
+      setStatus(res);
+      if (res.success) setApiKeys(await listarApiKeys());
+    });
+  }
+
+  async function copiarTexto(valor: string) {
+    try {
+      await navigator.clipboard.writeText(valor);
+      setStatus({ success: true, message: 'Copiado.' });
+    } catch {
+      setStatus({ success: false, message: 'Nao consegui copiar automaticamente.' });
+    }
+  }
+
   function toggleSelecionarVisiveis() {
     setSelecionadas((prev) => {
       const next = new Set(prev);
@@ -1978,6 +2020,120 @@ export default function Dashboard({
               >
                 {t('checkCertificate')}
               </button>
+            </div>
+          </div>
+        )}
+
+        {podeAdministrar && secaoAtual === 'configuracao' && (
+          <div className="mb-6 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-5 shadow-sm">
+            <div className="mb-4 flex flex-col gap-3 border-b border-[var(--border)] pb-3 md:flex-row md:items-start md:justify-between">
+              <div>
+                <h2 className="text-base font-bold text-[var(--ink)]">API para terceiros</h2>
+                <p className="mt-1 text-xs text-[var(--ink-mut)]">
+                  Consulta NF, status, XML, ICMS e DAE por chave de acesso.
+                </p>
+              </div>
+              {apiOrigem && (
+                <button
+                  type="button"
+                  onClick={() => copiarTexto(`${apiOrigem}/api/v1/notas/{chave}`)}
+                  className="rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-xs font-bold text-[var(--ink)] hover:bg-[var(--surface-2)]"
+                >
+                  Copiar link base
+                </button>
+              )}
+            </div>
+
+            <form action={handleGerarApiKey} className="grid gap-3 md:grid-cols-[1fr_auto]">
+              <input
+                name="nome"
+                placeholder="Nome da integração. Ex: Sistema financeiro"
+                className="rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)] placeholder-[var(--ink-mut)] outline-none focus:ring-2 focus:ring-[var(--border-strong)]"
+              />
+              <button
+                type="submit"
+                disabled={pending}
+                className="rounded-lg bg-[var(--accent)] px-4 py-2 text-sm font-bold text-[var(--accent-ink)] hover:brightness-150 disabled:opacity-50"
+              >
+                Gerar chave
+              </button>
+            </form>
+
+            {apiTokenGerado && (
+              <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-emerald-950">
+                <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                  <div className="min-w-0">
+                    <p className="text-sm font-black">Chave criada. Copie agora.</p>
+                    <p className="mt-1 break-all font-mono text-xs">{apiTokenGerado}</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => copiarTexto(apiTokenGerado)}
+                    className="rounded-lg bg-emerald-700 px-3 py-2 text-xs font-bold text-white hover:bg-emerald-800"
+                  >
+                    Copiar chave
+                  </button>
+                </div>
+              </div>
+            )}
+
+            <div className="mt-4 grid gap-3 lg:grid-cols-2">
+              <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-4">
+                <p className="text-xs font-bold uppercase tracking-wide text-[var(--ink-mut)]">Consulta JSON</p>
+                <code className="mt-2 block break-all text-xs text-[var(--ink)]">
+                  GET {apiOrigem || 'https://seu-dominio.com'}/api/v1/notas/CHAVE_NFE
+                </code>
+                <p className="mt-2 text-xs text-[var(--ink-mut)]">Use `?xml=1` se quiser o XML junto no JSON.</p>
+              </div>
+              <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-4">
+                <p className="text-xs font-bold uppercase tracking-wide text-[var(--ink-mut)]">XML direto</p>
+                <code className="mt-2 block break-all text-xs text-[var(--ink)]">
+                  GET {apiOrigem || 'https://seu-dominio.com'}/api/v1/notas/CHAVE_NFE/xml
+                </code>
+                <p className="mt-2 text-xs text-[var(--ink-mut)]">Autentique com `Authorization: Bearer SUA_CHAVE` ou `x-api-key`.</p>
+              </div>
+            </div>
+
+            <div className="mt-4 overflow-x-auto rounded-xl border border-[var(--border)]">
+              <table className="w-full text-left text-sm">
+                <thead className="bg-[var(--surface-2)] text-xs uppercase tracking-wide text-[var(--ink-mut)]">
+                  <tr>
+                    <th className="px-3 py-2 font-bold">Nome</th>
+                    <th className="px-3 py-2 font-bold">Prefixo</th>
+                    <th className="px-3 py-2 font-bold">Criada</th>
+                    <th className="px-3 py-2 font-bold">Ultimo uso</th>
+                    <th className="px-3 py-2 font-bold">Status</th>
+                    <th className="px-3 py-2 font-bold"></th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[var(--border)]">
+                  {apiKeys.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} className="px-3 py-4 text-[var(--ink-mut)]">Nenhuma chave criada.</td>
+                    </tr>
+                  ) : apiKeys.map((key) => (
+                    <tr key={key.id} className="hover:bg-[var(--surface-2)]">
+                      <td className="px-3 py-2 font-semibold text-[var(--ink)]">{key.nome}</td>
+                      <td className="px-3 py-2 font-mono text-xs text-[var(--ink-mut)]">{key.prefixo}</td>
+                      <td className="px-3 py-2 text-xs text-[var(--ink-mut)]">{data(key.createdAt)}</td>
+                      <td className="px-3 py-2 text-xs text-[var(--ink-mut)]">{key.ultimoUsoEm ? dataHora(key.ultimoUsoEm) : 'Nunca'}</td>
+                      <td className="px-3 py-2"><Badge tone={key.ativo ? 'green' : 'gray'}>{key.ativo ? 'ATIVA' : 'REVOGADA'}</Badge></td>
+                      <td className="px-3 py-2 text-right">
+                        {key.ativo && (
+                          <button
+                            type="button"
+                            onClick={() => handleRevogarApiKey(key.id)}
+                            disabled={pending}
+                            className="rounded-lg border border-red-200 px-3 py-1.5 text-xs font-bold text-red-700 hover:bg-red-50 disabled:opacity-50"
+                          >
+                            Revogar
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </div>
         )}
