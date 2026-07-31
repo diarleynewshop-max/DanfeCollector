@@ -1572,10 +1572,15 @@ export default function Dashboard({
   // Manifestação em lote
   const [selecionadas, setSelecionadas] = useState<Set<number>>(new Set());
   const [manifestoLoteProgresso, setManifestoLoteProgresso] = useState<{ feito: number; total: number } | null>(null);
-  const [manifestoLoteResumo, setManifestoLoteResumo] = useState<Record<string, number> | null>(null);
+  const [manifestoLoteResumoState, setManifestoLoteResumo] = useState<Record<string, number> | null>(null);
   const [manifestoLoteErros, setManifestoLoteErros] = useState<Array<{ chave: string; detalhe: string }> | null>(null);
   const [consultandoPagamentoLote, setConsultandoPagamentoLote] = useState(false);
   const [pagamentoLoteResultado, setPagamentoLoteResultado] = useState<ResultadoPagamentoIcmsLote | null>(null);
+  const [painelPagamentoLoteAberto, setPainelPagamentoLoteAberto] = useState(true);
+  const [painelManifestoLoteAberto, setPainelManifestoLoteAberto] = useState(true);
+  const manifestoLoteResumo = manifestoLoteResumoState ?? {};
+  const manifestoLoteTemResumo = manifestoLoteResumoState !== null;
+  const manifestoLoteErrosLista = manifestoLoteErros ?? [];
 
   const notasPagamentoIcmsElegiveis = useMemo(
     () => notasFiltradas.filter((nota) => notaElegivelConsultaPagamentoIcms(nota)),
@@ -3039,7 +3044,129 @@ export default function Dashboard({
               <span>Total: <strong className="text-[var(--ink)]">{moeda(totalFiltrado)}</strong></span>
             </div>
 
-            <div className="mb-3 p-3 bg-sky-50 border border-sky-200 rounded-xl flex flex-wrap items-center gap-3">
+            <div className="mb-3 grid grid-cols-1 gap-3 xl:grid-cols-2">
+              <section className="rounded-xl border border-sky-200 bg-sky-50 p-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="min-w-[220px] flex-1">
+                    <p className="text-sm font-bold text-sky-900">Consulta pagamento ICMS em lote</p>
+                  </div>
+                  <Badge tone={notasPagamentoIcmsElegiveis.length > 0 ? 'sky' : 'gray'}>
+                    {notasPagamentoIcmsElegiveis.length} visiveis para consultar
+                  </Badge>
+                  <button
+                    type="button"
+                    onClick={() => setPainelPagamentoLoteAberto((valor) => !valor)}
+                    className="grid h-7 w-7 place-items-center rounded-md border border-sky-300 bg-white text-sm font-black text-sky-800 hover:bg-sky-100"
+                    title={painelPagamentoLoteAberto ? 'Minimizar' : 'Maximizar'}
+                    aria-label={painelPagamentoLoteAberto ? 'Minimizar consulta pagamento ICMS' : 'Maximizar consulta pagamento ICMS'}
+                  >
+                    {painelPagamentoLoteAberto ? '-' : '+'}
+                  </button>
+                </div>
+                {painelPagamentoLoteAberto && (
+                  <div className="mt-2 flex flex-wrap items-center gap-3">
+                    <p className="min-w-[220px] flex-1 text-xs text-sky-700">
+                      Consulta NF com DAE no SITRAM. DAE pago antigo consulta uma vez e fica gravado; DAE aberto pode reconsultar.
+                    </p>
+                    <button
+                      onClick={handleConsultarPagamentoIcmsLote}
+                      disabled={consultandoPagamentoLote || pending}
+                      className="bg-sky-600 hover:bg-sky-700 text-white px-4 py-1.5 rounded-lg text-sm font-semibold disabled:opacity-50"
+                    >
+                      {consultandoPagamentoLote ? 'Consultando...' : 'Consultar pagamento em lote'}
+                    </button>
+                    {pagamentoLoteResultado && (
+                      <div className="w-full flex flex-wrap gap-2 text-xs">
+                        <Badge tone="blue">{pagamentoLoteResultado.processadas} processada(s)</Badge>
+                        <Badge tone="green">{pagamentoLoteResultado.pagas} paga(s)</Badge>
+                        <Badge tone="orange">{pagamentoLoteResultado.emAberto} em aberto</Badge>
+                        {(pagamentoLoteResultado.notasComSuspeitaDuplicidade ?? 0) > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setFiltroDaeSitram('duplicidade');
+                              setMostrarFiltros(true);
+                              setPaginaCliente(1);
+                            }}
+                            className="rounded-full bg-red-100 px-2 py-1 text-[10px] font-bold tracking-wide text-red-700 hover:bg-red-200"
+                          >
+                            Ver {pagamentoLoteResultado.notasComSuspeitaDuplicidade} suspeita(s) duplicidade
+                          </button>
+                        )}
+                        {pagamentoLoteResultado.erros > 0 && <Badge tone="red">{pagamentoLoteResultado.erros} erro(s)</Badge>}
+                        {pagamentoLoteResultado.limiteAplicado && <Badge tone="amber">limite aplicado</Badge>}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </section>
+
+              <section className="rounded-xl border border-amber-200 bg-amber-50 p-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="min-w-[220px] flex-1">
+                    <p className="text-sm font-bold text-amber-900">Manifestacao em lote</p>
+                  </div>
+                  <Badge tone={notasManifestaveis.length > 0 ? 'amber' : 'gray'}>
+                    {notasManifestaveis.length} pendente(s)
+                  </Badge>
+                  <button
+                    type="button"
+                    onClick={() => setPainelManifestoLoteAberto((valor) => !valor)}
+                    className="grid h-7 w-7 place-items-center rounded-md border border-amber-300 bg-white text-sm font-black text-amber-800 hover:bg-amber-100"
+                    title={painelManifestoLoteAberto ? 'Minimizar' : 'Maximizar'}
+                    aria-label={painelManifestoLoteAberto ? 'Minimizar manifestacao em lote' : 'Maximizar manifestacao em lote'}
+                  >
+                    {painelManifestoLoteAberto ? '-' : '+'}
+                  </button>
+                </div>
+                {painelManifestoLoteAberto && (
+                  <div className="mt-2 flex flex-wrap items-center gap-3">
+                    <label className="flex min-w-[220px] flex-1 items-center gap-2 text-sm text-amber-800 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={todasSelecionadas}
+                        onChange={toggleSelecionarTodas}
+                        disabled={notasManifestaveis.length === 0}
+                        className="w-4 h-4"
+                      />
+                      Selecionar todas pendentes de manifestacao ({notasManifestaveis.length})
+                    </label>
+                    <button
+                      onClick={handleManifestarLote}
+                      disabled={selecionadas.size === 0 || (!!manifestoLoteProgresso && manifestoLoteProgresso.feito < manifestoLoteProgresso.total)}
+                      className="bg-amber-500 hover:bg-amber-600 text-white px-4 py-1.5 rounded-lg text-sm font-medium disabled:opacity-50"
+                    >
+                      {manifestoLoteProgresso && manifestoLoteProgresso.feito < manifestoLoteProgresso.total
+                    ? `Manifestando... ${manifestoLoteProgresso?.feito ?? 0}/${manifestoLoteProgresso?.total ?? 0}`
+                        : `Manifestar selecionadas (${selecionadas.size})`}
+                    </button>
+                    {manifestoLoteTemResumo && (
+                      <div className="flex w-full flex-col gap-2">
+                        <div className="flex flex-wrap gap-2 text-xs">
+                          {manifestoLoteResumo['manifestada'] ? <Badge tone="green">{manifestoLoteResumo['manifestada']} manifestada(s)</Badge> : null}
+                          {manifestoLoteResumo['ja-manifestada'] ? <Badge tone="gray">{manifestoLoteResumo['ja-manifestada']} ja manifestada(s)</Badge> : null}
+                          {manifestoLoteResumo['completa'] ? <Badge tone="blue">{manifestoLoteResumo['completa']} ja completa(s)</Badge> : null}
+                          {manifestoLoteResumo['erro'] ? <Badge tone="orange">{manifestoLoteResumo['erro']} erro(s)</Badge> : null}
+                        </div>
+                        {manifestoLoteErrosLista.length > 0 && (
+                          <div className="text-xs bg-red-50 border border-red-200 rounded-lg p-3 max-h-48 overflow-y-auto space-y-1">
+                            <p className="font-semibold text-red-700 mb-1">Detalhes dos erros:</p>
+                            {manifestoLoteErrosLista.map((e, i) => (
+                              <div key={i} className="text-red-600">
+                                <span className="font-mono text-red-400">{e.chave.slice(0, 8)}...{e.chave.slice(-6)}</span>
+                                {' - '}{e.detalhe}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </section>
+            </div>
+
+            <div className="hidden">
               <div className="min-w-[240px] flex-1">
                 <p className="text-sm font-bold text-sky-900">Consulta pagamento ICMS em lote</p>
                 <p className="text-xs text-sky-700">
@@ -3080,7 +3207,7 @@ export default function Dashboard({
               )}
             </div>
 
-            {notasManifestaveis.length > 0 && (
+            {false && notasManifestaveis.length > 0 && (
               <div className="mb-3 p-3 bg-amber-50 border border-amber-200 rounded-xl flex flex-wrap items-center gap-3">
                 <label className="flex items-center gap-2 text-sm text-amber-800 cursor-pointer">
                   <input
@@ -3093,14 +3220,14 @@ export default function Dashboard({
                 </label>
                 <button
                   onClick={handleManifestarLote}
-                  disabled={selecionadas.size === 0 || (!!manifestoLoteProgresso && manifestoLoteProgresso.feito < manifestoLoteProgresso.total)}
+                  disabled={selecionadas.size === 0 || ((manifestoLoteProgresso?.feito ?? 0) < (manifestoLoteProgresso?.total ?? 0))}
                   className="bg-amber-500 hover:bg-amber-600 text-white px-4 py-1.5 rounded-lg text-sm font-medium disabled:opacity-50"
                 >
-                  {manifestoLoteProgresso && manifestoLoteProgresso.feito < manifestoLoteProgresso.total
-                    ? `Manifestando… ${manifestoLoteProgresso.feito}/${manifestoLoteProgresso.total}`
+                  {(manifestoLoteProgresso?.feito ?? 0) < (manifestoLoteProgresso?.total ?? 0)
+                    ? `Manifestando... ${manifestoLoteProgresso?.feito ?? 0}/${manifestoLoteProgresso?.total ?? 0}`
                     : `Manifestar selecionadas (${selecionadas.size})`}
                 </button>
-                {manifestoLoteResumo && (
+                {manifestoLoteTemResumo && (
                   <div className="flex flex-col gap-2">
                     <div className="flex flex-wrap gap-2 text-xs">
                       {manifestoLoteResumo['manifestada'] ? <Badge tone="green">{manifestoLoteResumo['manifestada']} manifestada(s)</Badge> : null}
@@ -3108,10 +3235,10 @@ export default function Dashboard({
                       {manifestoLoteResumo['completa'] ? <Badge tone="blue">{manifestoLoteResumo['completa']} já completa(s)</Badge> : null}
                       {manifestoLoteResumo['erro'] ? <Badge tone="orange">{manifestoLoteResumo['erro']} erro(s)</Badge> : null}
                     </div>
-                    {manifestoLoteErros && manifestoLoteErros.length > 0 && (
+                    {manifestoLoteErrosLista.length > 0 && (
                       <div className="text-xs bg-red-50 border border-red-200 rounded-lg p-3 max-h-48 overflow-y-auto space-y-1">
                         <p className="font-semibold text-red-700 mb-1">Detalhes dos erros:</p>
-                        {manifestoLoteErros.map((e, i) => (
+                        {manifestoLoteErrosLista.map((e, i) => (
                           <div key={i} className="text-red-600">
                             <span className="font-mono text-red-400">{e.chave.slice(0, 8)}…{e.chave.slice(-6)}</span>
                             {' — '}{e.detalhe}
