@@ -5509,7 +5509,7 @@ function FragmentNota({
   );
 }
 
-type Aba = 'dados' | 'danfe' | 'itens' | 'anexos';
+type Aba = 'dados' | 'sitram' | 'frete' | 'danfe' | 'itens' | 'anexos';
 
 function DetalheNota({ nota }: { nota: NotaComCnpj }) {
   const router = useRouter();
@@ -5530,6 +5530,34 @@ function DetalheNota({ nota }: { nota: NotaComCnpj }) {
   const ehResumo = nota.status === 'RESUMO';
   const espelhoSitram = useMemo(() => extrairEspelhoSitram(nota), [nota]);
   const pagamentoIcms = useMemo(() => extrairPagamentoIcmsSitram(nota), [nota]);
+  const resumoDaeDetalhe = useMemo(() => extrairResumoDae(nota), [nota]);
+  const lancamentosDaeDetalhe = useMemo(() => lancamentosVisiveisDae(resumoDaeDetalhe.lancamentos), [resumoDaeDetalhe.lancamentos]);
+  const statusDaeDetalhe = statusDaeEfetivo(nota);
+  const daeVencidoDetalhe = lancamentosDaeDetalhe.some((lancamento) => {
+    const dias = diasAteVencimento(lancamento.vencimento);
+    return !lancamento.pago && dias !== null && dias < 0;
+  });
+  const temDaeDetalhe =
+    lancamentosDaeDetalhe.length > 0 ||
+    pagamentoIcms.documentos.length > 0 ||
+    pagamentoIcms.simulacoes.length > 0 ||
+    ['PAGO', 'EM_ABERTO', 'LIBERADA_PARA_GERAR', 'COM_DAE'].includes(statusDaeDetalhe);
+  const daeResumoClasse = daeVencidoDetalhe
+    ? 'border-red-300 bg-red-50 text-red-800'
+    : statusDaeDetalhe === 'PAGO'
+      ? 'border-emerald-300 bg-emerald-50 text-emerald-800'
+      : temDaeDetalhe || DAE_A_PAGAR.includes(statusDaeDetalhe)
+        ? 'border-amber-300 bg-amber-50 text-amber-900'
+        : 'border-slate-200 bg-slate-50 text-slate-700';
+  const daeResumoTexto = !temDaeDetalhe
+    ? 'Nao'
+    : daeVencidoDetalhe
+      ? 'Vencido'
+      : statusDaeDetalhe === 'PAGO'
+        ? 'Pago'
+        : DAE_A_PAGAR.includes(statusDaeDetalhe)
+          ? 'Aberto'
+          : textoDaeSitram(statusDaeDetalhe);
   const codigosDaePagamento = useMemo(() => {
     return Array.from(
       new Set(
@@ -5833,6 +5861,8 @@ function DetalheNota({ nota }: { nota: NotaComCnpj }) {
 
   function rotuloAba(a: Aba): string {
     if (a === 'dados') return 'Dados';
+    if (a === 'sitram') return 'SITRAM';
+    if (a === 'frete') return 'Frete';
     if (a === 'danfe') return ehResumo ? 'Espelho SITRAM' : 'DANFE';
     if (a === 'itens') return !danfe && espelhoSitram ? 'Itens SITRAM' : 'Itens';
     return 'Anexos';
@@ -5840,8 +5870,8 @@ function DetalheNota({ nota }: { nota: NotaComCnpj }) {
 
   return (
     <div>
-      <div className="flex gap-1 mb-4 bg-[var(--surface-2)] p-1 rounded-lg w-fit">
-        {(['dados', 'danfe', 'itens', 'anexos'] as Aba[]).map((a) => (
+      <div className="mb-4 flex w-full flex-wrap gap-1 rounded-lg bg-[var(--surface-2)] p-1 sm:w-fit">
+        {(['dados', 'sitram', 'frete', 'danfe', 'itens', 'anexos'] as Aba[]).map((a) => (
           <button
             key={a}
             onClick={() => setAba(a)}
@@ -5864,6 +5894,21 @@ function DetalheNota({ nota }: { nota: NotaComCnpj }) {
                 NF {numeroNotaSistema(nota) || '—'} / Série {serieNotaSistema(nota) || '—'}
               </span>
             </div>
+            <div className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+              <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-3">
+                <Campo rotulo="Valor da NF" valor={moeda(nota.valorTotal)} />
+              </div>
+              <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-3">
+                <Campo rotulo="Valor do frete" valor={nota.valorFrete ? moeda(nota.valorFrete) : 'Sem frete'} />
+              </div>
+              <div className={`rounded-lg border p-3 ${daeResumoClasse}`}>
+                <p className="text-xs font-semibold opacity-80">DAE</p>
+                <p className="font-black">{temDaeDetalhe ? 'Sim' : 'Nao'} - {daeResumoTexto}</p>
+              </div>
+              <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-3">
+                <Campo rotulo="Transportadora" valor={nota.transportadoraNome || 'Sem transportadora'} />
+              </div>
+            </div>
             <div className="grid grid-cols-1 gap-x-8 gap-y-3 text-sm md:grid-cols-2 lg:grid-cols-3">
               <Campo rotulo="Empresa (destinatário)" valor={nota.cnpj.razaoSocial || formatarCnpj(nota.cnpj.cnpj)} />
               <Campo rotulo="Natureza da Operação" valor={nota.naturezaOp || '—'} />
@@ -5877,10 +5922,10 @@ function DetalheNota({ nota }: { nota: NotaComCnpj }) {
             </div>
           </section>
 
-          {nota.sitramConsultadaEm && <ResumoDaeVisual nota={nota} />}
-          <PainelPagamentoIcms />
+          {false && nota.sitramConsultadaEm && <ResumoDaeVisual nota={nota} />}
+          {false && <PainelPagamentoIcms />}
 
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+          <div className="hidden grid-cols-1 gap-4 lg:grid-cols-2">
             <section className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
               <h3 className="mb-3 border-b border-[var(--border)] pb-3 font-bold text-[var(--ink)]">Transporte</h3>
               <div className="grid grid-cols-1 gap-x-6 gap-y-3 text-sm md:grid-cols-2">
@@ -5950,6 +5995,48 @@ function DetalheNota({ nota }: { nota: NotaComCnpj }) {
                   ✓ {tag}
                 </button>
               ))}
+            </div>
+          </section>
+        </div>
+      )}
+
+      {aba === 'sitram' && (
+        <div className="space-y-4">
+          {nota.sitramConsultadaEm || temDaeDetalhe ? <ResumoDaeVisual nota={nota} /> : <PainelAtualizarSitramNota />}
+          <PainelPagamentoIcms />
+          <section className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
+            <div className="grid grid-cols-1 gap-3 text-sm md:grid-cols-2">
+              <Campo rotulo="MDF-e SITRAM" valor={nota.sitramChaveManifesto || '—'} />
+              <Campo rotulo="Ultima consulta SITRAM" valor={nota.sitramConsultadaEm ? dataHora(nota.sitramConsultadaEm) : '—'} />
+            </div>
+          </section>
+        </div>
+      )}
+
+      {aba === 'frete' && (
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+          <section className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
+            <h3 className="mb-3 border-b border-[var(--border)] pb-3 font-bold text-[var(--ink)]">Frete / Transporte</h3>
+            <div className="grid grid-cols-1 gap-x-6 gap-y-3 text-sm md:grid-cols-2">
+              <Campo rotulo="Modalidade do frete" valor={nota.modalidadeFrete || '—'} />
+              <Campo rotulo="Valor do frete" valor={moeda(nota.valorFrete)} />
+              <Campo rotulo="Transportadora" valor={nota.transportadoraNome || '—'} />
+              <Campo rotulo="CNPJ Transportadora" valor={nota.transportadoraCnpj ? formatarCnpj(nota.transportadoraCnpj) : '—'} />
+              <Campo rotulo="IE / UF Transportadora" valor={`${nota.transportadoraIe || '—'} / ${nota.transportadoraUf || '—'}`} />
+              <Campo rotulo="Municipio" valor={nota.transportadoraMunicipio || '—'} />
+            </div>
+          </section>
+
+          <section className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
+            <h3 className="mb-3 border-b border-[var(--border)] pb-3 font-bold text-[var(--ink)]">Valores da NF</h3>
+            <div className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm">
+              <Campo rotulo="Produtos" valor={moeda(nota.valorProdutos)} />
+              <Campo rotulo="ICMS da NF" valor={moeda(nota.valorIcms)} />
+              <Campo rotulo="Frete" valor={moeda(nota.valorFrete)} />
+              <Campo rotulo="Desconto" valor={moeda(nota.valorDesconto)} />
+              <div className="col-span-2 rounded-lg bg-[var(--surface-2)] p-3">
+                <Campo rotulo="Valor total" valor={moeda(nota.valorTotal)} />
+              </div>
             </div>
           </section>
         </div>
