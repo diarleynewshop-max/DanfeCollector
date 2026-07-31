@@ -2965,6 +2965,37 @@ export async function alternarEtiqueta(notaId: number, etiqueta: string): Promis
 // Manifestação em lote (Ciência da Operação para várias notas de uma vez)
 // ---------------------------------------------------------------------------
 
+export async function aplicarEtiquetasLote(notaIds: number[], etiquetas: string[]): Promise<ActionResult> {
+  const negado = await checarUsuarioAction();
+  if (negado) return negado;
+
+  const ids = [...new Set(notaIds.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0))];
+  const tags = [...new Set(etiquetas.map((tag) => tag.trim()).filter(Boolean))];
+  if (ids.length === 0) return { success: false, message: 'Nenhuma nota selecionada.' };
+  if (tags.length === 0) return { success: false, message: 'Nenhuma etiqueta selecionada.' };
+
+  try {
+    const notas = await prisma.notaFiscal.findMany({
+      where: { id: { in: ids } },
+      select: { id: true, etiqueta: true },
+    });
+
+    for (const nota of notas) {
+      const atuais = (nota.etiqueta ?? '').split(',').map((t) => t.trim()).filter(Boolean);
+      const proximas = [...new Set([...atuais, ...tags])];
+      await prisma.notaFiscal.update({
+        where: { id: nota.id },
+        data: { etiqueta: proximas.length > 0 ? proximas.join(',') : null },
+      });
+    }
+
+    revalidatePath('/');
+    return { success: true, message: `${tags.length} etiqueta(s) aplicada(s) em ${notas.length} nota(s).` };
+  } catch (error: unknown) {
+    return { success: false, message: `Erro ao aplicar etiquetas em lote: ${(error as Error).message}` };
+  }
+}
+
 export type StatusManifestoLote = 'manifestada' | 'ja-manifestada' | 'completa' | 'erro';
 
 export interface ResultadoManifestoLote {

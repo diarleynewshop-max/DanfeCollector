@@ -19,6 +19,7 @@ import {
   importarChavesLote,
   importarXmlsDaPasta,
   alternarEtiqueta,
+  aplicarEtiquetasLote,
   manifestarNotasLote,
   listarNotasPorAno,
   listarTodasNotas,
@@ -1579,6 +1580,8 @@ export default function Dashboard({
   const [pagamentoLoteResultado, setPagamentoLoteResultado] = useState<ResultadoPagamentoIcmsLote | null>(null);
   const [painelPagamentoLoteAberto, setPainelPagamentoLoteAberto] = useState(true);
   const [painelManifestoLoteAberto, setPainelManifestoLoteAberto] = useState(true);
+  const [etiquetasLote, setEtiquetasLote] = useState<string[]>([]);
+  const [aplicandoEtiquetasLote, setAplicandoEtiquetasLote] = useState(false);
   const manifestoLoteResumo = manifestoLoteResumoState ?? {};
   const manifestoLoteTemResumo = manifestoLoteResumoState !== null;
   const manifestoLoteErrosLista = manifestoLoteErros ?? [];
@@ -1601,6 +1604,9 @@ export default function Dashboard({
     [notasFiltradas]
   );
 
+  const todasVisiveisSelecionadas = notasVisiveis.length > 0 && notasVisiveis.every((n) => selecionadas.has(n.id));
+  const selecionadasManifestaveisQtd = notasManifestaveis.filter((nota) => selecionadas.has(nota.id)).length;
+
   function toggleSelecionada(id: number) {
     setSelecionadas((prev) => {
       const next = new Set(prev);
@@ -1616,8 +1622,57 @@ export default function Dashboard({
     setSelecionadas(todasSelecionadas ? new Set() : new Set(notasManifestaveis.map((n) => n.id)));
   }
 
-  async function handleManifestarLote() {
+  function toggleSelecionarVisiveis() {
+    setSelecionadas((prev) => {
+      const next = new Set(prev);
+      if (todasVisiveisSelecionadas) {
+        for (const nota of notasVisiveis) next.delete(nota.id);
+      } else {
+        for (const nota of notasVisiveis) next.add(nota.id);
+      }
+      return next;
+    });
+  }
+
+  function atualizarEtiquetasNotasLocal(ids: number[], etiquetas: string[], modo: 'adicionar' | 'alternar') {
+    const idSet = new Set(ids);
+    const atualizar = (nota: NotaComCnpj): NotaComCnpj => {
+      if (!idSet.has(nota.id)) return nota;
+      const atuais = parseEtiquetas(nota.etiqueta);
+      const proximas = modo === 'adicionar'
+        ? [...new Set([...atuais, ...etiquetas])]
+        : etiquetas.reduce((lista, etiqueta) => (
+            lista.includes(etiqueta) ? lista.filter((item) => item !== etiqueta) : [...lista, etiqueta]
+          ), atuais);
+      return { ...nota, etiqueta: proximas.length > 0 ? proximas.join(',') : null };
+    };
+    setNotas((atuais) => atuais.map(atualizar));
+    setNotasAlerta((atuais) => atuais.map(atualizar));
+  }
+
+  function toggleEtiquetaLote(tag: string) {
+    setEtiquetasLote((atuais) => atuais.includes(tag) ? atuais.filter((item) => item !== tag) : [...atuais, tag]);
+  }
+
+  async function handleAplicarEtiquetasLote() {
     const ids = [...selecionadas];
+    if (ids.length === 0 || etiquetasLote.length === 0 || aplicandoEtiquetasLote) return;
+
+    setAplicandoEtiquetasLote(true);
+    atualizarEtiquetasNotasLocal(ids, etiquetasLote, 'adicionar');
+    const res = await aplicarEtiquetasLote(ids, etiquetasLote);
+    setAplicandoEtiquetasLote(false);
+    setStatus({ success: res.success, message: res.message });
+    if (!res.success) {
+      router.refresh();
+      return;
+    }
+    setSelecionadas(new Set());
+    setEtiquetasLote([]);
+  }
+
+  async function handleManifestarLote() {
+    const ids = [...selecionadas].filter((id) => notasManifestaveis.some((nota) => nota.id === id));
     if (ids.length === 0) return;
 
     setManifestoLoteResumo(null);
@@ -3092,6 +3147,48 @@ export default function Dashboard({
                 )}
               </section>
 
+              <section className="rounded-xl border border-indigo-200 bg-indigo-50 p-3">
+                <div className="flex flex-wrap items-center gap-3">
+                  <label className="flex min-w-[210px] items-center gap-2 text-sm font-semibold text-indigo-900">
+                    <input
+                      type="checkbox"
+                      checked={todasVisiveisSelecionadas}
+                      onChange={toggleSelecionarVisiveis}
+                      disabled={notasVisiveis.length === 0}
+                      className="h-4 w-4"
+                    />
+                    Selecionar visiveis ({notasVisiveis.length})
+                  </label>
+                  <div className="flex min-w-[240px] flex-1 flex-wrap gap-1.5">
+                    {ETIQUETAS_PRESET.map((tag) => {
+                      const ativa = etiquetasLote.includes(tag);
+                      return (
+                        <button
+                          key={tag}
+                          type="button"
+                          onClick={() => toggleEtiquetaLote(tag)}
+                          className={`rounded-lg border px-2.5 py-1 text-xs font-bold transition ${
+                            ativa
+                              ? 'border-indigo-700 bg-indigo-700 text-white'
+                              : 'border-indigo-200 bg-white text-indigo-800 hover:bg-indigo-100'
+                          }`}
+                        >
+                          {tag}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleAplicarEtiquetasLote}
+                    disabled={selecionadas.size === 0 || etiquetasLote.length === 0 || aplicandoEtiquetasLote}
+                    className="rounded-lg bg-indigo-700 px-4 py-1.5 text-sm font-bold text-white hover:bg-indigo-800 disabled:opacity-50"
+                  >
+                    {aplicandoEtiquetasLote ? 'Aplicando...' : `Aplicar etiquetas (${selecionadas.size})`}
+                  </button>
+                </div>
+              </section>
+
               <section className="rounded-xl border border-amber-200 bg-amber-50 p-3">
                 <div className="flex flex-wrap items-center gap-2">
                   <div className="min-w-[220px] flex-1">
@@ -3124,12 +3221,12 @@ export default function Dashboard({
                     </label>
                     <button
                       onClick={handleManifestarLote}
-                      disabled={selecionadas.size === 0 || (!!manifestoLoteProgresso && manifestoLoteProgresso.feito < manifestoLoteProgresso.total)}
+                      disabled={selecionadasManifestaveisQtd === 0 || (!!manifestoLoteProgresso && manifestoLoteProgresso.feito < manifestoLoteProgresso.total)}
                       className="bg-amber-500 hover:bg-amber-600 text-white px-4 py-1.5 rounded-lg text-sm font-medium disabled:opacity-50"
                     >
                       {manifestoLoteProgresso && manifestoLoteProgresso.feito < manifestoLoteProgresso.total
                     ? `Manifestando... ${manifestoLoteProgresso?.feito ?? 0}/${manifestoLoteProgresso?.total ?? 0}`
-                        : `Manifestar selecionadas (${selecionadas.size})`}
+                        : `Manifestar selecionadas (${selecionadasManifestaveisQtd})`}
                     </button>
                     {manifestoLoteTemResumo && (
                       <div className="flex w-full flex-col gap-2">
@@ -3315,13 +3412,7 @@ export default function Dashboard({
                       nota={n}
                       aberta={expandida === n.id}
                       onToggle={() => setExpandida(expandida === n.id ? null : n.id)}
-                      selecionavel={
-                        n.status === 'RESUMO' &&
-                        !n.manifestadaEm &&
-                        n.situacaoSefaz !== 'CANCELADA' &&
-                        n.situacaoSefaz !== 'DENEGADA' &&
-                        notaDentroPrazoManifestacao(n)
-                      }
+                      selecionavel={true}
                       selecionada={selecionadas.has(n.id)}
                       onToggleSelecionada={() => toggleSelecionada(n.id)}
                     />
@@ -5519,7 +5610,6 @@ function DetalheNota({ nota }: { nota: NotaComCnpj }) {
   const [erro, setErro] = useState<string | null>(null);
   const [manifestando, setManifestando] = useState(false);
   const [msgManifesto, setMsgManifesto] = useState<{ ok: boolean; texto: string } | null>(null);
-  const [salvandoEtiqueta, setSalvandoEtiqueta] = useState(false);
   const [consultandoSitram, setConsultandoSitram] = useState(false);
   const [msgSitramNota, setMsgSitramNota] = useState<{ ok: boolean; texto: string } | null>(null);
   const [consultandoPagamentoIcms, setConsultandoPagamentoIcms] = useState(false);
@@ -5568,12 +5658,21 @@ function DetalheNota({ nota }: { nota: NotaComCnpj }) {
     );
   }, [pagamentoIcms.documentos]);
   const codigosDaePagamentoChave = codigosDaePagamento.join('|');
-  const tagsAtuais = parseEtiquetas(nota.etiqueta);
+  const [tagsOtimizadas, setTagsOtimizadas] = useState<string[]>(() => parseEtiquetas(nota.etiqueta));
+
+  useEffect(() => {
+    setTagsOtimizadas(parseEtiquetas(nota.etiqueta));
+  }, [nota.etiqueta]);
 
   async function handleClicarEtiqueta(tag: string) {
-    setSalvandoEtiqueta(true);
-    await alternarEtiqueta(nota.id, tag);
-    setSalvandoEtiqueta(false);
+    const antes = tagsOtimizadas;
+    const depois = antes.includes(tag) ? antes.filter((item) => item !== tag) : [...antes, tag];
+    setTagsOtimizadas(depois);
+    const res = await alternarEtiqueta(nota.id, tag);
+    if (!res.success) {
+      setTagsOtimizadas(antes);
+      return;
+    }
     router.refresh();
   }
 
@@ -5967,13 +6066,12 @@ function DetalheNota({ nota }: { nota: NotaComCnpj }) {
             <p className="text-xs text-[var(--ink-mut)] mb-2">Etiquetas (pode marcar mais de uma)</p>
             <div className="flex flex-wrap gap-1.5 max-w-md">
               {ETIQUETAS_PRESET.map((tag) => {
-                const ativa = tagsAtuais.includes(tag);
+                const ativa = tagsOtimizadas.includes(tag);
                 return (
                   <button
                     key={tag}
                     type="button"
                     onClick={(e) => { e.stopPropagation(); handleClicarEtiqueta(tag); }}
-                    disabled={salvandoEtiqueta}
                     className={`px-3 py-1.5 rounded-lg text-sm font-medium border transition disabled:opacity-50 ${
                       ativa
                         ? 'bg-[var(--accent)] border-[var(--accent)] text-white'
@@ -5984,12 +6082,11 @@ function DetalheNota({ nota }: { nota: NotaComCnpj }) {
                   </button>
                 );
               })}
-              {tagsAtuais.filter((tag) => !ETIQUETAS_PRESET.includes(tag)).map((tag) => (
+              {tagsOtimizadas.filter((tag) => !ETIQUETAS_PRESET.includes(tag)).map((tag) => (
                 <button
                   key={tag}
                   type="button"
                   onClick={(e) => { e.stopPropagation(); handleClicarEtiqueta(tag); }}
-                  disabled={salvandoEtiqueta}
                   className="px-3 py-1.5 rounded-lg text-sm font-medium border border-[var(--accent)] bg-[var(--accent)] text-white transition disabled:opacity-50"
                 >
                   ✓ {tag}
