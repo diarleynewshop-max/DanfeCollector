@@ -28,6 +28,9 @@ export type ConsultaIeFornecedor = {
   atualizadoEm: string | null;
   inscricoesEstaduais: InscricaoEstadualFornecedor[];
   fonte: string;
+  fonteDadosCnpj: string;
+  fonteIe: string | null;
+  statusIe: string;
   aviso: string | null;
   consultaOficial: {
     tentou: boolean;
@@ -35,6 +38,27 @@ export type ConsultaIeFornecedor = {
     mensagem: string | null;
   };
 };
+
+async function consultarDadosPublicosCnpj(cnpj: string): Promise<CnpjWsResposta> {
+  const baseUrl = process.env.CNPJ_WS_PUBLICA_URL || 'https://publica.cnpj.ws/cnpj';
+  const resposta = await fetch(`${baseUrl.replace(/\/+$/, '')}/${cnpj}`, {
+    headers: { Accept: 'application/json' },
+    next: { revalidate: 60 * 60 * 24 },
+  });
+
+  if (resposta.status === 404) {
+    throw new Error('CNPJ nao encontrado na base publica.');
+  }
+  if (resposta.status === 429) {
+    throw new Error('Consulta publica em limite de uso. Tente novamente em alguns minutos.');
+  }
+  if (!resposta.ok) {
+    const corpo = await resposta.text();
+    throw new Error(`Consulta publica falhou HTTP ${resposta.status}: ${corpo.slice(0, 180) || resposta.statusText}`);
+  }
+
+  return (await resposta.json()) as CnpjWsResposta;
+}
 
 type CnpjWsIe = {
   inscricao_estadual?: unknown;
@@ -124,6 +148,22 @@ function montarEndereco(estabelecimento: NonNullable<CnpjWsResposta['estabelecim
   return partes.join(', ') || null;
 }
 
+function retornoNaoContribuinte(retorno: RetornoOficialIe | null): boolean {
+  return retorno?.cStat === 259 || /nao cadastrado como contribuinte/i.test(retorno?.xMotivo ?? '');
+}
+
+function statusIeFornecedor(
+  retorno: RetornoOficialIe | null,
+  inscricoesEstaduais: InscricaoEstadualFornecedor[],
+  tentouConsultaOficial: boolean,
+): string {
+  if (inscricoesEstaduais.length > 0) return 'Contribuinte';
+  if (retornoNaoContribuinte(retorno)) return 'Nao contribuinte';
+  if (retorno?.cStat === 410) return 'UF nao atendida pelo WebService';
+  if (tentouConsultaOficial) return 'Sem IE retornada';
+  return 'Nao consultado';
+}
+
 export async function consultarIeFornecedor(cnpj: string, ufFiltro?: string): Promise<ConsultaIeFornecedor> {
   const cnpjLimpo = limparCnpjFornecedor(cnpj);
   if (!validarCnpjFornecedor(cnpjLimpo)) {
@@ -137,34 +177,36 @@ export async function consultarIeFornecedor(cnpj: string, ufFiltro?: string): Pr
 
   let retornoOficial: RetornoOficialIe | null = null;
   let erroOficial: string | null = null;
+  let dados: CnpjWsResposta | null = null;
+  let erroDadosPublicos: string | null = null;
 
-  if (uf) {
+  try {
+    dados = await consultarDadosPublicosCnpj(cnpjLimpo);
+  } catch (error: unknown) {
+    erroDadosPublicos = (error as Error).message || 'Falha na consulta publica do CNPJ.';
+  }
+
+  const estabelecimento = dados?.estabelecimento ?? {};
+  const ufConsultaOficial = uf || texto(estabelecimento.estado?.sigla) || '';
+
+  if (ufConsultaOficial && ufValida(ufConsultaOficial)) {
     try {
-      retornoOficial = await consultarOficialIe(uf, cnpjLimpo);
+      retornoOficial = await consultarOficialIe(ufConsultaOficial, cnpjLimpo);
     } catch (error: unknown) {
       erroOficial = (error as Error).message || 'Falha na consulta oficial SEFAZ.';
     }
   }
 
-  const baseUrl = process.env.CNPJ_WS_PUBLICA_URL || 'https://publica.cnpj.ws/cnpj';
-  const resposta = await fetch(`${baseUrl.replace(/\/+$/, '')}/${cnpjLimpo}`, {
-    headers: { Accept: 'application/json' },
-    next: { revalidate: 60 * 60 * 24 },
-  });
-
-  if (resposta.status === 404) {
-    throw new Error('CNPJ nao encontrado na base publica.');
-  }
-  if (resposta.status === 429) {
-    throw new Error('Consulta publica em limite de uso. Tente novamente em alguns minutos.');
-  }
-  if (!resposta.ok) {
-    const corpo = await resposta.text();
-    throw new Error(`Consulta publica falhou HTTP ${resposta.status}: ${corpo.slice(0, 180) || resposta.statusText}`);
+  if (!dados && !retornoOficial?.cadastros.length) {
+    throw new Error(
+      [
+        erroDadosPublicos,
+        erroOficial,
+        retornoOficial?.xMotivo ? `SEFAZ: ${retornoOficial.xMotivo}` : null,
+      ].filter(Boolean).join(' | ') || 'Nenhuma consulta retornou dados.'
+    );
   }
 
-  const dados = (await resposta.json()) as CnpjWsResposta;
-  const estabelecimento = dados.estabelecimento ?? {};
   const inscricoes = Array.isArray(estabelecimento.inscricoes_estaduais)
     ? estabelecimento.inscricoes_estaduais
     : [];
@@ -198,30 +240,46 @@ export async function consultarIeFornecedor(cnpj: string, ufFiltro?: string): Pr
     : retornoOficial?.cStat
       ? `SEFAZ sem IE (${retornoOficial.cStat}) + CNPJ.ws publica`
       : 'CNPJ.ws publica';
+  const tentouConsultaOficial = Boolean(ufConsultaOficial && ufValida(ufConsultaOficial));
+  const statusIe = statusIeFornecedor(retornoOficial, inscricoesEstaduais, tentouConsultaOficial);
 
   return {
     cnpj: texto(estabelecimento.cnpj) ?? cnpjLimpo,
-    razaoSocial: cadastroOficial?.razaoSocial ?? texto(dados.razao_social) ?? 'Razao social nao informada',
+    razaoSocial: cadastroOficial?.razaoSocial ?? texto(dados?.razao_social) ?? 'Razao social nao informada',
     nomeFantasia: cadastroOficial?.nomeFantasia ?? texto(estabelecimento.nome_fantasia),
     situacaoCadastral: texto(estabelecimento.situacao_cadastral),
-    uf: texto(estabelecimento.estado?.sigla),
+    uf: texto(estabelecimento.estado?.sigla) ?? cadastroOficial?.uf ?? (ufConsultaOficial || null),
     cidade: texto(estabelecimento.cidade?.nome),
     cep: texto(estabelecimento.cep),
     endereco: cadastroOficial?.endereco ?? montarEndereco(estabelecimento),
     cnaePrincipal: [cnaeId, cnaeDescricao].filter(Boolean).join(' - ') || null,
     dataInicioAtividade: cadastroOficial?.dataInicioAtividade ?? texto(estabelecimento.data_inicio_atividade),
-    atualizadoEm: retornoOficial?.consultadoEm ?? texto(dados.atualizado_em),
+    atualizadoEm: retornoOficial?.consultadoEm ?? texto(dados?.atualizado_em),
     inscricoesEstaduais,
     fonte,
+    fonteDadosCnpj: dados ? 'CNPJ.ws publica' : 'nao retornou',
+    fonteIe: inscricoesOficiais.length > 0
+      ? 'SEFAZ NFeConsultaCadastro'
+      : inscricoesPublicas.length > 0
+        ? 'CNPJ.ws publica'
+        : null,
+    statusIe,
     aviso: inscricoesEstaduais.length === 0
-      ? (retornoOficial
+      ? (retornoNaoContribuinte(retornoOficial)
+          ? 'Nao contribuinte: CNPJ nao cadastrado como contribuinte na UF consultada.'
+          : retornoOficial
           ? `${retornoOficial.xMotivo || 'SEFAZ nao retornou IE para este CNPJ/UF.'} Confirme no CCC/portal oficial se a operacao exigir validacao fiscal.`
           : `A base publica nao retornou IE para este CNPJ/UF.${erroOficial ? ` Consulta oficial nao concluida: ${erroOficial}` : ''}`)
-      : null,
+      : (erroOficial || erroDadosPublicos
+          ? [
+              erroDadosPublicos ? `Dados do CNPJ nao concluidos: ${erroDadosPublicos}` : null,
+              erroOficial ? `Consulta oficial de IE nao concluiu: ${erroOficial}` : null,
+            ].filter(Boolean).join(' ')
+          : null),
     consultaOficial: {
-      tentou: Boolean(uf),
+      tentou: tentouConsultaOficial,
       ok: Boolean(retornoOficial && inscricoesOficiais.length > 0),
-      mensagem: retornoOficial?.xMotivo ?? erroOficial,
+      mensagem: retornoOficial?.xMotivo ?? erroOficial ?? (!tentouConsultaOficial ? 'UF nao informada pela base publica.' : null),
     },
   };
 }

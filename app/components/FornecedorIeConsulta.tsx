@@ -75,7 +75,7 @@ export default function FornecedorIeConsulta() {
           <div>
             <h2 className="text-base font-black text-[var(--ink)]">IE de Fornecedor</h2>
             <p className="mt-1 text-xs text-[var(--ink-mut)]">
-              Consulte inscricao estadual por CNPJ e UF, com link direto para conferencia no portal oficial.
+              Consulta dados do CNPJ e inscricao estadual em duas fontes, com link direto para conferencia oficial.
             </p>
           </div>
           {linkPortal && (
@@ -131,7 +131,7 @@ export default function FornecedorIeConsulta() {
             disabled={carregando || cnpjLimpo.length !== 14}
             className="h-10 self-end rounded-lg bg-[var(--accent)] px-5 text-sm font-bold text-white hover:brightness-125 disabled:opacity-50"
           >
-            {carregando ? 'Consultando...' : 'Consultar IE'}
+            {carregando ? 'Consultando...' : 'Consultar CNPJ + IE'}
           </button>
         </form>
 
@@ -151,8 +151,10 @@ export default function FornecedorIeConsulta() {
               <p className="mt-1 font-mono text-xs text-[var(--ink-mut)]">{formatarCnpj(resultado.cnpj)}</p>
             </div>
             <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-right">
-              <p className="text-[11px] font-bold uppercase text-[var(--ink-mut)]">Fonte</p>
-              <p className="text-sm font-bold text-[var(--ink)]">{resultado.fonte}</p>
+              <p className="text-[11px] font-bold uppercase text-[var(--ink-mut)]">Fontes</p>
+              <p className="text-sm font-bold text-[var(--ink)]">CNPJ: {resultado.fonteDadosCnpj}</p>
+              <p className="text-xs font-semibold text-[var(--ink-mut)]">IE: {resultado.fonteIe || 'nao retornou'}</p>
+              <p className="mt-1 text-xs font-bold text-[var(--ink)]">Status IE: {resultado.statusIe}</p>
               {resultado.consultaOficial.tentou && (
                 <p className="mt-1 text-[11px] text-[var(--ink-mut)]">
                   {resultado.consultaOficial.ok ? 'Oficial SEFAZ OK' : resultado.consultaOficial.mensagem || 'Oficial sem IE'}
@@ -161,18 +163,23 @@ export default function FornecedorIeConsulta() {
             </div>
           </div>
 
-          <div className="mb-4 grid gap-3 md:grid-cols-3">
-            <CampoResultado rotulo="Nome fantasia" valor={resultado.nomeFantasia} />
-            <CampoResultado rotulo="Situacao cadastral" valor={resultado.situacaoCadastral} />
-            <CampoResultado rotulo="Cidade / UF" valor={[resultado.cidade, resultado.uf].filter(Boolean).join(' / ')} />
-            <CampoResultado rotulo="CNAE principal" valor={resultado.cnaePrincipal} />
-            <CampoResultado rotulo="Endereco" valor={resultado.endereco} />
-            <CampoResultado rotulo="Atualizado em" valor={dataCurta(resultado.atualizadoEm)} />
+          <div className="mb-4">
+            <h4 className="mb-2 text-sm font-black text-[var(--ink)]">Dados do CNPJ</h4>
+            <div className="grid gap-3 md:grid-cols-3">
+              <CampoResultado rotulo="Nome fantasia" valor={resultado.nomeFantasia} />
+              <CampoResultado rotulo="Situacao cadastral" valor={resultado.situacaoCadastral} />
+              <CampoResultado rotulo="Cidade / UF" valor={[resultado.cidade, resultado.uf].filter(Boolean).join(' / ')} />
+              <CampoResultado rotulo="CEP" valor={resultado.cep} />
+              <CampoResultado rotulo="CNAE principal" valor={resultado.cnaePrincipal} />
+              <CampoResultado rotulo="Inicio atividade" valor={dataCurta(resultado.dataInicioAtividade)} />
+              <CampoResultado rotulo="Endereco" valor={resultado.endereco} />
+              <CampoResultado rotulo="Atualizado em" valor={dataCurta(resultado.atualizadoEm)} />
+            </div>
           </div>
 
           <div className="overflow-hidden rounded-xl border border-[var(--border)]">
             <div className="border-b border-[var(--border)] bg-[var(--surface-2)] px-4 py-3">
-              <h4 className="text-sm font-black text-[var(--ink)]">Inscricoes estaduais encontradas</h4>
+              <h4 className="text-sm font-black text-[var(--ink)]">IE / inscricoes estaduais encontradas</h4>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-left text-sm">
@@ -204,7 +211,9 @@ export default function FornecedorIeConsulta() {
                   {resultado.inscricoesEstaduais.length === 0 && (
                     <tr>
                       <td colSpan={6} className="px-3 py-6 text-center text-sm text-[var(--ink-mut)]">
-                        Nenhuma inscricao estadual retornada para este filtro.
+                        {resultado.statusIe === 'Nao contribuinte'
+                          ? 'Nao contribuinte na UF consultada.'
+                          : 'Nenhuma inscricao estadual retornada para este filtro.'}
                       </td>
                     </tr>
                   )}

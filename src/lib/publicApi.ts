@@ -7,6 +7,7 @@ import {
   lancamentosVisiveisDae,
   statusDaeEfetivo,
 } from './sitram/dae';
+import { consultarIeFornecedor, limparCnpjFornecedor } from './ieFornecedor';
 
 function soma(valores: Array<number | null | undefined>): number {
   return valores.reduce<number>((total, valor) => total + (valor ?? 0), 0);
@@ -121,4 +122,53 @@ export async function consultarXmlNotaFiscalApi(chaveInformada: string) {
   if (!xml) return { status: 404, body: 'XML nao encontrado no storage.' };
 
   return { status: 200, body: xml };
+}
+
+export async function consultarFornecedorIeApi(cnpjInformado: string, ufInformada?: string) {
+  const cnpj = limparCnpjFornecedor(cnpjInformado);
+  const uf = ufInformada?.trim().toUpperCase() || undefined;
+
+  if (cnpj.length !== 14) {
+    return { status: 400, body: { success: false, message: 'CNPJ invalido. Informe 14 digitos.' } };
+  }
+
+  try {
+    const consulta = await consultarIeFornecedor(cnpj, uf);
+    return {
+      status: 200,
+      body: {
+        success: true,
+        data: {
+          cnpj: consulta.cnpj,
+          razaoSocial: consulta.razaoSocial,
+          nomeFantasia: consulta.nomeFantasia,
+          situacaoCadastral: consulta.situacaoCadastral,
+          uf: consulta.uf,
+          cidade: consulta.cidade,
+          cep: consulta.cep,
+          endereco: consulta.endereco,
+          cnaePrincipal: consulta.cnaePrincipal,
+          dataInicioAtividade: consulta.dataInicioAtividade,
+          atualizadoEm: consulta.atualizadoEm,
+          ie: {
+            status: consulta.statusIe,
+            fonte: consulta.fonteIe,
+            inscricoes: consulta.inscricoesEstaduais,
+            consultaOficial: consulta.consultaOficial,
+          },
+          fontes: {
+            dadosCnpj: consulta.fonteDadosCnpj,
+            ie: consulta.fonteIe,
+            resumo: consulta.fonte,
+          },
+          aviso: consulta.aviso,
+        },
+      },
+    };
+  } catch (error: unknown) {
+    return {
+      status: 400,
+      body: { success: false, message: (error as Error).message || 'Erro ao consultar IE do fornecedor.' },
+    };
+  }
 }

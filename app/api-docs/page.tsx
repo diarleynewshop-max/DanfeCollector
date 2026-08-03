@@ -27,6 +27,36 @@ const exemploJson = `{
   }
 }`;
 
+const exemploFornecedorIe = `{
+  "success": true,
+  "data": {
+    "cnpj": "14794749000162",
+    "razaoSocial": "EMPRESA EXEMPLO LTDA",
+    "situacaoCadastral": "Ativa",
+    "uf": "AC",
+    "cidade": "Rio Branco",
+    "cep": "69900000",
+    "endereco": "Rua Exemplo, 100, Centro",
+    "cnaePrincipal": "4712-1/00 - Comercio varejista",
+    "ie": {
+      "status": "Nao contribuinte",
+      "fonte": null,
+      "inscricoes": [],
+      "consultaOficial": {
+        "tentou": true,
+        "ok": false,
+        "mensagem": "Rejeicao: CNPJ da consulta nao cadastrado como contribuinte na UF"
+      }
+    },
+    "fontes": {
+      "dadosCnpj": "CNPJ.ws publica",
+      "ie": null,
+      "resumo": "SEFAZ sem IE (259) + CNPJ.ws publica"
+    },
+    "aviso": "Nao contribuinte: CNPJ nao cadastrado como contribuinte na UF consultada."
+  }
+}`;
+
 function BlocoCodigo({ children }: { children: string }) {
   return (
     <pre className="overflow-x-auto rounded-lg border border-[var(--border)] bg-[#1c1813] p-4 text-xs leading-relaxed text-white">
@@ -52,7 +82,7 @@ export default function ApiDocsPage() {
           <p className="text-xs font-bold uppercase tracking-wide text-[var(--ink-mut)]">DanfeCollector</p>
           <h1 className="mt-1 text-2xl font-black text-[var(--ink)]">Documentacao da API</h1>
           <p className="mt-2 max-w-3xl text-sm text-[var(--ink-mut)]">
-            Use esta API para consultar nota fiscal, status, XML, ICMS/SITRAM e DAE por chave de acesso.
+            Use esta API para consultar nota fiscal, status, XML, ICMS/SITRAM, DAE e IE de fornecedor por chave de acesso.
           </p>
         </header>
 
@@ -72,6 +102,15 @@ x-api-key: SUA_CHAVE_API`}</BlocoCodigo>
         <Secao titulo="Baixar XML direto">
           <p>Retorna o XML autorizado quando a nota estiver completa no DanfeCollector.</p>
           <BlocoCodigo>{`GET /api/v1/notas/{chave}/xml`}</BlocoCodigo>
+        </Secao>
+
+        <Secao titulo="Consultar IE de fornecedor">
+          <p>Consulta dados cadastrais do CNPJ e a inscricao estadual do fornecedor. O parametro UF e opcional, mas recomendado para validar o cadastro naquela UF.</p>
+          <BlocoCodigo>{`GET /api/v1/fornecedor-ie?cnpj=14794749000162&uf=AC`}</BlocoCodigo>
+          <p>Exemplo com curl:</p>
+          <BlocoCodigo>{`curl -H "Authorization: Bearer SUA_CHAVE_API" \\
+  "https://seu-dominio.com/api/v1/fornecedor-ie?cnpj=14794749000162&uf=AC"`}</BlocoCodigo>
+          <p>Status possiveis no campo <strong>data.ie.status</strong>: Contribuinte, Nao contribuinte, UF nao atendida pelo WebService, Sem IE retornada ou Nao consultado.</p>
         </Secao>
 
         <Secao titulo="Codigos HTTP">
@@ -96,6 +135,10 @@ x-api-key: SUA_CHAVE_API`}</BlocoCodigo>
 
         <Secao titulo="Exemplo de resposta">
           <BlocoCodigo>{exemploJson}</BlocoCodigo>
+        </Secao>
+
+        <Secao titulo="Exemplo IE fornecedor">
+          <BlocoCodigo>{exemploFornecedorIe}</BlocoCodigo>
         </Secao>
       </div>
     </main>
