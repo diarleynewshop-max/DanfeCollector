@@ -1259,6 +1259,7 @@ export async function contarNotasTotal(): Promise<number> {
 export type ResumoInicio = {
   totalNotas: number;
   notasCompletas: number;
+  notasSemSitram: number;
   pendentesManifestacao: number;
   emitidasHoje: number;
   emitidasUltimos7Dias: number;
@@ -1275,9 +1276,10 @@ export async function obterResumoInicio(): Promise<ResumoInicio> {
   const inicioPrazoManifestacao = new Date(inicioHoje);
   inicioPrazoManifestacao.setDate(inicioPrazoManifestacao.getDate() - 10);
 
-  const [totalNotas, notasCompletas, pendentesManifestacao, emitidasHoje, emitidasUltimos7Dias, valores] = await Promise.all([
+  const [totalNotas, notasCompletas, notasSemSitram, pendentesManifestacao, emitidasHoje, emitidasUltimos7Dias, valores] = await Promise.all([
     prisma.notaFiscal.count({ where }),
     prisma.notaFiscal.count({ where: { ...where, status: 'COMPLETA' } }),
+    prisma.notaFiscal.count({ where: { ...where, sitramConsultadaEm: null } }),
     prisma.notaFiscal.count({
       where: {
         ...where,
@@ -1295,6 +1297,7 @@ export async function obterResumoInicio(): Promise<ResumoInicio> {
   return {
     totalNotas,
     notasCompletas,
+    notasSemSitram,
     pendentesManifestacao,
     emitidasHoje,
     emitidasUltimos7Dias,

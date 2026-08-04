@@ -82,7 +82,7 @@ import { useIdioma } from '@/lib/i18n';
 
 type NotaComCnpj = NotaFiscal & { cnpj: { cnpj: string; razaoSocial: string | null }; situacaoSefaz?: string };
 type CnpjComContagem = Cnpj & { _count: { notas: number } };
-type FiltroDaeSitram = 'todos' | 'consultado' | 'com-dae' | 'a-pagar' | 'em-aberto' | 'pago' | 'duplicidade' | 'sem-dae' | 'nao-encontrada';
+type FiltroDaeSitram = 'todos' | 'consultado' | 'sem-consulta' | 'com-dae' | 'a-pagar' | 'em-aberto' | 'pago' | 'duplicidade' | 'sem-dae' | 'nao-encontrada';
 type FiltroSituacaoNota = 'inconsistente' | 'efetivada' | 'denegada' | 'pendente-conferencia' | 'com-erro' | 'pendente-recepcao' | 'cancelada' | 'pendente';
 type FiltroOrigemNota = 'proprio' | 'terceiro';
 type FiltroManifestoNota = 'manifestada' | 'nao-manifestada' | 'pendente-processando' | 'com-erros';
@@ -1453,6 +1453,7 @@ export default function Dashboard({
         const consultada = !!n.sitramConsultadaEm || !!dae;
         const temDae = ['PAGO', 'EM_ABERTO', 'LIBERADA_PARA_GERAR'].includes(dae);
         if (filtroDaeSitramBusca === 'consultado' && !consultada) return false;
+        if (filtroDaeSitramBusca === 'sem-consulta' && consultada) return false;
         if (filtroDaeSitramBusca === 'com-dae' && !temDae) return false;
         if (filtroDaeSitramBusca === 'a-pagar' && !DAE_A_PAGAR.includes(dae)) return false;
         if (filtroDaeSitramBusca === 'em-aberto' && dae !== 'EM_ABERTO') return false;
@@ -1586,6 +1587,65 @@ export default function Dashboard({
     () => [...notas].sort((a, b) => new Date(b.emitidaEm).getTime() - new Date(a.emitidaEm).getTime()).slice(0, 5),
     [notas]
   );
+  const [buscaGlobalHome, setBuscaGlobalHome] = useState('');
+  const [resultadosBuscaHome, setResultadosBuscaHome] = useState<NotaComCnpj[]>([]);
+  const [buscandoGlobalHome, setBuscandoGlobalHome] = useState(false);
+
+  async function buscarGlobalHome() {
+    const termo = buscaGlobalHome.trim();
+    if (!termo) {
+      setResultadosBuscaHome([]);
+      return;
+    }
+
+    setBuscandoGlobalHome(true);
+    try {
+      const base = todasCarregadas ? notas : await listarTodasNotas() as NotaComCnpj[];
+      if (!todasCarregadas) {
+        setNotas(base);
+        setNotasAlerta(base);
+        setTodasCarregadas(true);
+      }
+
+      const busca = normalizarBuscaFiltro(termo);
+      const digitos = termo.replace(/\D/g, '');
+      const resultados = base.filter((nota) => {
+        const texto = normalizarBuscaFiltro([
+          numeroNotaSistema(nota),
+          serieNotaSistema(nota),
+          nota.chave,
+          nota.emitenteNome,
+          nota.emitenteCnpj,
+          nota.destNome,
+          nota.destCnpj,
+          nota.cnpj.razaoSocial,
+          nota.cnpj.cnpj,
+        ].filter(Boolean).join(' '));
+        const numeros = [nota.chave, nota.emitenteCnpj, nota.destCnpj, nota.cnpj.cnpj].join('').replace(/\D/g, '');
+        return texto.includes(busca) || (digitos.length >= 3 && numeros.includes(digitos));
+      });
+      setResultadosBuscaHome(resultados.slice(0, 10));
+    } finally {
+      setBuscandoGlobalHome(false);
+    }
+  }
+
+  function abrirResultadoBuscaHome(nota: NotaComCnpj) {
+    const numero = numeroNotaSistema(nota);
+    setFiltroNumero(numero);
+    setFiltroChave(nota.chave);
+    setSecaoAtual('notas');
+    setMostrarFiltros(true);
+    void aplicarFiltrosNotas({ numero, chave: nota.chave });
+  }
+
+  function abrirFilaNotasHome(filtros: Partial<FiltrosNotasAplicados>) {
+    setSecaoAtual('notas');
+    setMostrarFiltros(true);
+    if (filtros.status) setFiltroStatus(filtros.status);
+    if (filtros.daeSitram) setFiltroDaeSitram(filtros.daeSitram);
+    void aplicarFiltrosNotas(filtros);
+  }
   // Manifestação em lote
   const [selecionadas, setSelecionadas] = useState<Set<number>>(new Set());
   const [manifestoLoteProgresso, setManifestoLoteProgresso] = useState<{ feito: number; total: number } | null>(null);
@@ -1925,6 +1985,52 @@ export default function Dashboard({
               </div>
             </div>
 
+            <form
+              onSubmit={(evento) => {
+                evento.preventDefault();
+                void buscarGlobalHome();
+              }}
+              className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4 shadow-sm md:p-5"
+            >
+              <div className="flex flex-col gap-3 md:flex-row md:items-end">
+                <div className="min-w-0 flex-1">
+                  <label htmlFor="busca-global-home" className="block text-sm font-bold text-[var(--ink)]">Busca rápida</label>
+                  <p className="mt-1 text-xs text-[var(--ink-mut)]">Número da NF, chave, fornecedor, destinatário ou CNPJ.</p>
+                  <input
+                    id="busca-global-home"
+                    value={buscaGlobalHome}
+                    onChange={(evento) => setBuscaGlobalHome(evento.target.value)}
+                    placeholder="Digite o que precisa encontrar..."
+                    className="mt-3 h-10 w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 text-sm text-[var(--ink)] outline-none focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent-soft)]"
+                  />
+                </div>
+                <button type="submit" disabled={buscandoGlobalHome} className="h-10 rounded-lg bg-[var(--accent)] px-5 text-sm font-bold text-white hover:brightness-110 disabled:opacity-50">
+                  {buscandoGlobalHome ? 'Buscando...' : 'Buscar nota'}
+                </button>
+              </div>
+              {resultadosBuscaHome.length > 0 && (
+                <div className="mt-4 overflow-hidden rounded-xl border border-[var(--border)]">
+                  <div className="border-b border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-xs font-bold text-[var(--ink)]">
+                    {resultadosBuscaHome.length} resultado(s) encontrado(s). Mostrando os primeiros 10.
+                  </div>
+                  <div className="divide-y divide-[var(--border)]">
+                    {resultadosBuscaHome.map((nota) => (
+                      <button key={nota.id} type="button" onClick={() => abrirResultadoBuscaHome(nota)} className="flex w-full flex-wrap items-center justify-between gap-2 px-3 py-2.5 text-left hover:bg-[var(--surface-2)]">
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-sm font-bold text-[var(--ink)]">NF {numeroNotaSistema(nota) || '—'} · {nota.emitenteNome || 'Emitente não informado'}</span>
+                          <span className="mt-0.5 block truncate text-xs text-[var(--ink-mut)]">{nota.cnpj.razaoSocial || formatarCnpj(nota.cnpj.cnpj)} · {data(nota.emitidaEm)}</span>
+                        </span>
+                        <span className="text-sm font-black text-[var(--ink)]">{moeda(nota.valorTotal)}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {buscaGlobalHome.trim() && !buscandoGlobalHome && resultadosBuscaHome.length === 0 && (
+                <p className="mt-3 text-sm text-[var(--ink-mut)]">Nenhuma nota encontrada para essa busca.</p>
+              )}
+            </form>
+
             <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
               <HomeKpi sigla="NF" label="Notas na base" value={String(resumoInicio.totalNotas)} sub={`${resumoInicio.emitidasHoje} hoje · ${resumoInicio.emitidasUltimos7Dias} nos últimos 7 dias`} tone="dark" />
               <HomeKpi sigla="R$" label="Valor movimentado" value={moeda(resumoInicio.valorTotal)} sub="Soma das notas completas" tone="green" />
@@ -1952,8 +2058,10 @@ export default function Dashboard({
                 </div>
                 <div className="space-y-2">
                   <HomePendencia titulo="Manifestações pendentes" detalhe="Resumos sem ciência da operação" valor={resumoInicio.pendentesManifestacao} tone="amber" onClick={() => setSecaoAtual('notas')} />
+                  <HomePendencia titulo="XML completo pendente" detalhe="Notas que ainda estão apenas como resumo" valor={Math.max(0, resumoInicio.totalNotas - resumoInicio.notasCompletas)} tone="amber" onClick={() => abrirFilaNotasHome({ status: 'RESUMO' })} />
                   <HomePendencia titulo="DAE em aberto ou a gerar" detalhe="Notas consultadas no SITRAM" valor={resumoOperacionalHome.daeAbertos} tone="red" onClick={() => setSecaoAtual('notas')} />
                   <HomePendencia titulo="DAE vencido" detalhe="Lançamentos ainda sem pagamento" valor={resumoOperacionalHome.daeVencidos} tone="red" onClick={() => setSecaoAtual('notas')} />
+                  <HomePendencia titulo="SITRAM sem consulta" detalhe="Notas que ainda precisam de atualização fiscal" valor={resumoInicio.notasSemSitram} tone="gray" onClick={() => abrirFilaNotasHome({ daeSitram: 'sem-consulta' })} />
                   <HomePendencia titulo="Empresas com atenção" detalhe="Sem busca recente ou temporariamente bloqueadas" valor={resumoOperacionalHome.empresasComAtencao} tone="gray" onClick={() => setSecaoAtual('empresas')} />
                 </div>
               </div>
@@ -2806,6 +2914,7 @@ export default function Dashboard({
                       titulo="SITRAM / DAE"
                       opcoes={[
                         { valor: 'consultado', label: 'Consultado' },
+                        { valor: 'sem-consulta', label: 'Sem consulta' },
                         { valor: 'com-dae', label: 'Com DAE' },
                         { valor: 'a-pagar', label: 'A pagar' },
                         { valor: 'em-aberto', label: 'Em aberto' },

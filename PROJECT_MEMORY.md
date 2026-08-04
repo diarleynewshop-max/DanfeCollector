@@ -134,6 +134,27 @@ A versão de download livre do ACBrMonitorPLUS (fórum ACBr) é **travada em hom
 
 ---
 
+## Plano de completude operacional (04/08/2026)
+
+Objetivo: transformar o DanfeCollector em uma central diaria de acompanhamento de NF-e, com pendencias claras, busca rapida e rastreabilidade.
+
+### Entregue nesta etapa
+- [x] **Busca rapida global na Home:** localizar por numero, chave, fornecedor, destinatario ou CNPJ e abrir a nota ja filtrada.
+- [x] **Fila visual de pendencias:** Home com XML completo pendente e SITRAM sem consulta, alem de manifestacao e DAE.
+- [x] **Filtro SITRAM "Sem consulta":** atalho operacional para encontrar notas que ainda precisam de atualizacao fiscal.
+- [x] **Alertas ja disponiveis:** DAE em aberto/vencido e certificado vencido/proximo do vencimento.
+- [x] **Relatorios gerenciais existentes:** filtros por empresa, periodo, UF, fornecedor, risco e DAE, com exportacao de transporte em Excel.
+
+### Proximas entregas prioritarias
+- [ ] **Fila de trabalho persistente:** responsavel, status operacional, prazo e observacao por NF; permitir que a equipe acompanhe quem esta tratando cada pendencia.
+- [ ] **Notificacoes:** resumo diario e alertas de novas notas, cancelamentos, DAE vencido, XML pendente e certificado proximo do vencimento.
+- [ ] **Historico/auditoria:** registrar usuario, data, acao e antes/depois para etiquetas, manifestacao, pagamento, anexos e alteracoes de status.
+- [ ] **Relatorios fiscais prontos:** exportacao CSV/Excel/PDF por loja, fornecedor, periodo, DAE, pagamento e pendencia.
+- [ ] **Saude por empresa:** ultima sincronizacao, bloqueio SEFAZ, quantidade de notas novas, erros, XML pendente e certificado.
+- [ ] **Painel de lacunas:** dias sem NF, sequencias faltantes por empresa/serie e comparacao futura com ERP.
+
+Regra de execucao: concluir a fila persistente e a auditoria antes de adicionar novas integracoes externas. Validar cada item com build e teste do fluxo visivel na Home/Nota Fiscal.
+
 ## Radar: divergencia ERP x SEFAZ no intervalo 09/07/2026 a 14/07/2026
 
 - [ ] **Investigar salto de datas no app:** usuario relatou que o DanfeCollector pula de 09/07/2026 para 14/07/2026, mas o ERP mostra NFs em 10/07, 12/07 e 13/07.
