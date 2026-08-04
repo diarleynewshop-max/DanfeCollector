@@ -22,7 +22,21 @@ INSERT INTO "SyncWorkerStatus" ("id", "status")
 VALUES (1, 'AGUARDANDO')
 ON CONFLICT ("id") DO NOTHING;
 
-GRANT SELECT, INSERT, UPDATE, DELETE ON "SyncWorkerStatus" TO service_role;
-GRANT SELECT, INSERT, UPDATE, DELETE ON "SyncWorkerStatus" TO danfe_prisma;
+-- Esta tabela e acessada somente pelo servidor/worker. O role do app nao deve
+-- depender de sessao de usuario ou de policy de browser para gravar heartbeat.
+ALTER TABLE "SyncWorkerStatus" DISABLE ROW LEVEL SECURITY;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'danfe_prisma') THEN
+    GRANT SELECT, INSERT, UPDATE, DELETE ON "SyncWorkerStatus" TO danfe_prisma;
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'danfe') THEN
+    GRANT SELECT, INSERT, UPDATE, DELETE ON "SyncWorkerStatus" TO danfe;
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN
+    GRANT SELECT, INSERT, UPDATE, DELETE ON "SyncWorkerStatus" TO service_role;
+  END IF;
+END $$;
 
 COMMIT;
