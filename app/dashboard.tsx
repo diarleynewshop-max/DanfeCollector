@@ -179,7 +179,7 @@ const MODALIDADE_NOTA_OPCOES: Array<{ valor: FiltroModalidadeNota; label: string
   { valor: 'ajuste-icms', label: 'Ajuste - ICMS' },
 ];
 const CAMPO_FILTRO_NOTAS =
-  'h-7 w-full rounded-[3px] border border-slate-300 bg-white px-2 text-[12px] text-slate-900 outline-none focus:border-slate-500 focus:ring-1 focus:ring-slate-400 disabled:bg-slate-100 disabled:text-slate-500';
+  'h-9 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-300 disabled:bg-slate-100 disabled:text-slate-500';
 const LARGURAS_COLUNAS_PADRAO: Record<ColunaRedimensionavel, number> = {
   nf: 130,
   emitente: 240,
@@ -2616,24 +2616,30 @@ export default function Dashboard({
               cnpjId={filtroCnpjId}
               onFiltrar={filtrarVencimentoDae}
             />
-            <section className="mb-4 overflow-hidden rounded border border-slate-300 bg-slate-50 text-slate-900 shadow-sm">
-              <div className="flex min-h-9 flex-wrap items-center justify-between gap-2 border-b border-slate-300 bg-slate-100 px-2 py-1.5">
-                <button
-                  type="button"
-                  onClick={() => setMostrarFiltros((valor) => !valor)}
-                  className="grid h-6 w-6 place-items-center rounded border border-transparent text-sm font-bold text-slate-800 hover:border-slate-300 hover:bg-white"
-                  aria-label={mostrarFiltros ? 'Recolher filtros' : 'Expandir filtros'}
-                >
-                  {mostrarFiltros ? 'v' : '>'}
-                </button>
-                <div className="ml-auto flex flex-wrap items-center justify-end gap-1.5">
+            <section className="mb-5 overflow-hidden rounded-xl border border-slate-300 bg-slate-50 text-slate-900 shadow-sm">
+              <div className="flex min-h-14 flex-wrap items-center justify-between gap-3 border-b border-slate-300 bg-slate-100 px-4 py-3">
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setMostrarFiltros((valor) => !valor)}
+                    className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-bold text-slate-800 hover:bg-slate-200"
+                    aria-label={mostrarFiltros ? 'Recolher filtros' : 'Expandir filtros'}
+                  >
+                    {mostrarFiltros ? 'Ocultar filtros' : 'Mostrar filtros'}
+                  </button>
+                  <div>
+                    <h2 className="text-base font-bold text-slate-900">Filtros de notas fiscais</h2>
+                    <p className="text-xs text-slate-600">Combine os critérios e clique em Pesquisar.</p>
+                  </div>
+                </div>
+                <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
                   {carregandoTodas && <span className="mr-2 text-[11px] font-semibold text-amber-700">Carregando base...</span>}
                   {filtrosPendentes && !carregandoTodas && <span className="mr-2 text-[11px] font-semibold text-amber-700">Alteracoes pendentes</span>}
                   <button
                     type="button"
                     onClick={() => void aplicarFiltrosNotas()}
                     disabled={carregandoTodas || carregandoAno}
-                    className="h-7 rounded-[3px] border border-slate-400 bg-white px-3 text-[12px] font-semibold text-slate-800 hover:bg-slate-200 disabled:opacity-50"
+                    className="h-9 rounded-lg border border-slate-400 bg-white px-3 text-sm font-semibold text-slate-800 hover:bg-slate-200 disabled:opacity-50"
                   >
                     Pesquisar
                   </button>
@@ -2641,7 +2647,7 @@ export default function Dashboard({
                     type="button"
                     onClick={limparFiltrosAvancados}
                     disabled={filtrosAtivos === 0 && filtrosAplicadosAtivos === 0}
-                    className="h-7 rounded-[3px] border border-slate-300 bg-white px-3 text-[12px] font-semibold text-slate-700 hover:bg-slate-200 disabled:opacity-50"
+                    className="h-9 rounded-lg border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-200 disabled:opacity-50"
                   >
                     Limpar filtros
                   </button>
@@ -2649,7 +2655,7 @@ export default function Dashboard({
                     type="button"
                     onClick={filtrarErroImportacaoNotas}
                     disabled={carregandoTodas}
-                    className="h-7 rounded-[3px] bg-slate-900 px-3 text-[12px] font-bold text-white hover:bg-slate-700 disabled:opacity-50"
+                    className="h-9 rounded-lg bg-slate-900 px-3 text-sm font-bold text-white hover:bg-slate-700 disabled:opacity-50"
                   >
                     Erro de Importacao
                   </button>
@@ -2657,14 +2663,14 @@ export default function Dashboard({
                     type="button"
                     onClick={filtrarXmlCompletoNotas}
                     disabled={carregandoTodas}
-                    className="h-7 rounded-[3px] bg-slate-900 px-3 text-[12px] font-bold text-white hover:bg-slate-700 disabled:opacity-50"
+                    className="h-9 rounded-lg bg-slate-900 px-3 text-sm font-bold text-white hover:bg-slate-700 disabled:opacity-50"
                   >
                     XML
                   </button>
                   <button
                     type="button"
                     onClick={abrirInclusaoNotas}
-                    className="h-7 rounded-[3px] bg-slate-900 px-3 text-[12px] font-bold text-white hover:bg-slate-700"
+                    className="h-9 rounded-lg bg-slate-900 px-3 text-sm font-bold text-white hover:bg-slate-700"
                   >
                     Incluir
                   </button>
@@ -2672,9 +2678,14 @@ export default function Dashboard({
               </div>
 
               {mostrarFiltros && (
-                <div className="space-y-3 bg-white px-5 py-4">
-                  <div className="grid grid-cols-1 gap-x-2 gap-y-2 lg:grid-cols-[1.2fr_3.6fr_1.55fr_1fr_1.2fr]">
-                    <CampoFiltroNotas label="Loja" className="lg:col-span-2">
+                <div className="space-y-4 bg-slate-50 p-4 sm:p-5">
+                  <div className="rounded-xl border border-slate-200 bg-white p-4">
+                    <div className="mb-4">
+                      <h3 className="text-sm font-bold text-slate-900">Dados principais</h3>
+                      <p className="mt-0.5 text-xs text-slate-500">Localize a nota por loja, pessoa, status ou período.</p>
+                    </div>
+                  <div className="grid grid-cols-1 gap-x-4 gap-y-4 lg:grid-cols-12">
+                    <CampoFiltroNotas label="Loja" className="lg:col-span-4">
                       <select
                         value={filtroCnpjId}
                         onChange={(e) => setFiltroCnpjId(e.target.value === 'todos' ? 'todos' : Number(e.target.value))}
@@ -2686,7 +2697,7 @@ export default function Dashboard({
                         ))}
                       </select>
                     </CampoFiltroNotas>
-                    <CampoFiltroNotas label="Status XML">
+                    <CampoFiltroNotas label="Status XML" className="lg:col-span-2">
                       <select
                         value={filtroStatus}
                         onChange={(e) => setFiltroStatus(e.target.value as typeof filtroStatus)}
@@ -2697,16 +2708,16 @@ export default function Dashboard({
                         <option value="COMPLETA">Completa</option>
                       </select>
                     </CampoFiltroNotas>
-                    <CampoFiltroNotas label="Periodo(Data de emissao)">
+                    <CampoFiltroNotas label="Emissao - inicio" className="lg:col-span-3">
                       <input type="date" value={filtroDataInicio} onChange={(e) => setFiltroDataInicio(e.target.value)} className={CAMPO_FILTRO_NOTAS} />
                     </CampoFiltroNotas>
-                    <CampoFiltroNotas label=" ">
+                    <CampoFiltroNotas label="Emissao - fim" className="lg:col-span-3">
                       <input type="date" value={filtroDataFim} onChange={(e) => setFiltroDataFim(e.target.value)} className={CAMPO_FILTRO_NOTAS} />
                     </CampoFiltroNotas>
                   </div>
 
-                  <div className="grid grid-cols-1 gap-x-2 gap-y-2 lg:grid-cols-[1.2fr_3.6fr_1.55fr_1fr_1.2fr]">
-                    <CampoFiltroNotas label="Fornecedor" className="lg:col-span-2">
+                  <div className="mt-4 grid grid-cols-1 gap-x-4 gap-y-4 lg:grid-cols-12">
+                    <CampoFiltroNotas label="Fornecedor" className="lg:col-span-4">
                       <CampoBuscaOpcoesFiltro
                         valor={filtroEmitente}
                         opcoes={sugestoesEmitente}
@@ -2714,7 +2725,7 @@ export default function Dashboard({
                         onChange={setFiltroEmitente}
                       />
                     </CampoFiltroNotas>
-                    <CampoFiltroNotas label="Destinatario">
+                    <CampoFiltroNotas label="Destinatario" className="lg:col-span-2">
                       <CampoBuscaOpcoesFiltro
                         valor={filtroDestinatario}
                         opcoes={sugestoesDestinatario}
@@ -2722,16 +2733,16 @@ export default function Dashboard({
                         onChange={setFiltroDestinatario}
                       />
                     </CampoFiltroNotas>
-                    <CampoFiltroNotas label="Periodo(Data de entrada)">
+                    <CampoFiltroNotas label="Entrada - inicio" className="lg:col-span-3">
                       <input type="date" value={filtroDataEntradaInicio} onChange={(e) => setFiltroDataEntradaInicio(e.target.value)} className={CAMPO_FILTRO_NOTAS} />
                     </CampoFiltroNotas>
-                    <CampoFiltroNotas label=" ">
+                    <CampoFiltroNotas label="Entrada - fim" className="lg:col-span-3">
                       <input type="date" value={filtroDataEntradaFim} onChange={(e) => setFiltroDataEntradaFim(e.target.value)} className={CAMPO_FILTRO_NOTAS} />
                     </CampoFiltroNotas>
                   </div>
 
-                  <div className="grid grid-cols-1 gap-x-2 gap-y-2 lg:grid-cols-[2.2fr_.6fr_.9fr_1.05fr_1.05fr]">
-                    <CampoFiltroNotas label="Chave NF-e">
+                  <div className="mt-4 grid grid-cols-1 gap-x-4 gap-y-4 lg:grid-cols-12">
+                    <CampoFiltroNotas label="Chave NF-e" className="lg:col-span-4">
                       <input
                         value={filtroChave}
                         onChange={(e) => setFiltroChave(e.target.value)}
@@ -2740,10 +2751,10 @@ export default function Dashboard({
                         className={CAMPO_FILTRO_NOTAS}
                       />
                     </CampoFiltroNotas>
-                    <CampoFiltroNotas label="Serie">
+                    <CampoFiltroNotas label="Serie" className="lg:col-span-2">
                       <input value={filtroSerie} onChange={(e) => setFiltroSerie(e.target.value)} inputMode="numeric" className={CAMPO_FILTRO_NOTAS} />
                     </CampoFiltroNotas>
-                    <CampoFiltroNotas label="Num. Documento">
+                    <CampoFiltroNotas label="Num. Documento" className="lg:col-span-2">
                       <input
                         value={filtroNumero}
                         onChange={(e) => setFiltroNumero(e.target.value)}
@@ -2757,28 +2768,40 @@ export default function Dashboard({
                         className={CAMPO_FILTRO_NOTAS}
                       />
                     </CampoFiltroNotas>
-                    <CampoFiltroNotas label="Valor NF">
+                    <CampoFiltroNotas label="Valor NF" className="lg:col-span-2">
                       <div className="grid grid-cols-2 gap-1.5">
                         <input type="number" value={filtroValorMin} onChange={(e) => setFiltroValorMin(e.target.value)} placeholder="Min." className={CAMPO_FILTRO_NOTAS} />
                         <input type="number" value={filtroValorMax} onChange={(e) => setFiltroValorMax(e.target.value)} placeholder="Max." className={CAMPO_FILTRO_NOTAS} />
                       </div>
                     </CampoFiltroNotas>
-                    <CampoFiltroNotas label="Qtd. Itens">
+                    <CampoFiltroNotas label="Qtd. Itens" className="lg:col-span-2">
                       <div className="grid grid-cols-2 gap-1.5">
                         <input type="number" min={0} value={filtroItensMin} onChange={(e) => setFiltroItensMin(e.target.value)} placeholder="Min." className={CAMPO_FILTRO_NOTAS} />
                         <input type="number" min={0} value={filtroItensMax} onChange={(e) => setFiltroItensMax(e.target.value)} placeholder="Max." className={CAMPO_FILTRO_NOTAS} />
                       </div>
                     </CampoFiltroNotas>
                   </div>
+                  </div>
 
-                  <div className="grid gap-4 border-t border-slate-200 pt-2 lg:grid-cols-[1.5fr_.75fr_1fr_1fr]">
+                  <div className="rounded-xl border border-slate-200 bg-white p-4">
+                    <div className="mb-4">
+                      <h3 className="text-sm font-bold text-slate-900">Classificacao da nota</h3>
+                      <p className="mt-0.5 text-xs text-slate-500">Use mais de uma opcao quando precisar cruzar situacoes.</p>
+                    </div>
+                  <div className="grid gap-5 lg:grid-cols-4">
                     <GrupoCheckboxFiltro titulo="Situacoes" opcoes={SITUACOES_NOTA_OPCOES} selecionados={filtroSituacoes} onToggle={toggleFiltroSituacaoNota} />
                     <GrupoCheckboxFiltro titulo="Origem" opcoes={ORIGEM_NOTA_OPCOES} selecionados={filtroOrigens} onToggle={toggleFiltroOrigemNota} />
                     <GrupoCheckboxFiltro titulo="Manifesto" opcoes={MANIFESTO_NOTA_OPCOES} selecionados={filtroManifestos} onToggle={toggleFiltroManifestoNota} />
                     <GrupoCheckboxFiltro titulo="Modalidades" opcoes={MODALIDADE_NOTA_OPCOES} selecionados={filtroModalidades} onToggle={toggleFiltroModalidadeNota} />
                   </div>
+                  </div>
 
-                  <div className="grid gap-3 border-t border-slate-200 pt-3 lg:grid-cols-[1fr_1fr_1.3fr]">
+                  <div className="rounded-xl border border-slate-200 bg-white p-4">
+                    <div className="mb-4">
+                      <h3 className="text-sm font-bold text-slate-900">SITRAM, DAE e etiquetas</h3>
+                      <p className="mt-0.5 text-xs text-slate-500">Refine por situacao fiscal, vencimento ou organizacao interna.</p>
+                    </div>
+                  <div className="grid gap-5 lg:grid-cols-[1.35fr_1fr_1.35fr]">
                     <GrupoCheckboxFiltro
                       titulo="SITRAM / DAE"
                       opcoes={[
@@ -2797,12 +2820,12 @@ export default function Dashboard({
                     <div className="space-y-2">
                       <CampoFiltroNotas label="Vencimento do DAE">
                         <div className="grid grid-cols-2 gap-1.5">
-                          <input type="date" value={filtroDaeVencInicio} onChange={(e) => setFiltroDaeVencInicio(e.target.value)} className={CAMPO_FILTRO_NOTAS} />
-                          <input type="date" value={filtroDaeVencFim} onChange={(e) => setFiltroDaeVencFim(e.target.value)} className={CAMPO_FILTRO_NOTAS} />
+                          <input type="date" aria-label="Vencimento DAE - inicio" value={filtroDaeVencInicio} onChange={(e) => setFiltroDaeVencInicio(e.target.value)} className={CAMPO_FILTRO_NOTAS} />
+                          <input type="date" aria-label="Vencimento DAE - fim" value={filtroDaeVencFim} onChange={(e) => setFiltroDaeVencFim(e.target.value)} className={CAMPO_FILTRO_NOTAS} />
                         </div>
                       </CampoFiltroNotas>
-                      <label className="flex items-center gap-2 text-[12px] font-semibold text-slate-800">
-                        <input type="checkbox" checked={filtroForaCe15SemDae} onChange={() => alternarFiltroForaCe15SemDae()} className="h-3.5 w-3.5" />
+                      <label className="flex items-center gap-2 text-sm font-semibold leading-5 text-slate-800">
+                        <input type="checkbox" checked={filtroForaCe15SemDae} onChange={() => alternarFiltroForaCe15SemDae()} className="h-4 w-4" />
                         Fora do CE +15 dias ({qtdForaCe15SemDae})
                       </label>
                     </div>
@@ -2830,7 +2853,7 @@ export default function Dashboard({
                             type="button"
                             onClick={adicionarExclusaoEmitente}
                             disabled={!excluirEmitenteInput.trim()}
-                            className="h-7 rounded-[3px] border border-slate-300 bg-white px-2 text-[12px] font-semibold text-slate-800 hover:bg-slate-100 disabled:opacity-50"
+                            className="h-9 rounded-lg border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-800 hover:bg-slate-100 disabled:opacity-50"
                           >
                             Excluir
                           </button>
@@ -2843,7 +2866,7 @@ export default function Dashboard({
                               key={ex}
                               type="button"
                               onClick={() => removerExclusaoEmitente(ex)}
-                              className="rounded border border-red-200 bg-red-50 px-2 py-0.5 text-[11px] font-semibold text-red-700 hover:bg-red-100"
+                              className="rounded-md border border-red-200 bg-red-50 px-2.5 py-1 text-xs font-semibold text-red-700 hover:bg-red-100"
                               title="Remover"
                             >
                               {ex} x
@@ -2852,6 +2875,7 @@ export default function Dashboard({
                         </div>
                       )}
                     </div>
+                  </div>
                   </div>
                 </div>
               )}
@@ -4854,7 +4878,7 @@ function CampoFiltroNotas({
 }) {
   return (
     <div className={`block min-w-0 ${className}`}>
-      <span className="mb-1 block h-3.5 text-[11px] font-semibold leading-3.5 text-slate-700">
+      <span className="mb-1.5 block min-h-4 text-xs font-semibold leading-4 text-slate-700">
         {label.trim() ? label : ''}
       </span>
       {children}
@@ -4948,7 +4972,7 @@ function CampoBuscaOpcoesFiltro({
           if (e.key === 'Escape') setAberto(false);
         }}
         placeholder={placeholder}
-        className={`${CAMPO_FILTRO_NOTAS} pr-8`}
+        className={`${CAMPO_FILTRO_NOTAS} pr-9`}
       />
       {busca && (
         <button
@@ -4958,14 +4982,14 @@ function CampoBuscaOpcoesFiltro({
             onChange('');
             setAberto(false);
           }}
-          className="absolute right-1 top-1 grid h-5 w-5 place-items-center rounded text-[12px] font-bold text-slate-500 hover:bg-slate-100 hover:text-slate-900"
+          className="absolute right-1.5 top-1.5 grid h-6 w-6 place-items-center rounded-md text-sm font-bold text-slate-500 hover:bg-slate-100 hover:text-slate-900"
           aria-label="Limpar"
         >
           x
         </button>
       )}
       {aberto && (
-        <div className="absolute left-0 right-0 top-[30px] z-50 max-h-72 overflow-y-auto rounded-md border border-slate-300 bg-white py-1 text-[12px] shadow-xl">
+        <div className="absolute left-0 right-0 top-11 z-50 max-h-72 overflow-y-auto rounded-lg border border-slate-300 bg-white py-1 text-sm shadow-xl">
           <button
             type="button"
             onClick={() => {
@@ -4973,7 +4997,7 @@ function CampoBuscaOpcoesFiltro({
               onChange('');
               setAberto(false);
             }}
-            className="block w-full px-3 py-2 text-left font-semibold text-slate-700 hover:bg-slate-100"
+            className="block w-full px-3 py-2.5 text-left font-semibold text-slate-700 hover:bg-slate-100"
           >
             {placeholder}
           </button>
@@ -4986,14 +5010,14 @@ function CampoBuscaOpcoesFiltro({
                 onChange(opcao);
                 setAberto(false);
               }}
-              className="block w-full truncate px-3 py-2 text-left font-semibold text-slate-900 hover:bg-blue-600 hover:text-white"
+              className="block w-full truncate px-3 py-2.5 text-left font-semibold text-slate-900 hover:bg-blue-600 hover:text-white"
               title={opcao}
             >
               {opcao}
             </button>
           ))}
           {sugestoes.length === 0 && (
-            <div className="px-3 py-2 text-slate-500">Nenhuma recomendacao encontrada.</div>
+            <div className="px-3 py-2.5 text-slate-500">Nenhuma recomendacao encontrada.</div>
           )}
         </div>
       )}
@@ -5014,15 +5038,15 @@ function GrupoCheckboxFiltro({
 }) {
   return (
     <fieldset className="min-w-0">
-      <legend className="mb-1.5 text-sm font-bold text-slate-900">{titulo}</legend>
-      <div className="grid grid-cols-1 gap-x-4 gap-y-1 sm:grid-cols-2 xl:grid-cols-3">
+      <legend className="mb-2 text-sm font-bold text-slate-900">{titulo}</legend>
+      <div className="grid grid-cols-1 gap-x-4 gap-y-2 sm:grid-cols-2 xl:grid-cols-3">
         {opcoes.map((opcao) => (
-          <label key={opcao.valor} className="flex min-w-0 items-center gap-1.5 text-[11px] text-slate-800">
+          <label key={opcao.valor} className="flex min-w-0 items-center gap-2 text-sm leading-5 text-slate-800">
             <input
               type="checkbox"
               checked={selecionados.includes(opcao.valor)}
               onChange={() => onToggle(opcao.valor)}
-              className="h-3.5 w-3.5 shrink-0 rounded border-slate-400 text-slate-900 focus:ring-slate-500"
+              className="h-4 w-4 shrink-0 rounded border-slate-400 text-slate-900 focus:ring-slate-500"
             />
             <span className="truncate" title={opcao.label}>{opcao.label}</span>
           </label>
