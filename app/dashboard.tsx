@@ -4331,6 +4331,33 @@ function RelatoriosDashboard({
       })
       .slice(0, 12);
   }, [notasPeriodo]);
+  const todasPendencias = useMemo(
+    () => notasPeriodo
+      .filter((nota) => nota.pendencias.length > 0)
+      .sort((a, b) => {
+        const peso = { critico: 0, alto: 1, medio: 2, baixo: 3 };
+        return peso[a.risco as keyof typeof peso] - peso[b.risco as keyof typeof peso] || b.valor - a.valor;
+      }),
+    [notasPeriodo],
+  );
+  const fornecedoresResumo = useMemo(() => {
+    const mapa = new Map<string, { fornecedor: string; cnpj: string; notas: number; valor: number; icms: number }>();
+    for (const nota of notasPeriodo) {
+      const chave = nota.emitenteCnpj || nota.emitenteNomeRelatorio;
+      const atual = mapa.get(chave) ?? {
+        fornecedor: nota.emitenteNomeRelatorio,
+        cnpj: nota.emitenteCnpj ? formatarCnpj(nota.emitenteCnpj) : '',
+        notas: 0,
+        valor: 0,
+        icms: 0,
+      };
+      atual.notas += 1;
+      atual.valor += nota.valor;
+      atual.icms += nota.icms;
+      mapa.set(chave, atual);
+    }
+    return [...mapa.values()].sort((a, b) => b.valor - a.valor);
+  }, [notasPeriodo]);
   const notasTabela = useMemo(() => notasPeriodo.slice(0, limiteTabela), [notasPeriodo, limiteTabela]);
 
   useEffect(() => {
@@ -4456,6 +4483,83 @@ function RelatoriosDashboard({
     } finally {
       setBaixandoExcelTransporte(false);
     }
+  }
+
+  function csvValor(valor: unknown): string {
+    return `"${String(valor ?? '').replace(/"/g, '""')}"`;
+  }
+
+  function baixarCsv(nome: string, cabecalho: string[], linhas: unknown[][]) {
+    const conteudo = [cabecalho, ...linhas].map((linha) => linha.map(csvValor).join(';')).join('\r\n');
+    const blob = new Blob([`\uFEFF${conteudo}`], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = nome;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  function baixarRelatorioNotasCsv() {
+    baixarCsv('relatorio-notas-fiscais.csv', ['Emissao', 'NF', 'Serie', 'Empresa', 'Fornecedor', 'CNPJ fornecedor', 'UF', 'XML', 'Total NF', 'ICMS', 'DAE', 'Risco'], notasPeriodo.map((nota) => [
+      data(nota.emitidaEm),
+      numeroNotaSistema(nota),
+      serieNotaSistema(nota),
+      nota.empresaLabel,
+      nota.emitenteNomeRelatorio,
+      nota.emitenteCnpj ? formatarCnpj(nota.emitenteCnpj) : '',
+      nota.uf,
+      nota.status,
+      nota.valor,
+      nota.icms,
+      textoDaeSitram(nota.daeStatus),
+      nota.risco,
+    ]));
+  }
+
+  function baixarRelatorioPendenciasCsv() {
+    baixarCsv('relatorio-pendencias-fiscais.csv', ['NF', 'Emissao', 'Empresa', 'Fornecedor', 'Valor NF', 'Risco', 'Pendencias'], todasPendencias.map((nota) => [
+      numeroNotaSistema(nota),
+      data(nota.emitidaEm),
+      nota.empresaLabel,
+      nota.emitenteNomeRelatorio,
+      nota.valor,
+      nota.risco,
+      nota.pendencias.join(' | '),
+    ]));
+  }
+
+  function baixarRelatorioFornecedoresCsv() {
+    baixarCsv('relatorio-fornecedores.csv', ['Fornecedor', 'CNPJ', 'Quantidade de NF', 'Valor total', 'ICMS'], fornecedoresResumo.map((fornecedor) => [
+      fornecedor.fornecedor,
+      fornecedor.cnpj,
+      fornecedor.notas,
+      fornecedor.valor,
+      fornecedor.icms,
+    ]));
+  }
+
+  function escaparHtmlRelatorio(valor: unknown): string {
+    return String(valor ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+  }
+
+  function imprimirRelatorioPdf() {
+    const janela = window.open('', '_blank', 'width=1200,height=800');
+    if (!janela) {
+      setErroExcelTransporte('O navegador bloqueou a janela de impressão. Permita pop-ups para gerar o PDF.');
+      return;
+    }
+
+    const linhas = notasPeriodo.map((nota) => `<tr><td>${escaparHtmlRelatorio(data(nota.emitidaEm))}</td><td>${escaparHtmlRelatorio(numeroNotaSistema(nota))}</td><td>${escaparHtmlRelatorio(nota.empresaLabel)}</td><td>${escaparHtmlRelatorio(nota.emitenteNomeRelatorio)}</td><td>${escaparHtmlRelatorio(moeda(nota.valor))}</td><td>${escaparHtmlRelatorio(textoDaeSitram(nota.daeStatus))}</td><td>${escaparHtmlRelatorio(nota.risco)}</td></tr>`).join('');
+    janela.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Relatório fiscal DanfeCollector</title><style>body{font:12px Arial,sans-serif;color:#1f2937;padding:28px}h1{font-size:22px;margin:0 0 5px}p{color:#6b7280;margin:4px 0 18px}table{border-collapse:collapse;width:100%;margin-top:20px}th,td{border:1px solid #d1d5db;padding:7px;text-align:left}th{background:#f3f4f6;font-size:11px}td:nth-child(5){text-align:right}@media print{button{display:none}}</style></head><body><h1>Relatório fiscal</h1><p>DanfeCollector · ${escaparHtmlRelatorio(new Date().toLocaleString('pt-BR'))} · ${notasPeriodo.length} nota(s) · Total ${escaparHtmlRelatorio(moeda(totalValorPeriodo))}</p><table><thead><tr><th>Emissão</th><th>NF</th><th>Empresa</th><th>Fornecedor</th><th>Total NF</th><th>DAE</th><th>Risco</th></tr></thead><tbody>${linhas || '<tr><td colspan="7">Nenhuma nota no filtro atual.</td></tr>'}</tbody></table><script>window.onload=function(){window.print()}</script></body></html>`);
+    janela.document.close();
   }
 
   return (
@@ -4622,6 +4726,30 @@ function RelatoriosDashboard({
           <p className="w-full text-sm font-medium text-red-700">{erroExcelTransporte}</p>
         )}
       </div>
+
+      <section className="report-card rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4 shadow-sm sm:p-5">
+        <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
+          <div>
+            <h2 className="text-base font-bold text-[var(--ink)]">Relatórios prontos</h2>
+            <p className="mt-1 text-xs text-[var(--ink-mut)]">Os arquivos usam o filtro aplicado acima.</p>
+          </div>
+          <span className="text-xs text-[var(--ink-mut)]">{notasPeriodo.length} nota(s) selecionada(s)</span>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <button type="button" onClick={baixarRelatorioNotasCsv} className="rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm font-semibold text-[var(--ink)] hover:bg-[var(--surface-2)]">
+            Notas fiscais CSV
+          </button>
+          <button type="button" onClick={baixarRelatorioPendenciasCsv} className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-800 hover:bg-amber-100">
+            Pendências CSV ({todasPendencias.length})
+          </button>
+          <button type="button" onClick={baixarRelatorioFornecedoresCsv} className="rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm font-semibold text-[var(--ink)] hover:bg-[var(--surface-2)]">
+            Fornecedores CSV
+          </button>
+          <button type="button" onClick={imprimirRelatorioPdf} className="rounded-lg bg-[var(--accent)] px-3 py-2 text-sm font-bold text-white hover:brightness-110">
+            Imprimir / salvar PDF
+          </button>
+        </div>
+      </section>
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <KpiCard label={rt('Notas no período', '期间发票')} value={String(notasPeriodo.length)} sub={inicioPeriodo || fimPeriodo ? rt('Filtrado por data', '按日期筛选') : rt('Base carregada', '已加载数据')} tone="neu" />

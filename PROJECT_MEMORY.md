@@ -149,7 +149,7 @@ Objetivo: transformar o DanfeCollector em uma central diaria de acompanhamento d
 - [ ] **Fila de trabalho persistente:** responsavel, status operacional, prazo e observacao por NF; permitir que a equipe acompanhe quem esta tratando cada pendencia.
 - [ ] **Notificacoes:** resumo diario e alertas de novas notas, cancelamentos, DAE vencido, XML pendente e certificado proximo do vencimento.
 - [ ] **Historico/auditoria:** registrar usuario, data, acao e antes/depois para etiquetas, manifestacao, pagamento, anexos e alteracoes de status.
-- [ ] **Relatorios fiscais prontos:** exportacao CSV/Excel/PDF por loja, fornecedor, periodo, DAE, pagamento e pendencia.
+- [x] **Relatorios fiscais prontos:** CSV de notas, pendencias e fornecedores; impressao/salvar PDF respeitando os filtros; Excel de transporte mantido.
 - [ ] **Saude por empresa:** ultima sincronizacao, bloqueio SEFAZ, quantidade de notas novas, erros, XML pendente e certificado.
 - [ ] **Painel de lacunas:** dias sem NF, sequencias faltantes por empresa/serie e comparacao futura com ERP.
 
