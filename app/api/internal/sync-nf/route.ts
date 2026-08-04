@@ -1,5 +1,9 @@
 import { NextResponse } from 'next/server';
-import { sincronizarCnpjsAtivosInterno } from '@/lib/actions';
+import {
+  registrarFimWorker,
+  registrarInicioWorker,
+  sincronizarCnpjsAtivosInterno,
+} from '@/lib/actions';
 
 export const dynamic = 'force-dynamic';
 
@@ -17,12 +21,21 @@ export async function POST(req: Request) {
     return NextResponse.json({ success: false, message: 'Nao autorizado.' }, { status: 401 });
   }
 
+  await registrarInicioWorker();
   try {
     const resultado = await sincronizarCnpjsAtivosInterno();
-    return NextResponse.json(resultado, { status: resultado.success ? 200 : 500 });
+    await registrarFimWorker(resultado);
+    // A falha de um CNPJ fica isolada no resumo. A rota permanece 200 para
+    // que o worker continue vivo e tente os demais no próximo ciclo.
+    return NextResponse.json(resultado, { status: 200 });
   } catch (error: unknown) {
+    const resultado = {
+      success: false,
+      message: (error as Error).message || 'Erro interno na sincronizacao.',
+    };
+    await registrarFimWorker(resultado);
     return NextResponse.json(
-      { success: false, message: (error as Error).message || 'Erro interno na sincronizacao.' },
+      resultado,
       { status: 500 }
     );
   }

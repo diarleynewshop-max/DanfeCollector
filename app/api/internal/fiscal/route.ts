@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import {
   atualizarSitramPorChavesInterno,
   atualizarSitramPorManifestosInterno,
+  conferirNotasRecentesInterno,
   importarChavesLoteInterno,
   manifestarNotaInterno,
   manifestarNotasLoteInterno,
@@ -73,6 +74,11 @@ export async function POST(req: Request) {
 
       case 'sincronizarCnpjsAtivos':
         return NextResponse.json(await sincronizarCnpjsAtivosInterno());
+
+      case 'conferirNotasRecentes':
+        return NextResponse.json(
+          await conferirNotasRecentesInterno(Number(payload.dias) || 2, Number(payload.limite) || 20)
+        );
 
       case 'manifestarNota':
         return NextResponse.json(await manifestarNotaInterno(numeroObrigatorio(payload, 'notaId')));

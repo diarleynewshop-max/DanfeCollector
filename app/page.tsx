@@ -6,6 +6,7 @@ import {
   listarAnosDisponiveis,
   contarNotasTotal,
   obterResumoInicio,
+  obterSaudeSincronizacao,
   listarApiKeys,
 } from '@/lib/actions';
 import { obterUsuarioAtual } from '@/lib/usuarios/auth';
@@ -25,13 +26,14 @@ export default async function Page({
   const porPagina = 100;
 
   const apiKeysPromise = usuario.admin ? listarApiKeys() : Promise.resolve([]);
-  const [cnpjs, notas, notasAlerta, anosDisponiveis, totalNotas, resumoInicio, apiKeys] = await Promise.all([
+  const [cnpjs, notas, notasAlerta, anosDisponiveis, totalNotas, resumoInicio, saudeSincronizacao, apiKeys] = await Promise.all([
     listarCnpjs(),
     listarNotas(paginaAtual, porPagina),
     listarNotasAlertaDae(),
     listarAnosDisponiveis(),
     contarNotasTotal(),
     obterResumoInicio(),
+    obterSaudeSincronizacao(),
     apiKeysPromise,
   ]);
   return (
@@ -45,6 +47,7 @@ export default async function Page({
       paginaAtual={paginaAtual}
       porPagina={porPagina}
       resumoInicio={resumoInicio}
+      saudeSincronizacao={saudeSincronizacao}
       apiKeys={apiKeys}
     />
   );

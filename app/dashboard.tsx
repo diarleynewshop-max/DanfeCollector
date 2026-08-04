@@ -33,6 +33,7 @@ import {
   consultarPagamentoIcmsLote,
   listarChavesSitramParaAtualizacao,
   atualizarTransporteNotasExistentes,
+  conferirNotasRecentes,
   listarApiKeys,
   gerarApiKey,
   revogarApiKey,
@@ -46,6 +47,7 @@ import {
   type NotaRelatorio,
   type ResultadoSitramManifesto,
   type ResumoInicio,
+  type SyncHealth,
 } from '@/lib/actions';
 import type { DanfeData } from '@/lib/sefaz/detalhe';
 import {
@@ -233,6 +235,7 @@ interface DashboardProps {
   paginaAtual: number;
   porPagina: number;
   resumoInicio: ResumoInicio;
+  saudeSincronizacao: SyncHealth;
   apiKeys: ApiKeyResumo[];
 }
 
@@ -494,6 +497,7 @@ export default function Dashboard({
   paginaAtual,
   porPagina,
   resumoInicio,
+  saudeSincronizacao,
   apiKeys: apiKeysIniciais,
 }: DashboardProps) {
   const router = useRouter();
@@ -544,6 +548,7 @@ export default function Dashboard({
   const [importProgresso, setImportProgresso] = useState<{ feito: number; total: number } | null>(null);
   const [importResumo, setImportResumo] = useState<Record<string, number> | null>(null);
   const [pastaXml, setPastaXml] = useState('');
+  const [conferindoChaves, setConferindoChaves] = useState(false);
 
   useEffect(() => {
     setApiOrigem(window.location.origin);
@@ -862,6 +867,18 @@ export default function Dashboard({
 
   function toggleFiltroEtiqueta(tag: string) {
     setFiltroEtiquetas((prev) => (prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]));
+  }
+
+  async function handleConferirNotasRecentes() {
+    if (conferindoChaves || pending) return;
+    setConferindoChaves(true);
+    try {
+      const resultado = await conferirNotasRecentes(2, 20);
+      setStatus({ success: resultado.success, message: resultado.message });
+      router.refresh();
+    } finally {
+      setConferindoChaves(false);
+    }
   }
 
   function toggleFiltroSituacaoNota(valor: string) {
@@ -2048,6 +2065,45 @@ export default function Dashboard({
                   <span className="shrink-0 font-bold">Revisar →</span>
                 </div>
               </button>
+            )}
+
+            {(saudeSincronizacao.nivel !== 'OK' || saudeSincronizacao.worker.ultimoFimEm) && (
+              <div className={`rounded-xl border px-4 py-3 text-sm ${saudeSincronizacao.nivel === 'CRITICO' ? 'border-red-300 bg-red-50 text-red-900' : saudeSincronizacao.nivel === 'ATENCAO' ? 'border-amber-300 bg-amber-50 text-amber-900' : 'border-emerald-200 bg-emerald-50 text-emerald-900'}`}>
+                <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                  <div>
+                    <div className="font-bold">
+                      {saudeSincronizacao.worker.atrasado
+                        ? 'Worker SEFAZ sem execução recente'
+                        : saudeSincronizacao.cnpjsAtrasados.length > 0
+                          ? `${saudeSincronizacao.cnpjsAtrasados.length} empresa(s) sem atualização recente`
+                          : 'Sincronização SEFAZ funcionando'}
+                    </div>
+                    <div className="mt-1 text-xs opacity-80">
+                      {saudeSincronizacao.worker.ultimoFimEm
+                        ? `Último ciclo: ${dataHora(saudeSincronizacao.worker.ultimoFimEm)}`
+                        : 'Nenhum ciclo do worker registrado ainda.'}
+                      {saudeSincronizacao.cnpjsAtrasados.length > 0
+                        ? ` · ${saudeSincronizacao.cnpjsAtrasados.slice(0, 4).map((item) => item.razaoSocial || formatarCnpj(item.cnpj)).join(', ')}`
+                        : ''}
+                    </div>
+                  </div>
+                  <div className="flex shrink-0 flex-wrap gap-2">
+                    {podeAdministrar && (
+                      <button
+                        type="button"
+                        onClick={handleConferirNotasRecentes}
+                        disabled={conferindoChaves || pending}
+                        className="rounded-lg border border-current px-3 py-1.5 text-xs font-bold disabled:opacity-50"
+                      >
+                        {conferindoChaves ? 'Conferindo...' : 'Conferir chaves recentes'}
+                      </button>
+                    )}
+                    <button type="button" onClick={() => setSecaoAtual('empresas')} className="rounded-lg border border-current px-3 py-1.5 text-xs font-bold">
+                      Ver empresas
+                    </button>
+                  </div>
+                </div>
+              </div>
             )}
 
             <div className="grid gap-4 xl:grid-cols-[1.05fr_1.4fr]">

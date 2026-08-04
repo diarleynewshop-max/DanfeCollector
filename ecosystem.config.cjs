@@ -29,9 +29,11 @@ module.exports = {
       interpreter: `${NODE_BIN}/node`,
       exec_mode: 'fork',
       instances: 1,
-      autorestart: false,
+      autorestart: true,
       watch: false,
-      cron_restart: '7,22,37,52 * * * *',
+      min_uptime: '10s',
+      restart_delay: 30000,
+      exp_backoff_restart_delay: 1000,
       env: {
         NODE_ENV: 'production',
         PORT: '3100',

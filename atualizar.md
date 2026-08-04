@@ -94,13 +94,14 @@ su - danfe -c 'export PATH=/home/danfe/.nvm/versions/node/v22.23.1/bin:$PATH; \
 ```
 > Não rode `prisma db push` neste projeto: o PostgreSQL é compartilhado com SCAN e Catálogo. Mudanças de banco do Danfe entram somente pelas migrations versionadas em `supabase/migrations/` e são aplicadas/validadas antes do deploy.
 
+> Antes do restart, o administrador do banco deve aplicar `supabase/migrations/20260804_001_sync_worker_health.sql`. Ela cria o estado do worker usado pelos alertas da Home. Nao rode `prisma db push` neste projeto.
+
 ### 5. Reiniciar o app (Claude)
 ```bash
 su - danfe -c 'export PATH=/home/danfe/.nvm/versions/node/v22.23.1/bin:$PATH; \
   pm2 restart danfecollector && pm2 start ecosystem.config.cjs --only danfecollector-sync-nf && pm2 save'
 ```
-> O worker `danfecollector-sync-nf` chama a rota interna `/api/internal/sync-nf` a cada 15 minutos.
-> Isso evita depender de abrir o dashboard para sincronizar NF.
+> O worker `danfecollector-sync-nf` permanece ativo, chama a rota interna `/api/internal/sync-nf` a cada 15 minutos e o PM2 o reinicia se cair. Isso evita depender de abrir o dashboard para sincronizar NF.
 
 ### 6. Verificar (Claude)
 ```bash

@@ -66,6 +66,138 @@ export interface ActionResult {
   data?: string;
 }
 
+export type SyncHealthLevel = 'OK' | 'ATENCAO' | 'CRITICO';
+
+export type SyncHealth = {
+  nivel: SyncHealthLevel;
+  worker: {
+    status: string;
+    iniciadoEm: Date | null;
+    ultimoFimEm: Date | null;
+    ultimoSucessoEm: Date | null;
+    ultimoErroEm: Date | null;
+    ultimaMensagem: string | null;
+    atrasado: boolean;
+  };
+  cnpjsAtrasados: Array<{
+    id: number;
+    cnpj: string;
+    razaoSocial: string | null;
+    ultimaBusca: Date | null;
+    bloqueadoAte: Date | null;
+    ultimoNSU: string;
+    maxNSU: string;
+    situacao: string;
+    motivo: string;
+  }>;
+};
+
+export type ResultadoConferenciaChave = {
+  chave: string;
+  cnpj: string;
+  numero: string | null;
+  emitidaEm: Date;
+  status: 'confirmada' | 'nao-encontrada' | 'fora-de-prazo' | 'erro';
+  detalhe: string;
+};
+
+export type ResultadoConferenciaRecentes = ActionResult & {
+  resultados: ResultadoConferenciaChave[];
+};
+
+async function atualizarStatusWorker(data: {
+  status: string;
+  iniciadoEm?: Date;
+  ultimoFimEm?: Date;
+  ultimoSucessoEm?: Date;
+  ultimoErroEm?: Date;
+  ultimaMensagem?: string;
+}) {
+  try {
+    await prisma.syncWorkerStatus.upsert({
+      where: { id: 1 },
+      create: { id: 1, ...data },
+      update: data,
+    });
+  } catch (error: unknown) {
+    // A tabela pode ainda estar aguardando a migration no ambiente de deploy.
+    // O monitoramento nunca pode derrubar a sincronizacao fiscal.
+    console.error(`[sync-health] ${(error as Error).message}`);
+  }
+}
+
+export async function registrarInicioWorker(): Promise<void> {
+  await atualizarStatusWorker({ status: 'EXECUTANDO', iniciadoEm: new Date() });
+}
+
+export async function registrarFimWorker(resultado: ActionResult): Promise<void> {
+  const agora = new Date();
+  const temAlerta = /[1-9]\d* erro\(s\)|Sincronização pendente|SEFAZ:/i.test(resultado.message);
+  await atualizarStatusWorker({
+    status: resultado.success && !temAlerta ? 'OK' : 'ATENCAO',
+    ultimoFimEm: agora,
+    ...(resultado.success ? { ultimoSucessoEm: agora } : { ultimoErroEm: agora }),
+    ultimaMensagem: resultado.message.slice(0, 1000),
+  });
+}
+
+export async function obterSaudeSincronizacao(): Promise<SyncHealth> {
+  const usuario = await exigirUsuario();
+  const agora = new Date();
+  const limiteWorker = agora.getTime() - 45 * 60 * 1000;
+  const limiteCnpj = agora.getTime() - 2 * 60 * 60 * 1000;
+
+  const [worker, cnpjs] = await Promise.all([
+    prisma.syncWorkerStatus.findUnique({ where: { id: 1 } }).catch(() => null),
+    prisma.cnpj.findMany({
+      where: { ...whereCnpjPermitido(usuario), ativo: true },
+      orderBy: { ultimaBusca: 'asc' },
+      select: {
+        id: true,
+        cnpj: true,
+        razaoSocial: true,
+        ultimaBusca: true,
+        bloqueadoAte: true,
+        ultimoNSU: true,
+        maxNSU: true,
+        situacao: true,
+      },
+    }),
+  ]);
+
+  const ultimaExecucao = worker?.status === 'EXECUTANDO' ? worker.iniciadoEm : worker?.ultimoFimEm;
+  const workerAtrasado = !ultimaExecucao || ultimaExecucao.getTime() < limiteWorker;
+  const cnpjsAtrasados = cnpjs
+    .filter((cnpj) => {
+      if (cnpj.bloqueadoAte && cnpj.bloqueadoAte > agora) return false;
+      return !cnpj.ultimaBusca || cnpj.ultimaBusca.getTime() < limiteCnpj;
+    })
+    .map((cnpj) => ({
+      ...cnpj,
+      motivo: !cnpj.ultimaBusca ? 'Nunca consultado' : 'Sem consulta há mais de 2 horas',
+    }));
+
+  const nivel: SyncHealthLevel = workerAtrasado
+    ? 'CRITICO'
+    : cnpjsAtrasados.length > 0
+      ? 'ATENCAO'
+      : 'OK';
+
+  return {
+    nivel,
+    worker: {
+      status: worker?.status ?? 'NAO_CONFIGURADO',
+      iniciadoEm: worker?.iniciadoEm ?? null,
+      ultimoFimEm: worker?.ultimoFimEm ?? null,
+      ultimoSucessoEm: worker?.ultimoSucessoEm ?? null,
+      ultimoErroEm: worker?.ultimoErroEm ?? null,
+      ultimaMensagem: worker?.ultimaMensagem ?? null,
+      atrasado: workerAtrasado,
+    },
+    cnpjsAtrasados,
+  };
+}
+
 export async function listarApiKeys() {
   return listarApiKeysInterno();
 }
@@ -495,6 +627,19 @@ const MAX_LOTES_POR_SYNC = 50;
 // Impomos esse intervalo por conta própria para nunca disparar o cStat 656.
 const INTERVALO_MIN = 60;
 
+function nsuNumero(valor: string | null | undefined): bigint {
+  const limpo = String(valor ?? '').replace(/\D/g, '');
+  return limpo ? BigInt(limpo) : BigInt(0);
+}
+
+function maiorNsu(...valores: Array<string | null | undefined>): string {
+  const maior = valores.reduce((atual, valor) => {
+    const numero = nsuNumero(valor);
+    return numero > atual ? numero : atual;
+  }, BigInt(0));
+  return maior.toString().padStart(15, '0');
+}
+
 function hhmm(d: Date): string {
   return d.toLocaleTimeString('pt-BR', {
     hour: '2-digit',
@@ -538,11 +683,21 @@ export async function sincronizarNotasInterno(cnpjId: number): Promise<ActionRes
   let novasNotas = 0;
   let atualizadas = 0;
   let lotes = 0;
+  let maxNSU = maiorNsu(registro.maxNSU, registro.ultimoNSU);
+  let sincronizacaoCompleta = false;
 
   try {
     while (lotes < MAX_LOTES_POR_SYNC) {
       lotes++;
       const ret = await consultarDistribuicaoDFe(registro.cnpj, registro.uf, ultNSU);
+      maxNSU = maiorNsu(maxNSU, ret.maxNSU);
+
+      // Persiste o cursor e o maxNSU a cada resposta. Se o processo cair no
+      // meio de um lote, a proxima tentativa sabe exatamente onde continuar.
+      await prisma.cnpj.update({
+        where: { id: cnpjId },
+        data: { maxNSU, ultimoNSU: ultNSU, ultimaBusca: new Date() },
+      });
 
       // 656 = consumo indevido: SEFAZ exige ~1h de espera.
       // A resposta 656 carrega o ultNSU real ("Deve ser utilizado o ultNSU nas
@@ -562,7 +717,7 @@ export async function sincronizarNotasInterno(cnpjId: number): Promise<ActionRes
 
         await prisma.cnpj.update({
           where: { id: cnpjId },
-          data: { situacao, bloqueadoAte, ultimaBusca: new Date(), ultimoNSU: novoNSU },
+          data: { situacao, bloqueadoAte, ultimaBusca: new Date(), ultimoNSU: novoNSU, maxNSU },
         });
         revalidatePath('/');
         return {
@@ -576,6 +731,7 @@ export async function sincronizarNotasInterno(cnpjId: number): Promise<ActionRes
       // 137 = nenhum documento novo
       if (ret.cStat === 137) {
         ultNSU = ret.ultNSU;
+        sincronizacaoCompleta = true;
         break;
       }
 
@@ -623,14 +779,17 @@ export async function sincronizarNotasInterno(cnpjId: number): Promise<ActionRes
 
         ultNSU = ret.ultNSU;
         // Continua até alcançar o maxNSU
-        if (BigInt(ret.ultNSU) >= BigInt(ret.maxNSU)) break;
+        if (nsuNumero(ret.maxNSU) === BigInt(0) || nsuNumero(ret.ultNSU) >= nsuNumero(ret.maxNSU)) {
+          sincronizacaoCompleta = true;
+          break;
+        }
         continue;
       }
 
       // Qualquer outro cStat é erro
       await prisma.cnpj.update({
         where: { id: cnpjId },
-        data: { situacao: `SEFAZ ${ret.cStat}: ${ret.xMotivo}`, ultimaBusca: new Date(), ultimoNSU: ultNSU },
+        data: { situacao: `SEFAZ ${ret.cStat}: ${ret.xMotivo}`, ultimaBusca: new Date(), ultimoNSU: ultNSU, maxNSU },
       });
       revalidatePath('/');
       return { success: false, message: `SEFAZ ${ret.cStat}: ${ret.xMotivo}` };
@@ -639,11 +798,15 @@ export async function sincronizarNotasInterno(cnpjId: number): Promise<ActionRes
     // Chegou ao fim da fila (em dia). Impomos o intervalo de 1h antes da próxima
     // consulta para respeitar o limite da SEFAZ e não disparar o 656.
     const proxima = new Date(Date.now() + INTERVALO_MIN * 60 * 1000);
+    const situacao = sincronizacaoCompleta
+      ? `Em dia · ${novasNotas} nova(s). Próxima consulta às ${hhmm(proxima)}`
+      : `Sincronização pendente · NSU ${ultNSU}/${maxNSU}. Próxima tentativa às ${hhmm(proxima)}`;
     await prisma.cnpj.update({
       where: { id: cnpjId },
       data: {
         ultimoNSU: ultNSU,
-        situacao: `Em dia · ${novasNotas} nova(s). Próxima consulta às ${hhmm(proxima)}`,
+        maxNSU,
+        situacao,
         ultimaBusca: new Date(),
         bloqueadoAte: proxima,
       },
@@ -654,13 +817,15 @@ export async function sincronizarNotasInterno(cnpjId: number): Promise<ActionRes
       success: true,
       message:
         `${formatarCnpj(registro.cnpj)}: ${novasNotas} nova(s), ${atualizadas} atualizada(s). ` +
-        `Em dia — próxima consulta liberada às ${hhmm(proxima)} (SEFAZ limita a 1/hora sem novidades).`,
+        (sincronizacaoCompleta
+          ? `Em dia — próxima consulta liberada às ${hhmm(proxima)} (SEFAZ limita a 1/hora sem novidades).`
+          : `Sincronização ainda pendente no NSU ${ultNSU}/${maxNSU}; nova tentativa após ${hhmm(proxima)}.`),
     };
   } catch (error: unknown) {
     const msg = (error as Error).message;
     await prisma.cnpj.update({
       where: { id: cnpjId },
-      data: { situacao: `Erro: ${msg.slice(0, 200)}`, ultimaBusca: new Date(), ultimoNSU: ultNSU },
+      data: { situacao: `Erro: ${msg.slice(0, 200)}`, ultimaBusca: new Date(), ultimoNSU: ultNSU, maxNSU },
     });
     revalidatePath('/');
     return { success: false, message: msg };
@@ -872,6 +1037,118 @@ export interface ResultadoImportChave {
   chave: string;
   status: StatusImport;
   detalhe?: string;
+}
+
+/**
+ * Confere uma amostra controlada de notas recentes diretamente pela chave.
+ * Nao altera NSU, nao manifesta e nao grava XML: serve para detectar divergencia
+ * entre o que foi salvo no banco e o que a SEFAZ devolve para a mesma chave.
+ */
+export async function conferirNotasRecentes(
+  dias = 2,
+  limite = 20
+): Promise<ResultadoConferenciaRecentes> {
+  const negado = await checarAdminAction();
+  if (negado) return { ...negado, resultados: [] };
+
+  const diasSeguros = Math.min(30, Math.max(1, Math.trunc(Number(dias) || 2)));
+  const limiteSeguro = Math.min(20, Math.max(1, Math.trunc(Number(limite) || 20)));
+
+  if (usarProxyFiscal()) {
+    try {
+      return await chamarFiscalWorker<ResultadoConferenciaRecentes>('conferirNotasRecentes', {
+        dias: diasSeguros,
+        limite: limiteSeguro,
+      });
+    } catch (error: unknown) {
+      return {
+        success: false,
+        message: `VPS fiscal indisponivel: ${erroWorkerFiscal(error)}`,
+        resultados: [],
+      };
+    }
+  }
+
+  return conferirNotasRecentesInterno(diasSeguros, limiteSeguro);
+}
+
+export async function conferirNotasRecentesInterno(
+  dias = 2,
+  limite = 20
+): Promise<ResultadoConferenciaRecentes> {
+  const corte = new Date(Date.now() - dias * 24 * 60 * 60 * 1000);
+  const notas = await prisma.notaFiscal.findMany({
+    where: { emitidaEm: { gte: corte } },
+    orderBy: { emitidaEm: 'desc' },
+    take: limite,
+    select: {
+      chave: true,
+      numero: true,
+      emitidaEm: true,
+      cnpj: { select: { cnpj: true, uf: true } },
+    },
+  });
+
+  const resultados: ResultadoConferenciaChave[] = [];
+  for (let indice = 0; indice < notas.length; indice++) {
+    const nota = notas[indice];
+    try {
+      const ret = await consultarPorChave(nota.cnpj.cnpj, nota.cnpj.uf, nota.chave);
+      if (ret.cStat === 138 && ret.documentos.length > 0) {
+        resultados.push({
+          chave: nota.chave,
+          cnpj: nota.cnpj.cnpj,
+          numero: nota.numero,
+          emitidaEm: nota.emitidaEm,
+          status: 'confirmada',
+          detalhe: `SEFAZ retornou ${ret.documentos.length} documento(s).`,
+        });
+      } else if (ret.cStat === 632) {
+        resultados.push({
+          chave: nota.chave,
+          cnpj: nota.cnpj.cnpj,
+          numero: nota.numero,
+          emitidaEm: nota.emitidaEm,
+          status: 'fora-de-prazo',
+          detalhe: `${ret.cStat}: ${ret.xMotivo}`,
+        });
+      } else {
+        resultados.push({
+          chave: nota.chave,
+          cnpj: nota.cnpj.cnpj,
+          numero: nota.numero,
+          emitidaEm: nota.emitidaEm,
+          status: 'nao-encontrada',
+          detalhe: `${ret.cStat}: ${ret.xMotivo}`,
+        });
+      }
+    } catch (error: unknown) {
+      resultados.push({
+        chave: nota.chave,
+        cnpj: nota.cnpj.cnpj,
+        numero: nota.numero,
+        emitidaEm: nota.emitidaEm,
+        status: 'erro',
+        detalhe: (error as Error).message,
+      });
+    }
+
+    // Intervalo conservador entre consultas por chave.
+    if (indice < notas.length - 1) await new Promise((resolve) => setTimeout(resolve, 800));
+  }
+
+  const confirmadas = resultados.filter((item) => item.status === 'confirmada').length;
+  const pendentes = resultados.filter((item) => item.status !== 'confirmada').length;
+  const revisar = resultados
+    .filter((item) => item.status !== 'confirmada')
+    .slice(0, 5)
+    .map((item) => `NF ${item.numero ?? '—'}: ${item.status}`)
+    .join(' · ');
+  return {
+    success: true,
+    resultados,
+    message: `Conferência concluída: ${confirmadas} confirmada(s), ${pendentes} com retorno para revisão, em ${resultados.length} nota(s) dos últimos ${dias} dia(s).${revisar ? ` Revisar: ${revisar}.` : ''}`,
+  };
 }
 
 async function guardarDocumento(
@@ -1344,7 +1621,12 @@ export async function sincronizarCnpjsAtivosInterno(): Promise<ActionResult> {
       continue;
     }
 
-    const res = await sincronizarNotasInterno(cnpj.id);
+    let res: ActionResult;
+    try {
+      res = await sincronizarNotasInterno(cnpj.id);
+    } catch (error: unknown) {
+      res = { success: false, message: (error as Error).message || 'Erro inesperado no CNPJ.' };
+    }
     if (res.success) sucesso++;
     else erros++;
     detalhes.push(`${formatarCnpj(cnpj.cnpj)}: ${res.message}`);
@@ -1352,10 +1634,12 @@ export async function sincronizarCnpjsAtivosInterno(): Promise<ActionResult> {
 
   revalidatePath('/');
   return {
-    success: erros === 0,
+    // Um CNPJ com erro nao invalida os demais. O detalhe fica registrado no
+    // proprio CNPJ e no resumo, mas a rota continua HTTP 200 para o worker.
+    success: erros === 0 || sucesso > 0 || pulados > 0,
     message:
       `NF: ${sucesso} CNPJ(s) sincronizado(s), ${pulados} em intervalo, ${erros} erro(s). ` +
-      detalhes.slice(0, 3).join(' | '),
+      detalhes.slice(0, 7).join(' | '),
   };
 }
 

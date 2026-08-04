@@ -29,6 +29,18 @@ model Cnpj {
   usuarios     UsuarioCnpj[]
 }
 
+model SyncWorkerStatus {
+  id                Int      @id @default(1)
+  status            String   @default("AGUARDANDO")
+  iniciadoEm        DateTime?
+  ultimoFimEm       DateTime?
+  ultimoSucessoEm   DateTime?
+  ultimoErroEm      DateTime?
+  ultimaMensagem    String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+}
+
 model Usuario {
   id               Int           @id @default(autoincrement())
   login            String        @unique

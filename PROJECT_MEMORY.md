@@ -150,6 +150,9 @@ Objetivo: transformar o DanfeCollector em uma central diaria de acompanhamento d
 - [ ] **Notificacoes:** resumo diario e alertas de novas notas, cancelamentos, DAE vencido, XML pendente e certificado proximo do vencimento.
 - [ ] **Historico/auditoria:** registrar usuario, data, acao e antes/depois para etiquetas, manifestacao, pagamento, anexos e alteracoes de status.
 - [x] **Relatorios fiscais prontos:** CSV de notas, pendencias e fornecedores; impressao/salvar PDF respeitando os filtros; Excel de transporte mantido.
+- [x] **Worker SEFAZ resiliente:** processo persistente/reiniciavel, falha isolada por CNPJ, `maxNSU` persistido a cada resposta e estado de sincronizacao incompleta identificado.
+- [x] **Saude da sincronizacao:** alerta visual para worker parado, empresa sem consulta recente e ultima execucao do ciclo.
+- [x] **Conferencia por chave:** administrador pode conferir uma amostra de ate 20 notas dos ultimos 2 dias diretamente na SEFAZ, sem alterar NSU ou manifestar.
 - [ ] **Saude por empresa:** ultima sincronizacao, bloqueio SEFAZ, quantidade de notas novas, erros, XML pendente e certificado.
 - [ ] **Painel de lacunas:** dias sem NF, sequencias faltantes por empresa/serie e comparacao futura com ERP.
 
