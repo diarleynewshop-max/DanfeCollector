@@ -5420,6 +5420,7 @@ interface ItemAlertaDae {
   numeroNota: string | null;
   dataChave: string | null;
   dias: number | null;
+  situacao: string | null;
 }
 
 function deslocarData(dias: number): string {
@@ -5729,6 +5730,7 @@ function AlertaDaes({
           numeroNota: resumo.numeroNota,
           dataChave: null,
           dias: null,
+          situacao: resumo.situacaoImposto,
         });
         continue;
       }
@@ -5742,6 +5744,7 @@ function AlertaDaes({
           numeroNota: resumo.numeroNota,
           dataChave: chaveDataLocal(lancamento.vencimento),
           dias: diasAteVencimento(lancamento.vencimento),
+          situacao: resumo.situacaoImposto,
         });
       });
     }
@@ -5896,6 +5899,12 @@ function AlertaDaes({
                     <p className="mt-1 truncate text-[var(--ink-mut)]" title={item.nota.emitenteNome || ''}>
                       {item.nota.emitenteNome || t('issuerNotInformed')}
                     </p>
+                    {(item.lancamento?.situacao || item.situacao) && (
+                      <p className="mt-1 truncate text-[var(--ink-mut)]" title={item.lancamento?.situacao || item.situacao || ''}>
+                        <span className="font-semibold text-[var(--ink)]">Situação:</span>{' '}
+                        {item.lancamento?.situacao || item.situacao}
+                      </p>
+                    )}
                   </div>
                 ))}
               </div>
