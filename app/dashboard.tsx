@@ -522,12 +522,36 @@ export default function Dashboard({
   const [anoCarregado, setAnoCarregado] = useState<number | null>(null);
   const [carregandoAno, setCarregandoAno] = useState(false);
 
-  // Quando o servidor re-renderiza (ex: após sync), atualiza as notas sem limpar filtro de ano
+  // Fica `true` assim que o usuário aplica um filtro/busca ou carrega a base
+  // inteira no cliente. A partir daí, o efeito abaixo nunca mais pode
+  // substituir `notas` por inteiro — só mesclar — senão qualquer ação que
+  // chame revalidatePath('/') no servidor (anexar arquivo, consultar
+  // pagamento de ICMS etc.) faz a página trazer de volta só a 1ª página
+  // padrão e a lista filtrada "some" na tela do usuário.
+  const notasEstendidasRef = useRef(false);
+
+  // Quando o servidor re-renderiza (ex: após anexar arquivo, consultar pagamento,
+  // sync etc. chamando revalidatePath), o Next.js manda de novo `notasIniciais`
+  // — que é só a primeira página do servidor. Se já tínhamos carregado mais
+  // notas no cliente (busca com filtro, "carregar todas"), sobrescrever o
+  // array inteiro faz a lista sumir/"recarregar" para o usuário. Em vez disso,
+  // mesclamos: atualiza os dados das notas que vieram do servidor e mantém as
+  // demais que já estavam carregadas.
   useEffect(() => {
-    if (anoCarregado === null) setNotas(notasIniciais);
+    if (anoCarregado !== null) return;
+    setNotas((atuais) => {
+      if (!notasEstendidasRef.current) return notasIniciais;
+      const porId = new Map(notasIniciais.map((n) => [n.id, n]));
+      return atuais.map((n) => porId.get(n.id) ?? n);
+    });
   }, [notasIniciais, anoCarregado]);
   useEffect(() => {
-    if (anoCarregado === null) setNotasAlerta(notasAlertaIniciais);
+    if (anoCarregado !== null) return;
+    setNotasAlerta((atuais) => {
+      if (!notasEstendidasRef.current) return notasAlertaIniciais;
+      const porId = new Map(notasAlertaIniciais.map((n) => [n.id, n]));
+      return atuais.map((n) => porId.get(n.id) ?? n);
+    });
   }, [notasAlertaIniciais, anoCarregado]);
   const [mostrarForm, setMostrarForm] = useState(false);
   const [pending, startTransition] = useTransition();
@@ -1031,6 +1055,7 @@ export default function Dashboard({
 
   const carregarTodasNotasEmSegundoPlano = useCallback(async () => {
     if (todasCarregadas || carregandoTodas || anoCarregado !== null) return;
+    notasEstendidasRef.current = true;
     setCarregandoTodas(true);
     try {
       const todas = await listarTodasNotas();
@@ -1079,9 +1104,13 @@ export default function Dashboard({
     };
   }
 
-  async function aplicarFiltrosNotas(overrides: Partial<FiltrosNotasAplicados> = {}) {
+  function aplicarFiltrosNotas(overrides: Partial<FiltrosNotasAplicados> = {}) {
+    // Aplica o filtro imediatamente sobre o que já está carregado; o
+    // carregamento completo (se necessário) roda em segundo plano e a
+    // lista se atualiza sozinha quando terminar (notasFiltradas depende de `notas`).
+    notasEstendidasRef.current = true;
     if (!todasCarregadas && anoCarregado === null) {
-      await carregarTodasNotasEmSegundoPlano();
+      void carregarTodasNotasEmSegundoPlano();
     }
 
     setFiltrosAplicadosNotas(montarFiltrosNotas(overrides));
