@@ -91,6 +91,7 @@ export interface NotaComDadosDae {
   sitramDaeStatus?: string | null;
   sitramDaeResumo?: string | null;
   sitramDetalhe?: string | null;
+  sitramSituacao?: string | null;
   // Pagamento registrado manualmente (importação da relação SITRAM) — tem prioridade.
   pagamentoManualEm?: Date | string | null;
 }
@@ -386,6 +387,12 @@ export function extrairResumoDae(nota: NotaComDadosDae): ResumoDaeNormalizado {
   } catch {
     return montarResumoDae({}, []);
   }
+}
+
+// A situacao do imposto fica dentro do retorno bruto do portal. O campo
+// sitramSituacao continua como fallback para notas gravadas por versoes antigas.
+export function situacaoSitramEfetiva(nota: NotaComDadosDae): string | null {
+  return extrairResumoDae(nota).situacaoImposto ?? nota.sitramSituacao ?? null;
 }
 
 export function extrairPagamentoIcmsSitram(nota: NotaComDadosDae): PagamentoIcmsSitramNormalizado {

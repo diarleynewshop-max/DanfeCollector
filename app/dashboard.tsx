@@ -56,6 +56,7 @@ import {
   extrairPagamentoIcmsSitram,
   extrairResumoDae,
   lancamentosVisiveisDae,
+  situacaoSitramEfetiva,
   type DaeCompartilhadoInfo,
   statusDaeEfetivo,
   type LancamentoDaeNormalizado,
@@ -112,6 +113,7 @@ type FiltrosNotasAplicados = {
   mes: string;
   ano: string;
   situacao: 'todas' | 'AUTORIZADA' | 'CANCELADA' | 'DENEGADA';
+  situacaoSitram: string;
   daeSitram: FiltroDaeSitram;
   daeVencInicio: string;
   daeVencFim: string;
@@ -136,6 +138,7 @@ type FiltrosRelatorioAplicados = {
 
 // DAE "a pagar" = DAE em aberto ou ainda a gerar (imposto pendente de pagamento)
 const DAE_A_PAGAR = ['EM_ABERTO', 'LIBERADA_PARA_GERAR'];
+const SITUACAO_SITRAM_TRAMITA = 'A Pagar - Processo TRAMITA/SANFIT';
 const TAMANHO_PAGINA_RELATORIO = 200;
 const RAIZES_RELATORIO_PADRAO = ['50767035', '62803717'];
 const SITUACOES_RELATORIO_OPCOES = [
@@ -214,6 +217,7 @@ function filtrosNotasPadrao(): FiltrosNotasAplicados {
     mes: '',
     ano: '',
     situacao: 'todas',
+    situacaoSitram: '',
     daeSitram: 'todos',
     daeVencInicio: '',
     daeVencFim: '',
@@ -789,6 +793,7 @@ export default function Dashboard({
   }
   // Filtro por situação SEFAZ (CANCELADA / DENEGADA)
   const [filtroSituacao, setFiltroSituacao] = useState<'todas' | 'AUTORIZADA' | 'CANCELADA' | 'DENEGADA'>('todas');
+  const [filtroSituacaoSitram, setFiltroSituacaoSitram] = useState('');
   const [filtroDaeSitram, setFiltroDaeSitram] = useState<FiltroDaeSitram>('todos');
   const [filtroDaeVencInicio, setFiltroDaeVencInicio] = useState('');
   const [filtroDaeVencFim, setFiltroDaeVencFim] = useState('');
@@ -808,6 +813,15 @@ export default function Dashboard({
     () => notas.filter((nota) => notaForaCeMais15DiasSemDaeOuPagamento(nota)).length,
     [notas]
   );
+
+  const situacoesSitramParaFiltro = useMemo(() => {
+    const situacoes = new Set<string>([SITUACAO_SITRAM_TRAMITA]);
+    for (const nota of notas) {
+      const situacao = situacaoSitramEfetiva(nota)?.trim();
+      if (situacao) situacoes.add(situacao);
+    }
+    return [...situacoes].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  }, [notas]);
 
   const alertasCertificado = useMemo(() => {
     const hoje = new Date();
@@ -927,6 +941,7 @@ export default function Dashboard({
     filtroCnpjId !== 'todos' ? '1' : '',
     filtroStatus !== 'todos' ? '1' : '',
     filtroSituacao !== 'todas' ? '1' : '',
+    filtroSituacaoSitram,
     filtroDaeSitram !== 'todos' ? '1' : '',
     filtroDaeVencInicio,
     filtroDaeVencFim,
@@ -956,6 +971,7 @@ export default function Dashboard({
     filtrosAplicadosNotas.mes,
     filtrosAplicadosNotas.ano,
     filtrosAplicadosNotas.situacao !== 'todas' ? '1' : '',
+    filtrosAplicadosNotas.situacaoSitram,
     filtrosAplicadosNotas.daeSitram !== 'todos' ? '1' : '',
     filtrosAplicadosNotas.daeVencInicio,
     filtrosAplicadosNotas.daeVencFim,
@@ -987,6 +1003,7 @@ export default function Dashboard({
     filtrosAplicadosNotas.mes !== filtroMes ||
     filtrosAplicadosNotas.ano !== filtroAno ||
     filtrosAplicadosNotas.situacao !== filtroSituacao ||
+    filtrosAplicadosNotas.situacaoSitram !== filtroSituacaoSitram ||
     filtrosAplicadosNotas.daeSitram !== filtroDaeSitram ||
     filtrosAplicadosNotas.daeVencInicio !== filtroDaeVencInicio ||
     filtrosAplicadosNotas.daeVencFim !== filtroDaeVencFim ||
@@ -1049,6 +1066,7 @@ export default function Dashboard({
       mes: filtroMes,
       ano: filtroAno,
       situacao: filtroSituacao,
+      situacaoSitram: filtroSituacaoSitram,
       daeSitram: filtroDaeSitram,
       daeVencInicio: filtroDaeVencInicio,
       daeVencFim: filtroDaeVencFim,
@@ -1209,6 +1227,7 @@ export default function Dashboard({
     setAnoCarregado(null);
     setTodasCarregadas(notasIniciais.length >= totalNotas);
     setFiltroSituacao('todas');
+    setFiltroSituacaoSitram('');
     setFiltroDaeSitram('todos');
     setFiltroDaeVencInicio('');
     setFiltroDaeVencFim('');
@@ -1319,6 +1338,7 @@ export default function Dashboard({
   const filtroMesBusca = filtrosAplicadosNotas.mes;
   const filtroAnoBusca = filtrosAplicadosNotas.ano;
   const filtroSituacaoBusca = filtrosAplicadosNotas.situacao;
+  const filtroSituacaoSitramBusca = filtrosAplicadosNotas.situacaoSitram;
   const filtroDaeSitramBusca = filtrosAplicadosNotas.daeSitram;
   const filtroDaeVencInicioBusca = filtrosAplicadosNotas.daeVencInicio;
   const filtroDaeVencFimBusca = filtrosAplicadosNotas.daeVencFim;
@@ -1342,6 +1362,7 @@ export default function Dashboard({
       entradaEm: new Date(n.createdAt),
       etiquetas: parseEtiquetas(n.etiqueta),
       modalidades: modalidadesDaNota(n),
+      situacaoSitram: situacaoSitramEfetiva(n) ?? '',
       dae: statusDaeEfetivo(n),
       suspeitasDuplicidade: extrairPagamentoIcmsSitram(n).suspeitasDuplicidade.length,
     },
@@ -1433,6 +1454,10 @@ export default function Dashboard({
         if (situacao !== filtroSituacaoBusca) return false;
       }
 
+      if (filtroSituacaoSitramBusca && normalizarBuscaFiltro(idx.situacaoSitram) !== normalizarBuscaFiltro(filtroSituacaoSitramBusca)) {
+        return false;
+      }
+
       if (filtroSituacoesBusca.length > 0) {
         const situacoes: FiltroSituacaoNota[] = [];
         const situacaoSefaz = n.situacaoSefaz ?? 'AUTORIZADA';
@@ -1517,6 +1542,7 @@ export default function Dashboard({
     filtroMesBusca,
     filtroAnoBusca,
     filtroSituacaoBusca,
+    filtroSituacaoSitramBusca,
     filtroDaeSitramBusca,
     filtroDaeVencInicioBusca,
     filtroDaeVencFimBusca,
@@ -2983,6 +3009,14 @@ export default function Dashboard({
                       onToggle={(valor) => setFiltroDaeSitram(filtroDaeSitram === valor ? 'todos' : valor as FiltroDaeSitram)}
                     />
                     <div className="space-y-2">
+                      <CampoFiltroNotas label="Situacao SITRAM">
+                        <CampoBuscaOpcoesFiltro
+                          valor={filtroSituacaoSitram}
+                          opcoes={situacoesSitramParaFiltro}
+                          placeholder="Todas as situacoes SITRAM"
+                          onChange={setFiltroSituacaoSitram}
+                        />
+                      </CampoFiltroNotas>
                       <CampoFiltroNotas label="Vencimento do DAE">
                         <div className="grid grid-cols-2 gap-1.5">
                           <input type="date" aria-label="Vencimento DAE - inicio" value={filtroDaeVencInicio} onChange={(e) => setFiltroDaeVencInicio(e.target.value)} className={CAMPO_FILTRO_NOTAS} />
@@ -5862,6 +5896,7 @@ function CompactFragmentNota({
 }) {
   const tags = parseEtiquetas(nota.etiqueta);
   const dae = extrairResumoDae(nota);
+  const situacaoSitram = situacaoSitramEfetiva(nota);
   const statusDae = statusDaeEfetivo(nota);
   const lancamentoDestaque = dae.lancamentos.find((l) => !l.pago) ?? dae.lancamentos[0];
   const diasParaVencer = diasAteVencimento(lancamentoDestaque?.vencimento);
@@ -5944,8 +5979,11 @@ function CompactFragmentNota({
                 </p>
               )}
             </div>
-          ) : nota.sitramSituacao && (
-            <p className="mt-1 text-xs text-[var(--ink-mut)] truncate" title={nota.sitramSituacao}>{nota.sitramSituacao}</p>
+          ) : situacaoSitram && (
+            <p className="mt-1 text-xs text-[var(--ink-mut)] truncate" title={situacaoSitram}>{situacaoSitram}</p>
+          )}
+          {situacaoSitram && lancamentoDestaque && (
+            <p className="mt-1 text-xs text-[var(--ink-mut)] truncate" title={situacaoSitram}>{situacaoSitram}</p>
           )}
         </td>
         <td className="px-3 py-3 align-top">
@@ -5985,6 +6023,7 @@ function FragmentNota({
   onToggleSelecionada: () => void;
 }) {
   const tags = parseEtiquetas(nota.etiqueta);
+  const situacaoSitram = situacaoSitramEfetiva(nota);
   const statusDae = statusDaeEfetivo(nota);
   return (
     <>
@@ -6051,9 +6090,9 @@ function FragmentNota({
           {nota.sitramConsultadaEm ? (
             <div className="flex flex-col gap-1 max-w-[180px]">
               <Badge tone={toneSelagemSitram(nota)}>{textoSelagemSitram(nota)}</Badge>
-              {nota.sitramSituacao && (
-                <span className="text-[11px] text-[var(--ink-mut)] truncate" title={nota.sitramSituacao}>
-                  {nota.sitramSituacao}
+              {situacaoSitram && (
+                <span className="text-[11px] text-[var(--ink-mut)] truncate" title={situacaoSitram}>
+                  {situacaoSitram}
                 </span>
               )}
             </div>

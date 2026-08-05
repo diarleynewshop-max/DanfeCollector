@@ -1813,7 +1813,11 @@ function primeiraUrlDae(nota: SitramNotaFiscal): string | null {
 }
 
 function textoPortalNota(nota: SitramPortalNotaFiscal): string | null {
-  return nota.situacaoDescricao || nota.situacaoTransitoLivre || null;
+  return nota.situacaoDoImposto
+    || nota.situacaoDescricao
+    || nota.situacaoTransitoLivreDescricao
+    || nota.situacaoTransitoLivre
+    || null;
 }
 
 function inferirPortalSelada(nota: SitramPortalNotaFiscal): boolean | null {
