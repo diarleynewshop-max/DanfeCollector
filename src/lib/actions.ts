@@ -1349,6 +1349,21 @@ export async function importarXmlsDaPasta(
   };
 }
 
+/**
+ * Busca uma única nota já atualizada, para o cliente sincronizar a tela sem
+ * precisar de router.refresh()/reload — usado depois de ações que alteram só
+ * essa nota (manifestar, atualizar SITRAM, consultar pagamento ICMS etc.).
+ */
+export async function obterNotaPorId(notaId: number) {
+  const usuario = await exigirUsuario();
+  const nota = await prisma.notaFiscal.findUnique({
+    where: { id: notaId },
+    include: { cnpj: { select: { cnpj: true, razaoSocial: true } } },
+  });
+  if (!nota || !usuarioPodeAcessarCnpj(usuario, nota.cnpjId)) return null;
+  return nota;
+}
+
 export async function listarNotas(pagina = 1, porPagina = 50) {
   const usuario = await exigirUsuario();
   const include = { cnpj: { select: { cnpj: true, razaoSocial: true } } } as const;

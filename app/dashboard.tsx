@@ -13,6 +13,7 @@ import {
   alternarAtivoCnpj,
   removerCnpj,
   obterDetalheNota,
+  obterNotaPorId,
   manifestarNota,
   lerCertificados,
   vincularCertificados,
@@ -1052,6 +1053,15 @@ export default function Dashboard({
     !todasCarregadas &&
     !algumFiltroAtivo;
   const totalPaginasServidor = porPagina > 0 ? Math.max(1, Math.ceil(totalNotas / porPagina)) : 1;
+
+  // Atualiza uma única nota já carregada (ex.: depois de manifestar, consultar
+  // SITRAM ou pagamento ICMS) sem depender de router.refresh()/reload da
+  // página inteira — a tela reflete o resultado assim que a busca terminar.
+  const atualizarNotaLocal = useCallback((notaAtualizada: NotaComCnpj) => {
+    notasEstendidasRef.current = true;
+    setNotas((atuais) => atuais.map((n) => (n.id === notaAtualizada.id ? notaAtualizada : n)));
+    setNotasAlerta((atuais) => atuais.map((n) => (n.id === notaAtualizada.id ? notaAtualizada : n)));
+  }, []);
 
   const carregarTodasNotasEmSegundoPlano = useCallback(async () => {
     if (todasCarregadas || carregandoTodas || anoCarregado !== null) return;
@@ -3837,6 +3847,7 @@ export default function Dashboard({
                       selecionavel={true}
                       selecionada={selecionadas.has(n.id)}
                       onToggleSelecionada={() => toggleSelecionada(n.id)}
+                      onNotaAtualizada={atualizarNotaLocal}
                     />
                   ))}
                 </tbody>
@@ -5924,6 +5935,7 @@ function CompactFragmentNota({
   selecionavel,
   selecionada,
   onToggleSelecionada,
+  onNotaAtualizada,
 }: {
   nota: NotaComCnpj;
   aberta: boolean;
@@ -5931,6 +5943,7 @@ function CompactFragmentNota({
   selecionavel: boolean;
   selecionada: boolean;
   onToggleSelecionada: () => void;
+  onNotaAtualizada: (nota: NotaComCnpj) => void;
 }) {
   const tags = parseEtiquetas(nota.etiqueta);
   const dae = extrairResumoDae(nota);
@@ -6037,7 +6050,7 @@ function CompactFragmentNota({
       {aberta && (
         <tr className="bg-[var(--surface-2)]/70">
           <td colSpan={8} className="px-4 py-4">
-            <DetalheNota nota={nota} />
+            <DetalheNota nota={nota} onNotaAtualizada={onNotaAtualizada} />
           </td>
         </tr>
       )}
@@ -6156,7 +6169,7 @@ function FragmentNota({
       {aberta && (
         <tr className="bg-[var(--surface-2)]/70">
           <td colSpan={13} className="px-4 py-4">
-            <DetalheNota nota={nota} />
+            <DetalheNota nota={nota} onNotaAtualizada={() => {}} />
           </td>
         </tr>
       )}
@@ -6166,7 +6179,13 @@ function FragmentNota({
 
 type Aba = 'dados' | 'sitram' | 'frete' | 'danfe' | 'itens' | 'anexos';
 
-function DetalheNota({ nota }: { nota: NotaComCnpj }) {
+function DetalheNota({
+  nota,
+  onNotaAtualizada,
+}: {
+  nota: NotaComCnpj;
+  onNotaAtualizada: (nota: NotaComCnpj) => void;
+}) {
   const router = useRouter();
   const [aba, setAba] = useState<Aba>('dados');
   const [danfe, setDanfe] = useState<DanfeData | null>(null);
@@ -6265,7 +6284,10 @@ function DetalheNota({ nota }: { nota: NotaComCnpj }) {
     const res = await manifestarNota(nota.id);
     setMsgManifesto({ ok: res.success, texto: res.message });
     setManifestando(false);
-    if (res.success) router.refresh();
+    if (res.success) {
+      const atualizada = await obterNotaPorId(nota.id);
+      if (atualizada) onNotaAtualizada(atualizada);
+    }
   }
 
   async function handleAtualizarSitramNota() {
@@ -6274,7 +6296,10 @@ function DetalheNota({ nota }: { nota: NotaComCnpj }) {
     const res = await atualizarSitramPorChaves([nota.chave]);
     setMsgSitramNota({ ok: res.success, texto: res.message });
     setConsultandoSitram(false);
-    if (res.success) router.refresh();
+    if (res.success) {
+      const atualizada = await obterNotaPorId(nota.id);
+      if (atualizada) onNotaAtualizada(atualizada);
+    }
   }
 
   const carregarAnexosDaePagamento = useCallback(async () => {
@@ -6312,7 +6337,8 @@ function DetalheNota({ nota }: { nota: NotaComCnpj }) {
     setConsultandoPagamentoIcms(false);
     if (res.success) {
       await carregarAnexosDaePagamento();
-      router.refresh();
+      const atualizada = await obterNotaPorId(nota.id);
+      if (atualizada) onNotaAtualizada(atualizada);
     }
   }
 
