@@ -1,4 +1,5 @@
 import ExcelJS from 'exceljs';
+import type { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import type { UsuarioLogado } from '@/lib/usuarios/auth';
 import { whereNotaPermitida } from '@/lib/usuarios/auth';
@@ -7,19 +8,42 @@ import { extrairEspelhoSitram } from '@/lib/sitram/espelho';
 
 type Registro = Record<string, unknown>;
 
+export interface FiltrosRelatorioDaeVencidas {
+  usuario: UsuarioLogado;
+  inicio?: string;
+  fim?: string;
+  cnpjId?: number;
+  raizesCnpj?: string[];
+  tipo?: string;
+  situacoes?: string[];
+  daeFiltros?: string[];
+  fornecedores?: string[];
+  risco?: string;
+  busca?: string;
+}
+
 type NotaDaeVencida = {
   id: number;
+  chave: string;
+  numero: string | null;
   emitidaEm: Date;
+  tipoOperacao: string | null;
   emitenteNome: string | null;
+  emitenteCnpj: string | null;
+  destNome: string | null;
+  destCnpj: string | null;
+  situacaoSefaz: string;
   sitramConsultadaEm: Date | null;
   sitramDaeStatus: string | null;
   sitramDaeResumo: string | null;
   sitramDetalhe: string | null;
   pagamentoManualEm: Date | null;
-  cnpj: { razaoSocial: string | null };
+  cnpj: { cnpj: string; razaoSocial: string | null };
 };
 
 type LinhaDaeVencida = {
+  numeroNota: string;
+  chaveAcesso: string;
   nomeFornecedor: string;
   nomeLojaRecebeu: string;
   dataVencimento: Date | null;
@@ -118,6 +142,34 @@ function escolherDataVencimento(lancamentos: Array<{ vencimento: string | null }
   return datas[0];
 }
 
+function numeroNotaDaChave(chave: string | null | undefined): string {
+  const normalizada = String(chave ?? '').replace(/\D/g, '');
+  if (normalizada.length !== 44) return '';
+  const numero = normalizada.slice(25, 34);
+  return numero.replace(/^0+/, '') || numero;
+}
+
+function dataParametro(valor: string | undefined, fimDoDia: boolean): Date | undefined {
+  if (!valor) return undefined;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(valor)) {
+    throw new Error('Periodo invalido.');
+  }
+  return new Date(`${valor}T${fimDoDia ? '23:59:59.999' : '00:00:00.000'}-03:00`);
+}
+
+function filtroBloqueado(valores: string[] | undefined): boolean {
+  return Array.isArray(valores) && valores.includes('__none__');
+}
+
+function normalizarBusca(valor: string): string {
+  return valor
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function mapearDocumentosPagamento(detalhe: Registro): Registro[] {
   const pagamentoIcms = registro(detalhe.pagamentoIcms);
   if (Array.isArray(pagamentoIcms.documentos)) return pagamentoIcms.documentos.map(registro);
@@ -180,7 +232,8 @@ function normalizarLancamentosParaLinha(nota: NotaDaeVencida): LinhaDaeVencida |
   }
 
   const itensFecop = extrairEspelhoSitram({
-    chave: '',
+    chave: nota.chave,
+    numero: nota.numero,
     sitramDetalhe: nota.sitramDetalhe,
   });
   const fecopTotal = itensFecop?.totais.fecop ?? null;
@@ -223,6 +276,8 @@ function normalizarLancamentosParaLinha(nota: NotaDaeVencida): LinhaDaeVencida |
   ].filter(Boolean);
 
   return {
+    numeroNota: nota.numero || numeroNotaDaChave(nota.chave),
+    chaveAcesso: nota.chave,
     nomeFornecedor: nota.emitenteNome || '',
     nomeLojaRecebeu: nota.cnpj.razaoSocial || '',
     dataVencimento,
@@ -238,11 +293,37 @@ function normalizarLancamentosParaLinha(nota: NotaDaeVencida): LinhaDaeVencida |
   };
 }
 
+function notaPassaFiltrosDerivados(nota: NotaDaeVencida, filtros: FiltrosRelatorioDaeVencidas): boolean {
+  if (filtros.daeFiltros?.includes('__none__')) return false;
+  if (filtros.daeFiltros && filtros.daeFiltros.length > 0 && !filtros.daeFiltros.includes('vencido') && !filtros.daeFiltros.includes('pendente')) {
+    return false;
+  }
+
+  if (filtros.risco && filtros.risco !== 'todos' && filtros.risco !== 'critico') return false;
+
+  const busca = normalizarBusca(filtros.busca ?? '');
+  if (!busca) return true;
+
+  const textoBusca = normalizarBusca([
+    nota.numero,
+    numeroNotaDaChave(nota.chave),
+    nota.chave,
+    nota.emitenteNome,
+    nota.emitenteCnpj,
+    nota.destNome,
+    nota.destCnpj,
+    nota.cnpj.razaoSocial,
+    nota.cnpj.cnpj,
+  ].filter(Boolean).join(' '));
+
+  return textoBusca.includes(busca);
+}
+
 function aplicarLayout(sheet: ExcelJS.Worksheet) {
   sheet.views = [{ state: 'frozen', ySplit: 1 }];
   sheet.autoFilter = {
     from: { row: 1, column: 1 },
-    to: { row: 1, column: 12 },
+    to: { row: 1, column: 14 },
   };
 
   const header = sheet.getRow(1);
@@ -260,6 +341,8 @@ function aplicarLayout(sheet: ExcelJS.Worksheet) {
   });
 
   const colunas = [
+    { width: 16, format: undefined, align: 'left' as const },
+    { width: 48, format: undefined, align: 'left' as const },
     { width: 34, format: undefined, align: 'left' as const },
     { width: 28, format: undefined, align: 'left' as const },
     { width: 16, format: 'dd/mm/yyyy', align: 'center' as const },
@@ -281,7 +364,7 @@ function aplicarLayout(sheet: ExcelJS.Worksheet) {
     sheetColumn.alignment = {
       vertical: 'middle',
       horizontal: coluna.align,
-      wrapText: indice === 0 || indice === 1 || indice === 11,
+      wrapText: indice === 1 || indice === 2 || indice === 3 || indice === 13,
     };
   });
 
@@ -299,32 +382,85 @@ function aplicarLayout(sheet: ExcelJS.Worksheet) {
   }
 }
 
-export async function gerarRelatorioDaeVencidasExcel(usuario: UsuarioLogado): Promise<{
+export async function gerarRelatorioDaeVencidasExcel(filtros: FiltrosRelatorioDaeVencidas): Promise<{
   buffer: Buffer;
   filename: string;
   total: number;
 }> {
-  const notas = await prisma.notaFiscal.findMany({
-    where: {
-      ...whereNotaPermitida(usuario),
+  const inicio = dataParametro(filtros.inicio, false);
+  const fim = dataParametro(filtros.fim, true);
+  const filtrosAnd: Prisma.NotaFiscalWhereInput[] = [
+    whereNotaPermitida(filtros.usuario),
+    {
       situacaoSefaz: { notIn: ['CANCELADA', 'DENEGADA'] },
       sitramDetalhe: { not: null },
     },
+  ];
+
+  if (inicio || fim) {
+    filtrosAnd.push({
+      emitidaEm: {
+        ...(inicio ? { gte: inicio } : {}),
+        ...(fim ? { lte: fim } : {}),
+      },
+    });
+  }
+
+  if (filtros.cnpjId) filtrosAnd.push({ cnpjId: filtros.cnpjId });
+
+  if (filtroBloqueado(filtros.raizesCnpj) || filtroBloqueado(filtros.situacoes) || filtroBloqueado(filtros.fornecedores)) {
+    filtrosAnd.push({ id: -1 });
+  }
+
+  const raizesCnpj = (filtros.raizesCnpj ?? []).filter((raiz) => raiz !== '__none__');
+  if (raizesCnpj.length > 0) {
+    filtrosAnd.push({
+      OR: raizesCnpj.map((raiz) => ({
+        cnpj: { cnpj: { startsWith: raiz } },
+      })),
+    });
+  }
+
+  if (filtros.tipo && filtros.tipo !== 'todos') filtrosAnd.push({ tipoOperacao: filtros.tipo });
+
+  const situacoes = (filtros.situacoes ?? []).filter((situacao) => situacao !== '__none__');
+  if (situacoes.length > 0) filtrosAnd.push({ situacaoSefaz: { in: situacoes } });
+
+  const fornecedores = (filtros.fornecedores ?? []).filter((fornecedor) => fornecedor !== '__none__');
+  if (fornecedores.length > 0) {
+    filtrosAnd.push({
+      OR: [
+        { emitenteCnpj: { in: fornecedores } },
+        { emitenteNome: { in: fornecedores } },
+      ],
+    });
+  }
+
+  const notas = await prisma.notaFiscal.findMany({
+    where: { AND: filtrosAnd },
     orderBy: [{ emitidaEm: 'asc' }, { numero: 'asc' }],
     select: {
       id: true,
+      chave: true,
+      numero: true,
       emitidaEm: true,
+      tipoOperacao: true,
       emitenteNome: true,
+      emitenteCnpj: true,
+      destNome: true,
+      destCnpj: true,
+      situacaoSefaz: true,
       sitramConsultadaEm: true,
       sitramDaeStatus: true,
       sitramDaeResumo: true,
       sitramDetalhe: true,
       pagamentoManualEm: true,
-      cnpj: { select: { razaoSocial: true } },
+      cnpj: { select: { cnpj: true, razaoSocial: true } },
     },
   }) as NotaDaeVencida[];
 
   const linhas = notas
+    .filter((nota) => notaPassaFiltrosDerivados(nota, filtros))
     .map(normalizarLancamentosParaLinha)
     .filter((linha): linha is LinhaDaeVencida => !!linha)
     .sort((a, b) => {
@@ -340,6 +476,8 @@ export async function gerarRelatorioDaeVencidasExcel(usuario: UsuarioLogado): Pr
 
   const sheet = workbook.addWorksheet('DAE VENCIDAS');
   sheet.addRow([
+    'Número da nota',
+    'Chave de acesso',
     'Nome do Fornecedor',
     'Nome da Loja que recebeu',
     'Data de vencimento',
@@ -356,6 +494,8 @@ export async function gerarRelatorioDaeVencidasExcel(usuario: UsuarioLogado): Pr
 
   for (const linha of linhas) {
     sheet.addRow([
+      linha.numeroNota,
+      linha.chaveAcesso,
       linha.nomeFornecedor,
       linha.nomeLojaRecebeu,
       linha.dataVencimento,

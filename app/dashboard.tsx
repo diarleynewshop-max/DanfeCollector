@@ -4611,45 +4611,67 @@ function RelatoriosDashboard({
     return simples?.[1] ?? 'relatorio-transporte.xlsx';
   }
 
+  function montarParamsRelatorio(): URLSearchParams {
+    const params = new URLSearchParams();
+    if (inicioPeriodo) params.set('inicio', inicioPeriodo);
+    if (fimPeriodo) params.set('fim', fimPeriodo);
+    if (filtrosRelatorioAplicados.raizesEmpresa.length === 0) params.append('raizCnpj', '__none__');
+    else filtrosRelatorioAplicados.raizesEmpresa.forEach((raiz) => params.append('raizCnpj', raiz));
+    if (filtrosRelatorioAplicados.tipo !== 'todos') params.set('tipo', filtrosRelatorioAplicados.tipo);
+    if (filtrosRelatorioAplicados.situacoes.length !== SITUACOES_RELATORIO_OPCOES.length) {
+      if (filtrosRelatorioAplicados.situacoes.length === 0) params.append('situacao', '__none__');
+      else filtrosRelatorioAplicados.situacoes.forEach((situacao) => params.append('situacao', situacao));
+    }
+    if (filtrosRelatorioAplicados.daes.length !== DAE_RELATORIO_OPCOES.length) {
+      if (filtrosRelatorioAplicados.daes.length === 0) params.append('dae', '__none__');
+      else filtrosRelatorioAplicados.daes.forEach((dae) => params.append('dae', dae));
+    }
+    if (filtrosRelatorioAplicados.fornecedorAtivo) {
+      if (fornecedoresAplicadosRelatorio.length === 0) params.append('fornecedor', '__none__');
+      else fornecedoresAplicadosRelatorio.forEach((fornecedor) => params.append('fornecedor', fornecedor));
+    }
+    if (filtrosRelatorioAplicados.risco !== 'todos') params.set('risco', filtrosRelatorioAplicados.risco);
+    if (filtrosRelatorioAplicados.busca.trim()) params.set('busca', filtrosRelatorioAplicados.busca.trim());
+    return params;
+  }
+
+  async function baixarArquivoExcel(endpoint: string, erroPadrao: string) {
+    const resposta = await fetch(`${endpoint}?${montarParamsRelatorio().toString()}`, { cache: 'no-store' });
+    if (!resposta.ok) {
+      const erro = await resposta.json().catch(() => null) as { message?: string } | null;
+      throw new Error(erro?.message || erroPadrao);
+    }
+
+    const blob = await resposta.blob();
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = nomeArquivoDownload(resposta);
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(url);
+  }
+
   async function baixarExcelTransporte() {
     setBaixandoExcelTransporte(true);
     setErroExcelTransporte(null);
     try {
-      const params = new URLSearchParams();
-      if (inicioPeriodo) params.set('inicio', inicioPeriodo);
-      if (fimPeriodo) params.set('fim', fimPeriodo);
-      if (filtrosRelatorioAplicados.raizesEmpresa.length === 0) params.append('raizCnpj', '__none__');
-      else filtrosRelatorioAplicados.raizesEmpresa.forEach((raiz) => params.append('raizCnpj', raiz));
-      if (filtrosRelatorioAplicados.situacoes.length !== SITUACOES_RELATORIO_OPCOES.length) {
-        if (filtrosRelatorioAplicados.situacoes.length === 0) params.append('situacao', '__none__');
-        else filtrosRelatorioAplicados.situacoes.forEach((situacao) => params.append('situacao', situacao));
-      }
-      if (filtrosRelatorioAplicados.daes.length !== DAE_RELATORIO_OPCOES.length) {
-        if (filtrosRelatorioAplicados.daes.length === 0) params.append('dae', '__none__');
-        else filtrosRelatorioAplicados.daes.forEach((dae) => params.append('dae', dae));
-      }
-      if (filtrosRelatorioAplicados.fornecedorAtivo) {
-        if (fornecedoresAplicadosRelatorio.length === 0) params.append('fornecedor', '__none__');
-        else fornecedoresAplicadosRelatorio.forEach((fornecedor) => params.append('fornecedor', fornecedor));
-      }
-
-      const resposta = await fetch(`/api/relatorios/transporte-xlsx?${params.toString()}`, { cache: 'no-store' });
-      if (!resposta.ok) {
-        const erro = await resposta.json().catch(() => null) as { message?: string } | null;
-        throw new Error(erro?.message || 'Nao foi possivel gerar o Excel.');
-      }
-
-      const blob = await resposta.blob();
-      const url = window.URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = nomeArquivoDownload(resposta);
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      window.URL.revokeObjectURL(url);
+      await baixarArquivoExcel('/api/relatorios/transporte-xlsx', 'Nao foi possivel gerar o Excel.');
     } catch (error: unknown) {
       setErroExcelTransporte((error as Error).message || 'Erro ao baixar Excel.');
+    } finally {
+      setBaixandoExcelTransporte(false);
+    }
+  }
+
+  async function baixarExcelDaeVencidas() {
+    setBaixandoExcelTransporte(true);
+    setErroExcelTransporte(null);
+    try {
+      await baixarArquivoExcel('/api/relatorios/dae-vencidas-xlsx', 'Nao foi possivel gerar o Excel de DAE vencidas.');
+    } catch (error: unknown) {
+      setErroExcelTransporte((error as Error).message || 'Erro ao baixar Excel de DAE vencidas.');
     } finally {
       setBaixandoExcelTransporte(false);
     }
@@ -4915,9 +4937,9 @@ function RelatoriosDashboard({
           <button type="button" onClick={baixarRelatorioFornecedoresCsv} className="rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm font-semibold text-[var(--ink)] hover:bg-[var(--surface-2)]">
             Fornecedores CSV
           </button>
-          <a href="/api/relatorios/dae-vencidas-xlsx" className="rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm font-semibold text-red-800 hover:bg-red-100">
+          <button type="button" onClick={baixarExcelDaeVencidas} disabled={baixandoExcelTransporte} className="rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm font-semibold text-red-800 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60">
             DAE vencidas Excel
-          </a>
+          </button>
           <button type="button" onClick={imprimirRelatorioPdf} className="rounded-lg bg-[var(--accent)] px-3 py-2 text-sm font-bold text-white hover:brightness-110">
             Imprimir / salvar PDF
           </button>
