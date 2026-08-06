@@ -2696,6 +2696,7 @@ function montarHtmlDaeEmitido(
   const vencimento = documento.dataValidade ?? textoJson(detalhe.dataVencimento);
   const pagamento = textoJson(detalhe.dataPagamento);
   const total = totalDaeDetalheJson(detalhe, documento.valor) ?? documento.total ?? documento.valor;
+  const pago = documento.pago === true || !!pagamento || /pago|quitad|baixad|recolhid/i.test(`${documento.tipo ?? ''} ${status}`);
 
   const html = `<!doctype html>
 <html lang="pt-BR">
@@ -2705,7 +2706,8 @@ function montarHtmlDaeEmitido(
   <style>
     *{box-sizing:border-box}
     body{font-family:Arial,Helvetica,sans-serif;margin:0;background:#f3f4f6;color:#111827}
-    .page{width:860px;max-width:100%;margin:24px auto;background:#fff;border:1px solid #111827}
+    .page{position:relative;width:860px;max-width:100%;margin:24px auto;background:#fff;border:1px solid #111827;overflow:hidden}
+    .stamp{position:absolute;top:34%;left:50%;width:640px;transform:translate(-50%,-50%) rotate(-18deg);text-align:center;font-size:68px;font-weight:900;letter-spacing:14px;color:rgba(21,128,61,.6);border:8px solid rgba(21,128,61,.6);border-radius:14px;padding:8px 0;pointer-events:none;user-select:none;text-transform:uppercase;z-index:5}
     .top{display:grid;grid-template-columns:1fr 180px;border-bottom:2px solid #111827}
     .brand{padding:14px 16px}
     .brand h1{font-size:18px;margin:0;text-transform:uppercase;letter-spacing:.04em}
@@ -2736,6 +2738,7 @@ function montarHtmlDaeEmitido(
 </head>
 <body>
   <section class="page">
+    ${pago ? '<div class="stamp">Pago</div>' : ''}
     <div class="top">
       <div class="brand">
         <h1>Documento de Arrecadacao Estadual - DAE SITRAM</h1>
