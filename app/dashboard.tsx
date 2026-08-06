@@ -781,6 +781,7 @@ export default function Dashboard({
 
   // Filtros avançados
   const [mostrarFiltros, setMostrarFiltros] = useState(true);
+  const [modoFiltroNotas, setModoFiltroNotas] = useState<'resumido' | 'avancado'>('resumido');
   const [filtroEmitente, setFiltroEmitente] = useState('');
   const [filtroDestinatario, setFiltroDestinatario] = useState('');
   const [filtroValorMin, setFiltroValorMin] = useState('');
@@ -1131,6 +1132,7 @@ export default function Dashboard({
   function filtrarErroImportacaoNotas() {
     const situacoes: FiltroSituacaoNota[] = ['com-erro'];
     setMostrarFiltros(true);
+    setModoFiltroNotas('avancado');
     setFiltroSituacoes(situacoes);
     setFiltroDaeSitram('nao-encontrada');
     void aplicarFiltrosNotas({ situacoes, daeSitram: 'nao-encontrada' });
@@ -1138,6 +1140,7 @@ export default function Dashboard({
 
   function filtrarXmlCompletoNotas() {
     setMostrarFiltros(true);
+    setModoFiltroNotas('avancado');
     setFiltroStatus('COMPLETA');
     setFiltroSituacoes(['efetivada']);
     void aplicarFiltrosNotas({ status: 'COMPLETA', situacoes: ['efetivada'] });
@@ -1287,6 +1290,13 @@ export default function Dashboard({
     setFiltroDaeVencInicio(inicio);
     setFiltroDaeVencFim(fim);
     setMostrarFiltros(true);
+    setModoFiltroNotas('avancado');
+    aplicarFiltrosNotas({ daeSitram: 'a-pagar', daeVencInicio: inicio, daeVencFim: fim });
+    if (typeof window !== 'undefined') {
+      window.requestAnimationFrame(() => {
+        document.getElementById('lista-notas-resultados')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+    }
   }
 
   function abrirCertificados() {
@@ -2860,6 +2870,26 @@ export default function Dashboard({
                     <h2 className="text-base font-bold text-slate-900">Filtros de notas fiscais</h2>
                     <p className="text-xs text-slate-600">Combine os critérios e clique em Pesquisar.</p>
                   </div>
+                  {mostrarFiltros && (
+                    <div className="flex overflow-hidden rounded-lg border border-slate-300 bg-white text-sm font-semibold">
+                      <button
+                        type="button"
+                        onClick={() => setModoFiltroNotas('resumido')}
+                        aria-pressed={modoFiltroNotas === 'resumido'}
+                        className={`px-3 py-1.5 transition ${modoFiltroNotas === 'resumido' ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-100'}`}
+                      >
+                        Resumido
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setModoFiltroNotas('avancado')}
+                        aria-pressed={modoFiltroNotas === 'avancado'}
+                        className={`px-3 py-1.5 transition ${modoFiltroNotas === 'avancado' ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-100'}`}
+                      >
+                        Avançado
+                      </button>
+                    </div>
+                  )}
                 </div>
                 <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
                   {carregandoTodas && <span className="mr-2 text-[11px] font-semibold text-amber-700">Carregando base...</span>}
@@ -2943,9 +2973,6 @@ export default function Dashboard({
                     <CampoFiltroNotas label="Emissao - fim" className="lg:col-span-3">
                       <input type="date" value={filtroDataFim} onChange={(e) => setFiltroDataFim(e.target.value)} className={CAMPO_FILTRO_NOTAS} />
                     </CampoFiltroNotas>
-                  </div>
-
-                  <div className="mt-4 grid grid-cols-1 gap-x-4 gap-y-4 lg:grid-cols-12">
                     <CampoFiltroNotas label="Fornecedor" className="lg:col-span-4">
                       <CampoBuscaOpcoesFiltro
                         valor={filtroEmitente}
@@ -2954,6 +2981,31 @@ export default function Dashboard({
                         onChange={setFiltroEmitente}
                       />
                     </CampoFiltroNotas>
+                    <CampoFiltroNotas label="Num. Documento" className="lg:col-span-2">
+                      <input
+                        value={filtroNumero}
+                        onChange={(e) => setFiltroNumero(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            void aplicarFiltrosNotas();
+                          }
+                        }}
+                        inputMode="numeric"
+                        className={CAMPO_FILTRO_NOTAS}
+                      />
+                    </CampoFiltroNotas>
+                  </div>
+                  </div>
+
+                  {modoFiltroNotas === 'avancado' && (
+                  <>
+                  <div className="rounded-xl border border-slate-200 bg-white p-4">
+                    <div className="mb-4">
+                      <h3 className="text-sm font-bold text-slate-900">Mais critérios</h3>
+                      <p className="mt-0.5 text-xs text-slate-500">Destinatário, datas de entrada, chave e valores.</p>
+                    </div>
+                  <div className="grid grid-cols-1 gap-x-4 gap-y-4 lg:grid-cols-12">
                     <CampoFiltroNotas label="Destinatario" className="lg:col-span-2">
                       <CampoBuscaOpcoesFiltro
                         valor={filtroDestinatario}
@@ -2982,20 +3034,6 @@ export default function Dashboard({
                     </CampoFiltroNotas>
                     <CampoFiltroNotas label="Serie" className="lg:col-span-2">
                       <input value={filtroSerie} onChange={(e) => setFiltroSerie(e.target.value)} inputMode="numeric" className={CAMPO_FILTRO_NOTAS} />
-                    </CampoFiltroNotas>
-                    <CampoFiltroNotas label="Num. Documento" className="lg:col-span-2">
-                      <input
-                        value={filtroNumero}
-                        onChange={(e) => setFiltroNumero(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') {
-                            e.preventDefault();
-                            void aplicarFiltrosNotas();
-                          }
-                        }}
-                        inputMode="numeric"
-                        className={CAMPO_FILTRO_NOTAS}
-                      />
                     </CampoFiltroNotas>
                     <CampoFiltroNotas label="Valor NF" className="lg:col-span-2">
                       <div className="grid grid-cols-2 gap-1.5">
@@ -3115,6 +3153,8 @@ export default function Dashboard({
                     </div>
                   </div>
                   </div>
+                  </>
+                  )}
                 </div>
               )}
             </section>
@@ -3513,7 +3553,7 @@ export default function Dashboard({
               </div>
             )}
 
-            <div className="flex justify-between text-sm text-[var(--ink-mut)] mb-2 px-1">
+            <div id="lista-notas-resultados" className="flex scroll-mt-4 justify-between text-sm text-[var(--ink-mut)] mb-2 px-1">
               <span>
                 {notasFiltradas.length} nota(s)
                 {anoCarregado ? ` de ${anoCarregado}` : ''}
@@ -5777,17 +5817,6 @@ function AlertaDaes({
     });
   }, [notas, cnpjId]);
 
-  const grupos = useMemo(() => {
-    const mapa = new Map<string, ItemAlertaDae[]>();
-    for (const item of itens) {
-      const chave = item.dataChave ?? 'SEM_DATA';
-      const grupo = mapa.get(chave) ?? [];
-      grupo.push(item);
-      mapa.set(chave, grupo);
-    }
-    return [...mapa.entries()];
-  }, [itens]);
-
   const [aberto, setAberto] = useState(true);
   useEffect(() => {
     const v = typeof window !== 'undefined' ? localStorage.getItem('danfe-alerta-dae-aberto') : null;
@@ -5800,13 +5829,61 @@ function AlertaDaes({
     });
   }
 
+  // Filtro local (dentro do próprio alerta) por empresa e por período de vencimento
+  const [filtroEmpresaAlerta, setFiltroEmpresaAlerta] = useState('');
+  const [filtroInicioAlerta, setFiltroInicioAlerta] = useState('');
+  const [filtroFimAlerta, setFiltroFimAlerta] = useState('');
+  const [mostrarFiltroAlerta, setMostrarFiltroAlerta] = useState(false);
+  const [selecionado, setSelecionado] = useState<string | null>(null);
+
+  const empresasAlerta = useMemo(() => {
+    const nomes = new Set<string>();
+    for (const item of itens) nomes.add(nomeGrupoEmpresa(item.nota.cnpj.cnpj));
+    return [...nomes].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  }, [itens]);
+
+  const itensFiltrados = useMemo(() => {
+    return itens.filter((item) => {
+      if (filtroEmpresaAlerta && nomeGrupoEmpresa(item.nota.cnpj.cnpj) !== filtroEmpresaAlerta) return false;
+      if (filtroInicioAlerta && (!item.dataChave || item.dataChave < filtroInicioAlerta)) return false;
+      if (filtroFimAlerta && (!item.dataChave || item.dataChave > filtroFimAlerta)) return false;
+      return true;
+    });
+  }, [itens, filtroEmpresaAlerta, filtroInicioAlerta, filtroFimAlerta]);
+
+  const grupos = useMemo(() => {
+    const mapa = new Map<string, ItemAlertaDae[]>();
+    for (const item of itensFiltrados) {
+      const chave = item.dataChave ?? 'SEM_DATA';
+      const grupo = mapa.get(chave) ?? [];
+      grupo.push(item);
+      mapa.set(chave, grupo);
+    }
+    return [...mapa.entries()];
+  }, [itensFiltrados]);
+
+  function limparFiltroAlerta() {
+    setFiltroEmpresaAlerta('');
+    setFiltroInicioAlerta('');
+    setFiltroFimAlerta('');
+  }
+
   if (itens.length === 0) return null;
+
+  function disparar(chave: string, inicio: string, fim: string) {
+    setSelecionado(chave);
+    onFiltrar(inicio, fim);
+  }
 
   const vencidos = itens.filter((item) => item.dias !== null && item.dias < 0);
   const vencemHoje = itens.filter((item) => item.dias === 0);
   const proximos = itens.filter((item) => item.dias !== null && item.dias > 0 && item.dias <= 7);
   const totalAberto = itens.reduce((total, item) => total + (item.lancamento?.valorAberto ?? 0), 0);
   const hoje = deslocarData(0);
+  const filtroAlertaAtivo = Boolean(filtroEmpresaAlerta || filtroInicioAlerta || filtroFimAlerta);
+
+  const BOTAO_BASE = 'rounded-lg border px-3 py-2 text-left shadow-sm transition cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-offset-1';
+  const BOTAO_SELECIONADO = 'ring-2 ring-offset-1 ring-[var(--ink)] scale-[1.03]';
 
   return (
     <section className="mb-5 overflow-hidden rounded-2xl border border-amber-300 bg-amber-50/60">
@@ -5819,8 +5896,9 @@ function AlertaDaes({
           {vencidos.length > 0 && (
             <button
               type="button"
-              onClick={() => onFiltrar('', deslocarData(-1))}
-              className="rounded-lg border border-red-300 bg-red-600 px-3 py-2 text-left text-white shadow-sm"
+              onClick={() => disparar('vencidos', '', deslocarData(-1))}
+              aria-pressed={selecionado === 'vencidos'}
+              className={`${BOTAO_BASE} border-red-300 bg-red-600 text-white focus-visible:ring-red-400 ${selecionado === 'vencidos' ? BOTAO_SELECIONADO : ''}`}
             >
               <span className="block text-[10px] font-bold uppercase">{t('overdue')}</span>
               <span className="text-lg font-black">{vencidos.length}</span>
@@ -5829,8 +5907,9 @@ function AlertaDaes({
           {vencemHoje.length > 0 && (
             <button
               type="button"
-              onClick={() => onFiltrar(hoje, hoje)}
-              className="rounded-lg border border-orange-300 bg-orange-500 px-3 py-2 text-left text-white shadow-sm"
+              onClick={() => disparar('hoje', hoje, hoje)}
+              aria-pressed={selecionado === 'hoje'}
+              className={`${BOTAO_BASE} border-orange-300 bg-orange-500 text-white focus-visible:ring-orange-400 ${selecionado === 'hoje' ? BOTAO_SELECIONADO : ''}`}
             >
               <span className="block text-[10px] font-bold uppercase">{t('dueToday')}</span>
               <span className="text-lg font-black">{vencemHoje.length}</span>
@@ -5839,8 +5918,9 @@ function AlertaDaes({
           {proximos.length > 0 && (
             <button
               type="button"
-              onClick={() => onFiltrar(deslocarData(1), deslocarData(7))}
-              className="rounded-lg border border-amber-300 bg-[var(--surface)] px-3 py-2 text-left text-amber-800 shadow-sm"
+              onClick={() => disparar('proximos', deslocarData(1), deslocarData(7))}
+              aria-pressed={selecionado === 'proximos'}
+              className={`${BOTAO_BASE} border-amber-300 bg-[var(--surface)] text-amber-800 focus-visible:ring-amber-400 ${selecionado === 'proximos' ? `${BOTAO_SELECIONADO} bg-amber-100` : ''}`}
             >
               <span className="block text-[10px] font-bold uppercase">{t('nextSevenDays')}</span>
               <span className="text-lg font-black">{proximos.length}</span>
@@ -5848,10 +5928,23 @@ function AlertaDaes({
           )}
           <button
             type="button"
-            onClick={() => onFiltrar('', '')}
-            className="rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm font-semibold text-[var(--ink)] shadow-sm"
+            onClick={() => disparar('todos', '', '')}
+            aria-pressed={selecionado === 'todos'}
+            className={`${BOTAO_BASE} border-[var(--border-strong)] bg-[var(--surface)] text-sm font-semibold text-[var(--ink)] focus-visible:ring-[var(--accent)] ${selecionado === 'todos' ? `${BOTAO_SELECIONADO} bg-[var(--accent-soft)]` : ''}`}
           >
             {t('viewAll')}
+          </button>
+          <button
+            type="button"
+            onClick={() => setMostrarFiltroAlerta((v) => !v)}
+            aria-pressed={mostrarFiltroAlerta || filtroAlertaAtivo}
+            className={`rounded-lg border px-3 py-2 text-sm font-semibold shadow-sm transition ${
+              mostrarFiltroAlerta || filtroAlertaAtivo
+                ? 'border-amber-500 bg-amber-500 text-white'
+                : 'border-amber-300 bg-[var(--surface)] text-amber-800 hover:bg-amber-50'
+            }`}
+          >
+            🔎 Filtrar{filtroAlertaAtivo ? ` · ${itensFiltrados.length}` : ''}
           </button>
           <button
             type="button"
@@ -5862,10 +5955,63 @@ function AlertaDaes({
             {aberto ? `v ${t('minimize')}` : `> ${t('expand')}`}
           </button>
         </div>
+
+        {(mostrarFiltroAlerta || filtroAlertaAtivo) && (
+        <div className="mt-3 flex flex-wrap items-end gap-2 border-t border-amber-200 pt-3">
+          <div>
+            <label className="mb-1 block text-[11px] font-semibold uppercase text-[var(--ink-mut)]">Empresa</label>
+            <select
+              value={filtroEmpresaAlerta}
+              onChange={(e) => setFiltroEmpresaAlerta(e.target.value)}
+              className="rounded-lg border border-amber-300 bg-[var(--surface)] px-2 py-1.5 text-sm text-[var(--ink)]"
+            >
+              <option value="">Todas as empresas</option>
+              {empresasAlerta.map((nome) => (
+                <option key={nome} value={nome}>{nome}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="mb-1 block text-[11px] font-semibold uppercase text-[var(--ink-mut)]">Vencimento de</label>
+            <input
+              type="date"
+              value={filtroInicioAlerta}
+              onChange={(e) => setFiltroInicioAlerta(e.target.value)}
+              className="rounded-lg border border-amber-300 bg-[var(--surface)] px-2 py-1.5 text-sm text-[var(--ink)]"
+            />
+          </div>
+          <div>
+            <label className="mb-1 block text-[11px] font-semibold uppercase text-[var(--ink-mut)]">até</label>
+            <input
+              type="date"
+              value={filtroFimAlerta}
+              onChange={(e) => setFiltroFimAlerta(e.target.value)}
+              className="rounded-lg border border-amber-300 bg-[var(--surface)] px-2 py-1.5 text-sm text-[var(--ink)]"
+            />
+          </div>
+          {filtroAlertaAtivo && (
+            <button
+              type="button"
+              onClick={limparFiltroAlerta}
+              className="rounded-lg border border-amber-300 bg-[var(--surface)] px-3 py-1.5 text-sm font-semibold text-amber-800 hover:bg-amber-50"
+            >
+              Limpar filtro
+            </button>
+          )}
+          {filtroAlertaAtivo && (
+            <span className="text-xs font-medium text-amber-800">
+              Mostrando {itensFiltrados.length} de {itens.length} pendência(s)
+            </span>
+          )}
+        </div>
+        )}
       </div>
 
       {aberto && (
-      <div className="max-h-80 divide-y divide-amber-200 overflow-y-auto">
+      <div className="max-h-[28rem] divide-y divide-amber-200 overflow-y-auto">
+        {itensFiltrados.length === 0 && (
+          <p className="px-4 py-6 text-center text-sm text-[var(--ink-mut)]">Nenhuma pendência para esse filtro.</p>
+        )}
         {grupos.map(([dataGrupo, itensGrupo]) => {
           const diasGrupo = itensGrupo[0]?.dias ?? null;
           const valorGrupo = itensGrupo.reduce((total, item) => total + (item.lancamento?.valorAberto ?? 0), 0);
@@ -5878,13 +6024,17 @@ function AlertaDaes({
               : venceHoje
                 ? t('dueTodayUpper')
                 : t('dueInDays', { days: diasGrupo ?? 0 });
+          const chaveGrupo = `grupo-${dataGrupo}`;
 
           return (
             <div key={dataGrupo} className={vencido ? 'bg-red-50' : venceHoje ? 'bg-orange-50' : 'bg-[var(--surface-2)]'}>
               <button
                 type="button"
-                onClick={() => dataGrupo === 'SEM_DATA' ? onFiltrar('', '') : onFiltrar(dataGrupo, dataGrupo)}
-                className="flex w-full flex-wrap items-center gap-3 px-4 py-2 text-left hover:bg-black/[0.03]"
+                onClick={() => dataGrupo === 'SEM_DATA' ? disparar(chaveGrupo, '', '') : disparar(chaveGrupo, dataGrupo, dataGrupo)}
+                aria-pressed={selecionado === chaveGrupo}
+                className={`sticky top-0 z-10 flex w-full cursor-pointer flex-wrap items-center gap-3 px-4 py-2.5 text-left outline-none transition hover:bg-black/[0.05] focus-visible:ring-2 focus-visible:ring-[var(--ink)] ${
+                  selecionado === chaveGrupo ? 'bg-[var(--accent-soft)] ring-2 ring-inset ring-[var(--accent)]' : (vencido ? 'bg-red-50' : venceHoje ? 'bg-orange-50' : 'bg-[var(--surface-2)]')
+                }`}
               >
                 <span className="font-bold text-[var(--ink)]">
                   {dataGrupo === 'SEM_DATA' ? t('noDueDateInfo') : data(`${dataGrupo}T12:00:00`)}
@@ -5893,6 +6043,7 @@ function AlertaDaes({
                 <span className="ml-auto text-sm font-bold text-[var(--ink)]">
                   {t('daeCountAmount', { count: itensGrupo.length, amount: moeda(valorGrupo) })}
                 </span>
+                <span className="text-xs font-semibold text-[var(--accent)]">{selecionado === chaveGrupo ? '✓ selecionado' : 'ver notas ➜'}</span>
               </button>
               <div className="grid gap-2 px-4 pb-3 md:grid-cols-2">
                 {itensGrupo.map((item) => (
@@ -6813,6 +6964,17 @@ function iconeAnexo(mime: string): string {
   return '📎';
 }
 
+function SeloPago() {
+  return (
+    <span
+      aria-hidden="true"
+      className="pointer-events-none absolute right-[-2.75rem] top-[0.65rem] w-40 rotate-45 select-none bg-emerald-600/90 py-0.5 text-center text-[11px] font-black tracking-widest text-white shadow"
+    >
+      PAGO
+    </span>
+  );
+}
+
 function AnexosView({ nota }: { nota: NotaComCnpj }) {
   const [anexos, setAnexos] = useState<AnexoInfo[]>([]);
   const [opcoesDae, setOpcoesDae] = useState<DaeCompartilhadoInfo[]>([]);
@@ -6825,6 +6987,10 @@ function AnexosView({ nota }: { nota: NotaComCnpj }) {
   const [enviando, setEnviando] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; texto: string } | null>(null);
   const [excluindo, setExcluindo] = useState<number | null>(null);
+
+  const lancamentosDaeNota = lancamentosVisiveisDae(extrairResumoDae(nota).lancamentos);
+  const daePagoNota = statusDaeEfetivo(nota) === 'PAGO'
+    || (lancamentosDaeNota.length > 0 && lancamentosDaeNota.every((l) => l.pago));
 
   async function recarregar() {
     const res = await listarAnexos(nota.id);
@@ -6983,8 +7149,10 @@ function AnexosView({ nota }: { nota: NotaComCnpj }) {
           <ul className="divide-y divide-[var(--border)]">
             {anexos.map((a) => {
               const base = `/danfe/${nota.chave}/anexo/${a.id}`;
+              const mostrarSeloPago = a.escopo === 'dae' && daePagoNota;
               return (
-                <li key={a.id} className="flex flex-wrap items-center gap-3 py-3">
+                <li key={a.id} className="relative flex flex-wrap items-center gap-3 overflow-hidden py-3">
+                  {mostrarSeloPago && <SeloPago />}
                   <span className="text-xl">{iconeAnexo(a.mime)}</span>
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
