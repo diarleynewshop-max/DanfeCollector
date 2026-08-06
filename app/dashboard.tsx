@@ -4915,6 +4915,9 @@ function RelatoriosDashboard({
           <button type="button" onClick={baixarRelatorioFornecedoresCsv} className="rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm font-semibold text-[var(--ink)] hover:bg-[var(--surface-2)]">
             Fornecedores CSV
           </button>
+          <a href="/api/relatorios/dae-vencidas-xlsx" className="rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm font-semibold text-red-800 hover:bg-red-100">
+            DAE vencidas Excel
+          </a>
           <button type="button" onClick={imprimirRelatorioPdf} className="rounded-lg bg-[var(--accent)] px-3 py-2 text-sm font-bold text-white hover:brightness-110">
             Imprimir / salvar PDF
           </button>
