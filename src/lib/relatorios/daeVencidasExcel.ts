@@ -3,7 +3,7 @@ import type { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import type { UsuarioLogado } from '@/lib/usuarios/auth';
 import { whereNotaPermitida } from '@/lib/usuarios/auth';
-import { diasAteVencimento } from '@/lib/sitram/dae';
+import { diasAteVencimento, extrairResumoDae, statusDaeEfetivo } from '@/lib/sitram/dae';
 import { extrairEspelhoSitram } from '@/lib/sitram/espelho';
 
 type Registro = Record<string, unknown>;
@@ -181,15 +181,6 @@ function jurosDocumento(documento: Registro): number | null {
   return numero(detalheDae.valorJuros) ?? numero(documento.valorJuros);
 }
 
-function totalDocumento(documento: Registro): number | null {
-  const detalheDae = registro(documento.detalheDae);
-  return numero(detalheDae.total) ?? numero(documento.total) ?? numero(documento.valor);
-}
-
-function valorPagoLancamento(lancamento: Registro): number | null {
-  return numero(lancamento.valorPago) ?? numero(lancamento.valor);
-}
-
 function normalizarLancamentosParaLinha(nota: NotaDaeVencida): LinhaDaeVencida | null {
   if (!nota.sitramDetalhe) return null;
 
@@ -201,18 +192,23 @@ function normalizarLancamentosParaLinha(nota: NotaDaeVencida): LinhaDaeVencida |
   }
 
   if (nota.pagamentoManualEm) return null;
+  if (statusDaeEfetivo(nota) === 'PAGO') return null;
 
-  const lancamentosBrutos = extrairLancamentos(detalhe).map((raw) => ({
+  const resumo = extrairResumoDae(nota);
+  const lancamentosBrutos = extrairLancamentos(detalhe).map((raw, indice) => {
+    const normalizado = resumo.lancamentos[indice];
+    return {
     raw,
     tipo: tipoLancamento(raw),
     id: primeiroTexto(raw.idLancamentoFront, raw.id)?.replace(/\D/g, '') ?? null,
     codigo: primeiroTexto(raw.codigo, raw.codReceita, raw.codigoReceitaCodigo),
-    vencimento: primeiroTexto(raw.vencimento, raw.dataVencimento),
-    pago: /pago|quitad|baixad|recolhid/i.test(semAcentos(primeiroTexto(raw.situacao, raw.siuacaoDescricao, raw.descricaoSituacao))),
-    valorAberto: numero(raw.valorAberto),
-    valor: numero(raw.valor) ?? numero(raw.icmsDevido) ?? numero(raw.icmsCalculado),
+    vencimento: normalizado?.vencimento ?? primeiroTexto(raw.vencimento, raw.dataVencimento),
+    pago: normalizado?.pago ?? /pago|quitad|baixad|recolhid/i.test(semAcentos(primeiroTexto(raw.situacao, raw.siuacaoDescricao, raw.descricaoSituacao))),
+    valorAberto: normalizado?.valorAberto ?? numero(raw.valorAberto),
+    valor: normalizado?.valor ?? numero(raw.valor) ?? numero(raw.icmsDevido) ?? numero(raw.icmsCalculado),
     juros: numero(raw.valorJuros),
-  }));
+    };
+  });
 
   const lancamentosVencidos = lancamentosBrutos.filter((item) => {
     const dias = diasAteVencimento(item.vencimento);
