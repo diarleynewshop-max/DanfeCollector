@@ -4611,32 +4611,58 @@ function RelatoriosDashboard({
     return simples?.[1] ?? 'relatorio-transporte.xlsx';
   }
 
-  function montarParamsRelatorio(): URLSearchParams {
+  function filtrosRelatorioAtuais(): FiltrosRelatorioAplicados {
+    return {
+      dataInicio,
+      dataFim,
+      raizesEmpresa: [...filtroRaizesEmpresaRelatorio],
+      tipo: filtroTipoRelatorio,
+      situacoes: [...filtroSituacoesRelatorio],
+      daes: [...filtroDaesRelatorio],
+      fornecedores: [...filtroFornecedoresRelatorio],
+      fornecedorAtivo: fornecedorFiltroAtivo,
+      risco: filtroRiscoRelatorio,
+      busca: buscaRelatorio,
+    };
+  }
+
+  function montarParamsRelatorio(filtros = filtrosRelatorioAplicados): URLSearchParams {
     const params = new URLSearchParams();
-    if (inicioPeriodo) params.set('inicio', inicioPeriodo);
-    if (fimPeriodo) params.set('fim', fimPeriodo);
-    if (filtrosRelatorioAplicados.raizesEmpresa.length === 0) params.append('raizCnpj', '__none__');
-    else filtrosRelatorioAplicados.raizesEmpresa.forEach((raiz) => params.append('raizCnpj', raiz));
-    if (filtrosRelatorioAplicados.tipo !== 'todos') params.set('tipo', filtrosRelatorioAplicados.tipo);
-    if (filtrosRelatorioAplicados.situacoes.length !== SITUACOES_RELATORIO_OPCOES.length) {
-      if (filtrosRelatorioAplicados.situacoes.length === 0) params.append('situacao', '__none__');
-      else filtrosRelatorioAplicados.situacoes.forEach((situacao) => params.append('situacao', situacao));
+    const inicio = filtros.dataInicio && filtros.dataFim && filtros.dataInicio > filtros.dataFim
+      ? filtros.dataFim
+      : filtros.dataInicio;
+    const fim = filtros.dataInicio && filtros.dataFim && filtros.dataInicio > filtros.dataFim
+      ? filtros.dataInicio
+      : filtros.dataFim;
+    const fornecedoresFiltro = filtros.fornecedorAtivo ? filtros.fornecedores : todosFornecedoresRelatorio;
+
+    if (inicio) params.set('inicio', inicio);
+    if (fim) params.set('fim', fim);
+    if (filtros.raizesEmpresa.length === 0) params.append('raizCnpj', '__none__');
+    else filtros.raizesEmpresa.forEach((raiz) => params.append('raizCnpj', raiz));
+    if (filtros.tipo !== 'todos') params.set('tipo', filtros.tipo);
+    if (filtros.situacoes.length !== SITUACOES_RELATORIO_OPCOES.length) {
+      if (filtros.situacoes.length === 0) params.append('situacao', '__none__');
+      else filtros.situacoes.forEach((situacao) => params.append('situacao', situacao));
     }
-    if (filtrosRelatorioAplicados.daes.length !== DAE_RELATORIO_OPCOES.length) {
-      if (filtrosRelatorioAplicados.daes.length === 0) params.append('dae', '__none__');
-      else filtrosRelatorioAplicados.daes.forEach((dae) => params.append('dae', dae));
+    if (filtros.daes.length !== DAE_RELATORIO_OPCOES.length) {
+      if (filtros.daes.length === 0) params.append('dae', '__none__');
+      else filtros.daes.forEach((dae) => params.append('dae', dae));
     }
-    if (filtrosRelatorioAplicados.fornecedorAtivo) {
-      if (fornecedoresAplicadosRelatorio.length === 0) params.append('fornecedor', '__none__');
-      else fornecedoresAplicadosRelatorio.forEach((fornecedor) => params.append('fornecedor', fornecedor));
+    if (filtros.fornecedorAtivo) {
+      if (fornecedoresFiltro.length === 0) params.append('fornecedor', '__none__');
+      else fornecedoresFiltro.forEach((fornecedor) => params.append('fornecedor', fornecedor));
     }
-    if (filtrosRelatorioAplicados.risco !== 'todos') params.set('risco', filtrosRelatorioAplicados.risco);
-    if (filtrosRelatorioAplicados.busca.trim()) params.set('busca', filtrosRelatorioAplicados.busca.trim());
+    if (filtros.risco !== 'todos') params.set('risco', filtros.risco);
+    if (filtros.busca.trim()) params.set('busca', filtros.busca.trim());
     return params;
   }
 
   async function baixarArquivoExcel(endpoint: string, erroPadrao: string) {
-    const resposta = await fetch(`${endpoint}?${montarParamsRelatorio().toString()}`, { cache: 'no-store' });
+    const filtrosDownload = filtrosRelatorioAtuais();
+    setFiltrosRelatorioAplicados(filtrosDownload);
+
+    const resposta = await fetch(`${endpoint}?${montarParamsRelatorio(filtrosDownload).toString()}`, { cache: 'no-store' });
     if (!resposta.ok) {
       const erro = await resposta.json().catch(() => null) as { message?: string } | null;
       throw new Error(erro?.message || erroPadrao);
@@ -5152,12 +5178,14 @@ function RelatoriosDashboard({
         <section className="report-card rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-5 shadow-sm">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
             <h2 className="text-base font-bold text-[var(--ink)]">{rt('DAEs vencidos e próximos', '逾期及即将到期的 DAE')}</h2>
-            <a
-              href="/api/relatorios/dae-vencidas-xlsx"
-              className="rounded-full border border-[var(--border)] bg-[var(--surface-2)] px-3 py-1.5 text-xs font-semibold text-[var(--ink)] hover:bg-[var(--accent-soft)]"
+            <button
+              type="button"
+              onClick={baixarExcelDaeVencidas}
+              disabled={baixandoExcelTransporte}
+              className="rounded-full border border-[var(--border)] bg-[var(--surface-2)] px-3 py-1.5 text-xs font-semibold text-[var(--ink)] hover:bg-[var(--accent-soft)] disabled:cursor-not-allowed disabled:opacity-60"
             >
               Baixar planilha das vencidas
-            </a>
+            </button>
           </div>
           <div className="overflow-x-auto">
             <table className="min-w-full text-left text-xs">
