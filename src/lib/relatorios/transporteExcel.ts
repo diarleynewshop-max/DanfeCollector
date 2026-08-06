@@ -34,13 +34,13 @@ type LinhaRelatorio = {
 const COLUNAS = [
   { key: 'chaveAcesso', header: 'Chave de Acesso', width: 61.88, hidden: false },
   { key: 'numeroNota', header: 'Número Nota', width: 14.13, hidden: false },
-  { key: 'dataEmissao', header: 'Data da Emissão', width: 17.5, hidden: true, numFmt: 'dd/MM/yyyy' },
+  { key: 'dataEmissao', header: 'Data da Emissão', width: 17.5, hidden: false, numFmt: 'dd/MM/yyyy' },
   { key: 'cnpjFornecedor', header: 'CPF/CNPJ Fornecedor', width: 23.63, hidden: false },
   { key: 'nomeFornecedor', header: 'Nome/Razão Social Fornecedor', width: 44.25, hidden: false },
-  { key: 'serie', header: 'Série', width: 6.25, hidden: true },
-  { key: 'uf', header: 'UF', width: 3.75, hidden: true },
-  { key: 'valorNfe', header: 'Valor da NF-e', width: 14.38, hidden: true, numFmt: '#,##0.00' },
-  { key: 'icmsDestacado', header: 'ICMS Destacado', width: 17.38, hidden: true, numFmt: '#,##0.00' },
+  { key: 'serie', header: 'Série', width: 6.25, hidden: false },
+  { key: 'uf', header: 'UF', width: 7, hidden: false },
+  { key: 'valorNfe', header: 'Valor da NF-e', width: 14.38, hidden: false, numFmt: '#,##0.00' },
+  { key: 'icmsDestacado', header: 'ICMS Destacado', width: 17.38, hidden: false, numFmt: '#,##0.00' },
   { key: 'situacaoNfe', header: 'Situação NF-e', width: 14.88, hidden: false },
   { key: 'tipo', header: 'TIPO', width: 14.63, hidden: false },
   { key: 'status', header: 'STATUS', width: 34.38, hidden: false },
@@ -238,6 +238,42 @@ function adicionarPlanilhaMes(workbook: ExcelJS.Workbook, nome: string, linhas: 
   aplicarLayout(sheet);
 }
 
+function chaveMes(data: Date): string {
+  return `${data.getFullYear()}-${String(data.getMonth()).padStart(2, '0')}`;
+}
+
+function nomeAbaMes(data: Date, incluirAno: boolean): string {
+  const nome = MESES[data.getMonth()] ?? 'PERIODO';
+  return incluirAno ? `${nome} ${data.getFullYear()}` : nome;
+}
+
+function mesesDoPeriodo(inicio: Date | undefined, fim: Date | undefined, notas: NotaTransporte[]): Date[] {
+  if (inicio || fim) {
+    const primeiro = inicio ?? notas[0]?.emitidaEm ?? new Date();
+    const ultimo = fim ?? notas[notas.length - 1]?.emitidaEm ?? primeiro;
+    const atual = new Date(primeiro.getFullYear(), primeiro.getMonth(), 1);
+    const limite = new Date(ultimo.getFullYear(), ultimo.getMonth(), 1);
+    const meses: Date[] = [];
+
+    while (atual.getTime() <= limite.getTime()) {
+      meses.push(new Date(atual));
+      atual.setMonth(atual.getMonth() + 1);
+    }
+
+    return meses;
+  }
+
+  const vistos = new Set<string>();
+  return notas
+    .map((nota) => new Date(nota.emitidaEm.getFullYear(), nota.emitidaEm.getMonth(), 1))
+    .filter((data) => {
+      const chave = chaveMes(data);
+      if (vistos.has(chave)) return false;
+      vistos.add(chave);
+      return true;
+    });
+}
+
 export async function gerarRelatorioTransporteExcel(filtros: FiltrosRelatorioTransporte): Promise<{
   buffer: Buffer;
   filename: string;
@@ -298,9 +334,9 @@ export async function gerarRelatorioTransporteExcel(filtros: FiltrosRelatorioTra
     ? notas.filter((nota) => notaPassaFiltroDae(nota, filtros.daeFiltros))
     : notas;
 
-  const linhasPorMes = new Map<number, LinhaRelatorio[]>();
+  const linhasPorMes = new Map<string, LinhaRelatorio[]>();
   for (const nota of notasFiltradas) {
-    const mes = nota.emitidaEm.getMonth();
+    const mes = chaveMes(nota.emitidaEm);
     const linhasMes = linhasPorMes.get(mes) ?? [];
     linhasMes.push(montarLinha(nota));
     linhasPorMes.set(mes, linhasMes);
@@ -310,8 +346,15 @@ export async function gerarRelatorioTransporteExcel(filtros: FiltrosRelatorioTra
   workbook.creator = 'DanfeCollector';
   workbook.created = new Date();
 
-  for (let mes = 0; mes < MESES.length; mes += 1) {
-    adicionarPlanilhaMes(workbook, MESES[mes], linhasPorMes.get(mes) ?? []);
+  const meses = mesesDoPeriodo(inicio, fim, notasFiltradas);
+  const incluirAno = new Set(meses.map((data) => data.getFullYear())).size > 1;
+
+  if (meses.length === 0) {
+    adicionarPlanilhaMes(workbook, 'PERIODO', []);
+  } else {
+    for (const mes of meses) {
+      adicionarPlanilhaMes(workbook, nomeAbaMes(mes, incluirAno), linhasPorMes.get(chaveMes(mes)) ?? []);
+    }
   }
 
   const dados = await workbook.xlsx.writeBuffer();
