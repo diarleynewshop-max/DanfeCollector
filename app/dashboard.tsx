@@ -5125,7 +5125,15 @@ function RelatoriosDashboard({
 
       <div className="grid gap-4 xl:grid-cols-2">
         <section className="report-card rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-5 shadow-sm">
-          <h2 className="mb-3 text-base font-bold text-[var(--ink)]">{rt('DAEs vencidos e próximos', '逾期及即将到期的 DAE')}</h2>
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+            <h2 className="text-base font-bold text-[var(--ink)]">{rt('DAEs vencidos e próximos', '逾期及即将到期的 DAE')}</h2>
+            <a
+              href="/api/relatorios/dae-vencidas-xlsx"
+              className="rounded-full border border-[var(--border)] bg-[var(--surface-2)] px-3 py-1.5 text-xs font-semibold text-[var(--ink)] hover:bg-[var(--accent-soft)]"
+            >
+              Baixar planilha das vencidas
+            </a>
+          </div>
           <div className="overflow-x-auto">
             <table className="min-w-full text-left text-xs">
               <thead className="text-[var(--ink-mut)]">
