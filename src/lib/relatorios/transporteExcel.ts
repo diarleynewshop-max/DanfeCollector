@@ -1,17 +1,9 @@
-import fs from 'fs';
 import ExcelJS from 'exceljs';
-import { XMLParser } from 'fast-xml-parser';
 import type { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
-import { resolverXmlPath } from '@/lib/xmlpath';
 import type { UsuarioLogado } from '@/lib/usuarios/auth';
 import { whereNotaPermitida } from '@/lib/usuarios/auth';
-import {
-  diasAteVencimento,
-  extrairResumoDae,
-  lancamentosVisiveisDae,
-  statusDaeEfetivo,
-} from '@/lib/sitram/dae';
+import { extrairResumoDae, lancamentosVisiveisDae, statusDaeEfetivo } from '@/lib/sitram/dae';
 
 export interface FiltrosRelatorioTransporte {
   usuario: UsuarioLogado;
@@ -24,66 +16,48 @@ export interface FiltrosRelatorioTransporte {
   fornecedores?: string[];
 }
 
-interface ColunaRelatorio {
-  chave: string;
-  titulo: string;
-  largura: number;
-  formato?: string;
-  alinhamento?: 'left' | 'center' | 'right';
-}
-
-interface DadosXmlTransporte {
-  volumes?: number;
-}
-
 type LinhaRelatorio = {
-  fornecedor: string;
-  dataPedido: Date | null;
-  produto: string;
-  volumes: number | string | null;
-  notaFiscal: string;
-  frete: number | null;
-  dataRecebimento: Date | null;
-  icms: number | null;
-  transportadora: string;
-  precoLancado: string;
-  lucro: string;
-  valorNf: number | null;
-  valorTotalPedido: string;
-  obs: string;
-  icmsPendente: number | null;
-  pagamentoImposto: string;
+  chaveAcesso: string;
+  numeroNota: string;
+  dataEmissao: Date;
+  cnpjFornecedor: string;
+  nomeFornecedor: string;
+  serie: string;
+  uf: string;
+  valorNfe: number | null;
+  icmsDestacado: number | null;
+  situacaoNfe: string;
+  tipo: string;
+  status: string;
 };
 
-const COLUNAS_BASE: ColunaRelatorio[] = [
-  { chave: 'fornecedor', titulo: 'FORNECEDOR', largura: 30 },
-  { chave: 'dataPedido', titulo: 'DATA DE PEDIDO', largura: 16, formato: 'dd/mm/yyyy', alinhamento: 'center' },
-  { chave: 'produto', titulo: 'PRODUTO', largura: 34 },
-  { chave: 'volumes', titulo: 'VOLUMES', largura: 12, alinhamento: 'center' },
-  { chave: 'notaFiscal', titulo: 'NOTA FISCAL/ RECIBO ', largura: 20 },
-  { chave: 'frete', titulo: 'FRETE', largura: 14, formato: '#,##0.00', alinhamento: 'right' },
-  { chave: 'dataRecebimento', titulo: 'DATA Recebimento', largura: 18, formato: 'dd/mm/yyyy', alinhamento: 'center' },
-  { chave: 'icms', titulo: 'ICMS', largura: 14, formato: '#,##0.00', alinhamento: 'right' },
-  { chave: 'transportadora', titulo: 'TRANSPORTADORA', largura: 24 },
-  { chave: 'precoLancado', titulo: 'PRECO LANCADO', largura: 16, alinhamento: 'center' },
-  { chave: 'lucro', titulo: 'LUCRO', largura: 12, alinhamento: 'center' },
-  { chave: 'valorNf', titulo: 'VALOR NF', largura: 14, formato: '#,##0.00', alinhamento: 'right' },
-  { chave: 'valorTotalPedido', titulo: 'VALOR TOTAL PEDIDO', largura: 20, alinhamento: 'right' },
-];
-
-const COLUNAS_PENDENTE: ColunaRelatorio[] = [
-  ...COLUNAS_BASE,
-  { chave: 'obs', titulo: 'Obs', largura: 34 },
-  { chave: 'icmsPendente', titulo: 'ICMS', largura: 14, formato: '#,##0.00', alinhamento: 'right' },
-  { chave: 'pagamentoImposto', titulo: 'Pagamento de Imposto', largura: 24 },
-];
+const COLUNAS = [
+  { key: 'chaveAcesso', header: 'Chave de Acesso', width: 61.88, hidden: false },
+  { key: 'numeroNota', header: 'Número Nota', width: 14.13, hidden: false },
+  { key: 'dataEmissao', header: 'Data da Emissão', width: 17.5, hidden: true, numFmt: 'dd/MM/yyyy' },
+  { key: 'cnpjFornecedor', header: 'CPF/CNPJ Fornecedor', width: 23.63, hidden: false },
+  { key: 'nomeFornecedor', header: 'Nome/Razão Social Fornecedor', width: 44.25, hidden: false },
+  { key: 'serie', header: 'Série', width: 6.25, hidden: true },
+  { key: 'uf', header: 'UF', width: 3.75, hidden: true },
+  { key: 'valorNfe', header: 'Valor da NF-e', width: 14.38, hidden: true, numFmt: '#,##0.00' },
+  { key: 'icmsDestacado', header: 'ICMS Destacado', width: 17.38, hidden: true, numFmt: '#,##0.00' },
+  { key: 'situacaoNfe', header: 'Situação NF-e', width: 14.88, hidden: false },
+  { key: 'tipo', header: 'TIPO', width: 14.63, hidden: false },
+  { key: 'status', header: 'STATUS', width: 34.38, hidden: false },
+] satisfies Array<{
+  key: keyof LinhaRelatorio;
+  header: string;
+  width: number;
+  hidden: boolean;
+  numFmt?: string;
+}>;
 
 const DAE_A_PAGAR = ['EM_ABERTO', 'LIBERADA_PARA_GERAR'];
 
 const MESES = [
   'JANEIRO',
   'FEVEREIRO',
-  'MARCO',
+  'MARÇO',
   'ABRIL',
   'MAIO',
   'JUNHO',
@@ -95,13 +69,6 @@ const MESES = [
   'DEZEMBRO',
 ];
 
-const parser = new XMLParser({
-  ignoreAttributes: false,
-  attributeNamePrefix: '@_',
-  removeNSPrefix: true,
-  parseTagValue: false,
-});
-
 const selectNotaTransporte = {
   id: true,
   cnpjId: true,
@@ -109,16 +76,11 @@ const selectNotaTransporte = {
   numero: true,
   serie: true,
   emitidaEm: true,
-  naturezaOp: true,
   emitenteNome: true,
   emitenteCnpj: true,
+  emitenteUf: true,
   valorTotal: true,
-  valorFrete: true,
   valorIcms: true,
-  modalidadeFrete: true,
-  transportadoraNome: true,
-  qtdItens: true,
-  status: true,
   situacaoSefaz: true,
   sitramConsultadaEm: true,
   sitramDaeStatus: true,
@@ -126,27 +88,10 @@ const selectNotaTransporte = {
   sitramDetalhe: true,
   pagamentoManualEm: true,
   pagamentoManualValor: true,
-  xmlPath: true,
   cnpj: { select: { cnpj: true, razaoSocial: true } },
 } satisfies Prisma.NotaFiscalSelect;
 
 type NotaTransporte = Prisma.NotaFiscalGetPayload<{ select: typeof selectNotaTransporte }>;
-
-function registro(valor: unknown): Record<string, unknown> {
-  return valor && typeof valor === 'object' && !Array.isArray(valor) ? valor as Record<string, unknown> : {};
-}
-
-function lista(valor: unknown): Record<string, unknown>[] {
-  if (Array.isArray(valor)) return valor.map(registro);
-  const item = registro(valor);
-  return Object.keys(item).length > 0 ? [item] : [];
-}
-
-function numero(valor: unknown): number | null {
-  if (valor === undefined || valor === null || valor === '') return null;
-  const n = Number(String(valor).replace(',', '.'));
-  return Number.isFinite(n) ? n : null;
-}
 
 function dataParametro(valor: string | undefined, fimDoDia: boolean): Date | undefined {
   if (!valor) return undefined;
@@ -163,110 +108,57 @@ function numeroNotaDaChave(chave: string | null | undefined): string {
   return numero.replace(/^0+/, '') || numero;
 }
 
-function numeroNota(nota: Pick<NotaTransporte, 'numero' | 'chave'>): string {
-  return nota.numero || numeroNotaDaChave(nota.chave) || '';
+function serieNotaDaChave(chave: string | null | undefined): string {
+  const normalizada = String(chave ?? '').replace(/\D/g, '');
+  if (normalizada.length !== 44) return '';
+  const serie = normalizada.slice(22, 25);
+  return serie.replace(/^0+/, '') || serie;
 }
 
-function textoDae(status: string | null | undefined): string {
-  const labels: Record<string, string> = {
-    PAGO: 'Pago',
-    EM_ABERTO: 'Em aberto',
-    SEM_DAE: 'Sem DAE',
-    LIBERADA_PARA_GERAR: 'Gerar DAE',
-    NAO_ENCONTRADA: 'Nao encontrada',
-    CONSULTADO: 'Consultado',
-  };
-  return status ? labels[status] ?? status : '';
-}
-
-function extrairDadosXml(xmlPath: string | null): DadosXmlTransporte {
-  const caminho = resolverXmlPath(xmlPath);
-  if (!caminho) return {};
-
-  try {
-    const xml = fs.readFileSync(caminho, 'utf8');
-    const json = parser.parse(xml) as Record<string, unknown>;
-    const infProc = registro(registro(registro(json).nfeProc).NFe).infNFe;
-    const infDireta = registro(registro(json).NFe).infNFe;
-    const inf = registro(Object.keys(registro(infProc)).length > 0 ? infProc : infDireta);
-    if (Object.keys(inf).length === 0) return {};
-
-    const volumes = lista(registro(inf.transp).vol)
-      .map((vol) => numero(vol.qVol))
-      .filter((valor): valor is number => valor !== null);
-
-    return {
-      volumes: volumes.length ? volumes.reduce((total, valor) => total + valor, 0) : undefined,
-    };
-  } catch {
-    return {};
+function formatarCpfCnpj(valor: string | null | undefined): string {
+  const digitos = String(valor ?? '').replace(/\D/g, '');
+  if (digitos.length === 14) {
+    return digitos.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, '$1.$2.$3/$4-$5');
   }
+  if (digitos.length === 11) {
+    return digitos.replace(/^(\d{3})(\d{3})(\d{3})(\d{2})$/, '$1.$2.$3-$4');
+  }
+  return valor ?? '';
 }
 
-function dataAbaMes(data: Date, comAno: boolean): string {
-  const mes = MESES[data.getMonth()] ?? 'PERIODO';
-  return comAno ? `${mes} ${data.getFullYear()}` : mes;
-}
-
-function sanitizarNomeAba(nome: string): string {
-  return nome.replace(/[\\/?*\[\]:]/g, ' ').trim().slice(0, 31) || 'RELATORIO';
-}
-
-function formatarDataCurta(data: Date | string | null | undefined): string {
-  if (!data) return '';
-  const valor = new Date(data);
-  if (Number.isNaN(valor.getTime())) return '';
-  return valor.toLocaleDateString('pt-BR');
+function textoSituacao(valor: string | null | undefined): string {
+  const texto = String(valor ?? '').trim();
+  if (!texto) return '';
+  if (texto === texto.toUpperCase()) {
+    return texto
+      .toLowerCase()
+      .replace(/(^|\s|-)([a-záéíóúãõç])/g, (match) => match.toUpperCase());
+  }
+  return texto;
 }
 
 function nomeArquivo(inicio?: string, fim?: string): string {
-  const partes = ['relatorio-transporte'];
+  const partes = ['nota-fiscal-newshop'];
   if (inicio || fim) partes.push(inicio || 'inicio', 'a', fim || 'hoje');
   else partes.push('geral');
   return `${partes.join('_')}.xlsx`;
 }
 
 function montarLinha(nota: NotaTransporte): LinhaRelatorio {
-  const dadosXml = extrairDadosXml(nota.xmlPath);
-  const resumoDae = extrairResumoDae(nota);
-  const lancamentos = lancamentosVisiveisDae(resumoDae.lancamentos);
-  const lancamentoAberto = lancamentos.find((item) => !item.pago) ?? lancamentos[0] ?? null;
-  const daeStatus = statusDaeEfetivo(nota);
-  const impostoPendente = daeStatus === 'EM_ABERTO' || daeStatus === 'LIBERADA_PARA_GERAR'
-    ? lancamentoAberto?.valorAberto ?? lancamentoAberto?.valor ?? nota.valorIcms
-    : null;
-  const pagamentoImposto = nota.pagamentoManualEm
-    ? `Pago em ${formatarDataCurta(nota.pagamentoManualEm)}`
-    : textoDae(daeStatus) || (nota.sitramConsultadaEm ? 'Consultado' : 'Sem consulta SITRAM');
-  const obs = [
-    nota.situacaoSefaz && nota.situacaoSefaz !== 'AUTORIZADA' ? nota.situacaoSefaz : '',
-    resumoDae.situacaoImposto,
-    nota.naturezaOp,
-  ].filter(Boolean).join(' | ');
-
   return {
-    fornecedor: nota.emitenteNome || nota.emitenteCnpj || '',
-    dataPedido: nota.emitidaEm,
-    produto: '',
-    volumes: dadosXml.volumes ?? null,
-    notaFiscal: numeroNota(nota) ? `NF${numeroNota(nota)}` : nota.chave,
-    frete: nota.valorFrete ?? null,
-    dataRecebimento: null,
-    icms: nota.valorIcms ?? null,
-    transportadora: nota.transportadoraNome || nota.modalidadeFrete || '',
-    precoLancado: '',
-    lucro: '',
-    valorNf: nota.valorTotal ?? null,
-    valorTotalPedido: '',
-    obs,
-    icmsPendente: impostoPendente ?? null,
-    pagamentoImposto,
+    chaveAcesso: nota.chave,
+    numeroNota: nota.numero || numeroNotaDaChave(nota.chave),
+    dataEmissao: nota.emitidaEm,
+    cnpjFornecedor: formatarCpfCnpj(nota.emitenteCnpj),
+    nomeFornecedor: nota.emitenteNome || '',
+    serie: nota.serie || serieNotaDaChave(nota.chave),
+    uf: nota.emitenteUf || '',
+    valorNfe: nota.valorTotal ?? null,
+    icmsDestacado: nota.valorIcms ?? null,
+    situacaoNfe: textoSituacao(nota.situacaoSefaz),
+    tipo: '',
+    status: '',
   };
-}
-
-function linhaPendente(linha: LinhaRelatorio): boolean {
-  if (/^Pago/i.test(linha.pagamentoImposto) || linha.pagamentoImposto === 'Sem DAE') return false;
-  return Boolean(linha.icmsPendente || linha.pagamentoImposto === 'Em aberto' || linha.pagamentoImposto === 'Gerar DAE' || linha.pagamentoImposto === 'Sem consulta SITRAM');
 }
 
 function filtroBloqueado(valores: string[] | undefined): boolean {
@@ -278,12 +170,19 @@ function notaPassaFiltroDae(nota: NotaTransporte, filtros: string[] | undefined)
   if (filtros.includes('__none__')) return false;
 
   const resumo = extrairResumoDae(nota);
-  const lancamento = lancamentosVisiveisDae(resumo.lancamentos).find((item) => !item.pago)
-    ?? lancamentosVisiveisDae(resumo.lancamentos)[0]
-    ?? null;
+  const lancamentos = lancamentosVisiveisDae(resumo.lancamentos);
+  const lancamento = lancamentos.find((item) => !item.pago) ?? lancamentos[0] ?? null;
   const status = statusDaeEfetivo(nota);
   const daePendente = DAE_A_PAGAR.includes(status);
-  const diasDae = diasAteVencimento(lancamento?.vencimento);
+  const diasDae = (() => {
+    if (!lancamento?.vencimento) return null;
+    const hoje = new Date();
+    hoje.setHours(0, 0, 0, 0);
+    const vencimento = new Date(lancamento.vencimento);
+    if (Number.isNaN(vencimento.getTime())) return null;
+    vencimento.setHours(0, 0, 0, 0);
+    return Math.ceil((vencimento.getTime() - hoje.getTime()) / 86400000);
+  })();
 
   return filtros.some((filtro) => {
     if (filtro === 'pago') return status === 'PAGO';
@@ -297,64 +196,46 @@ function notaPassaFiltroDae(nota: NotaTransporte, filtros: string[] | undefined)
   });
 }
 
-function aplicarLayout(sheet: ExcelJS.Worksheet, colunas: ColunaRelatorio[]) {
-  sheet.views = [{ state: 'frozen', ySplit: 1 }];
-  sheet.autoFilter = {
-    from: { row: 1, column: 1 },
-    to: { row: 1, column: colunas.length },
-  };
+function aplicarLayout(sheet: ExcelJS.Worksheet) {
+  sheet.autoFilter = '$A$1:$L$1';
 
   const header = sheet.getRow(1);
-  header.height = 24;
   header.eachCell((cell) => {
-    cell.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 10 };
-    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF166534' } };
+    cell.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 15, name: 'Oswald' };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF000000' } };
     cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
-    cell.border = {
-      top: { style: 'thin', color: { argb: 'FF94A3B8' } },
-      left: { style: 'thin', color: { argb: 'FF94A3B8' } },
-      bottom: { style: 'thin', color: { argb: 'FF94A3B8' } },
-      right: { style: 'thin', color: { argb: 'FF94A3B8' } },
-    };
   });
 
-  for (const coluna of colunas) {
-    const colunaExcel = sheet.getColumn(coluna.chave);
-    if (coluna.formato) colunaExcel.numFmt = coluna.formato;
-    colunaExcel.alignment = {
-      vertical: 'middle',
-      horizontal: coluna.alinhamento ?? 'left',
-      wrapText: coluna.chave === 'produto' || coluna.chave === 'obs',
-    };
-  }
+  COLUNAS.forEach((coluna, indice) => {
+    const colunaExcel = sheet.getColumn(indice + 1);
+    colunaExcel.width = coluna.width;
+    colunaExcel.hidden = coluna.hidden;
+    if (coluna.numFmt) colunaExcel.numFmt = coluna.numFmt;
+    colunaExcel.alignment = { vertical: 'middle', horizontal: 'center' };
+  });
 
   for (let i = 2; i <= sheet.rowCount; i += 1) {
     const row = sheet.getRow(i);
-    row.height = 22;
     row.eachCell({ includeEmpty: true }, (cell) => {
-      cell.border = {
-        top: { style: 'thin', color: { argb: 'FFE5E7EB' } },
-        left: { style: 'thin', color: { argb: 'FFE5E7EB' } },
-        bottom: { style: 'thin', color: { argb: 'FFE5E7EB' } },
-        right: { style: 'thin', color: { argb: 'FFE5E7EB' } },
-      };
+      cell.font = { size: 17, color: { argb: 'FF000000' }, name: 'Oswald' };
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD9D9D9' } };
+      cell.alignment = { vertical: 'middle', horizontal: 'center' };
     });
   }
 }
 
-function adicionarPlanilha(workbook: ExcelJS.Workbook, nome: string, colunas: ColunaRelatorio[], linhas: LinhaRelatorio[]) {
-  const sheet = workbook.addWorksheet(sanitizarNomeAba(nome));
-  sheet.columns = colunas.map((coluna) => ({
-    header: coluna.titulo,
-    key: coluna.chave,
-    width: coluna.largura,
+function adicionarPlanilhaMes(workbook: ExcelJS.Workbook, nome: string, linhas: LinhaRelatorio[]) {
+  const sheet = workbook.addWorksheet(nome);
+  sheet.columns = COLUNAS.map((coluna) => ({
+    key: coluna.key,
+    header: coluna.header,
   }));
 
   for (const linha of linhas) {
     sheet.addRow(linha);
   }
 
-  aplicarLayout(sheet, colunas);
+  aplicarLayout(sheet);
 }
 
 export async function gerarRelatorioTransporteExcel(filtros: FiltrosRelatorioTransporte): Promise<{
@@ -387,11 +268,7 @@ export async function gerarRelatorioTransporteExcel(filtros: FiltrosRelatorioTra
   if (raizesCnpj.length > 0) {
     filtrosAnd.push({
       OR: raizesCnpj.map((raiz) => ({
-        cnpj: {
-          cnpj: {
-            startsWith: raiz,
-          },
-        },
+        cnpj: { cnpj: { startsWith: raiz } },
       })),
     });
   }
@@ -420,31 +297,22 @@ export async function gerarRelatorioTransporteExcel(filtros: FiltrosRelatorioTra
   const notasFiltradas = filtros.daeFiltros?.length
     ? notas.filter((nota) => notaPassaFiltroDae(nota, filtros.daeFiltros))
     : notas;
-  const linhas = notasFiltradas.map(montarLinha);
+
+  const linhasPorMes = new Map<number, LinhaRelatorio[]>();
+  for (const nota of notasFiltradas) {
+    const mes = nota.emitidaEm.getMonth();
+    const linhasMes = linhasPorMes.get(mes) ?? [];
+    linhasMes.push(montarLinha(nota));
+    linhasPorMes.set(mes, linhasMes);
+  }
+
   const workbook = new ExcelJS.Workbook();
   workbook.creator = 'DanfeCollector';
   workbook.created = new Date();
 
-  const anos = new Set(notasFiltradas.map((nota) => nota.emitidaEm.getFullYear()));
-  const usarAnoNaAba = anos.size > 1;
-  const porMes = new Map<string, LinhaRelatorio[]>();
-
-  for (let i = 0; i < notasFiltradas.length; i += 1) {
-    const nome = dataAbaMes(notasFiltradas[i].emitidaEm, usarAnoNaAba);
-    const atual = porMes.get(nome) ?? [];
-    atual.push(linhas[i]);
-    porMes.set(nome, atual);
+  for (let mes = 0; mes < MESES.length; mes += 1) {
+    adicionarPlanilhaMes(workbook, MESES[mes], linhasPorMes.get(mes) ?? []);
   }
-
-  if (porMes.size === 0) {
-    adicionarPlanilha(workbook, 'PERIODO', COLUNAS_PENDENTE, []);
-  } else {
-    for (const [nome, linhasMes] of porMes.entries()) {
-      adicionarPlanilha(workbook, nome, COLUNAS_BASE, linhasMes);
-    }
-  }
-
-  adicionarPlanilha(workbook, 'Pendente', COLUNAS_PENDENTE, linhas.filter(linhaPendente));
 
   const dados = await workbook.xlsx.writeBuffer();
   return {
