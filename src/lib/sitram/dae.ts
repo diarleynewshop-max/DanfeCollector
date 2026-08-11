@@ -466,9 +466,21 @@ export function extrairPagamentoIcmsSitram(nota: NotaComDadosDae): PagamentoIcms
   }
 }
 
+function pagamentoIcmsSemCobrancaAberta(nota: NotaComDadosDae): boolean {
+  if (!nota.sitramDetalhe) return false;
+  try {
+    const detalhe = registro(JSON.parse(nota.sitramDetalhe));
+    const pagamento = registro(detalhe.pagamentoIcms);
+    return pagamento.semCobrancaAberta === true;
+  } catch {
+    return false;
+  }
+}
+
 export function statusDaeEfetivo(nota: NotaComDadosDae): string {
   // Pagamento registrado manualmente vence qualquer status do SITRAM.
   if (nota.pagamentoManualEm) return 'PAGO';
+  if (pagamentoIcmsSemCobrancaAberta(nota)) return 'SEM_DAE';
 
   const resumo = extrairResumoDae(nota);
   if (resumo.lancamentos.length > 0) {

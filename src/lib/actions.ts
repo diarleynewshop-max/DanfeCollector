@@ -2446,6 +2446,18 @@ function idLancamentoPagamento(lancamento: RegistroJson): string | null {
   return textoJson(lancamento.idLancamentoFront) ?? textoJson(lancamento.id);
 }
 
+function semCobrancaAbertaNoPagamentoIcms(
+  idsEmAberto: string[],
+  documentos: DocumentoPagamentoIcms[],
+  simulacoes: unknown[],
+  simulacaoFalhou: boolean
+): boolean {
+  return idsEmAberto.length > 0 &&
+    documentos.length === 0 &&
+    simulacoes.length === 0 &&
+    !simulacaoFalhou;
+}
+
 function extrairLancamentosPagamento(detalhe: RegistroJson): RegistroJson[] {
   if (Array.isArray(detalhe.lancamentos)) return detalhe.lancamentos.map(registroJson);
   const notaFiscal = registroJson(detalhe.notaFiscal);
@@ -2882,7 +2894,15 @@ export async function consultarPagamentoIcmsNota(notaId: number): Promise<Result
     if (!lancamentoAparentementePago(lancamento, documentos)) idsEmAberto.push(id);
   }
 
-  const simulacoes = idsEmAberto.length > 0 ? await simularDaeNotaFiscal(idsEmAberto).catch(() => []) : [];
+  let simulacaoFalhou = false;
+  let simulacoes: unknown[] = [];
+  if (idsEmAberto.length > 0) {
+    try {
+      simulacoes = await simularDaeNotaFiscal(idsEmAberto);
+    } catch {
+      simulacaoFalhou = true;
+    }
+  }
   const suspeitasDuplicidade = detectarSuspeitasPagamentoDuplicadoIcms(documentosEnriquecidos);
   const lancamentosAtualizados = lancamentos.map((lancamento) => {
     const id = idLancamentoPagamento(lancamento);
@@ -2894,6 +2914,12 @@ export async function consultarPagamentoIcmsNota(notaId: number): Promise<Result
     };
   });
 
+  const semCobrancaAberta = semCobrancaAbertaNoPagamentoIcms(
+    idsEmAberto,
+    documentosEnriquecidos,
+    simulacoes,
+    simulacaoFalhou
+  );
   const detalheAtualizado = {
     ...detalhe,
     lancamentos: lancamentosAtualizados,
@@ -2903,15 +2929,18 @@ export async function consultarPagamentoIcmsNota(notaId: number): Promise<Result
       documentos: documentosEnriquecidos,
       simulacoes,
       suspeitasDuplicidade,
+      semCobrancaAberta,
       origem: 'api-pagamento',
     },
   };
-  const statusAtualizado = statusDaeEfetivo({
-    sitramDetalhe: JSON.stringify(detalheAtualizado),
-    sitramDaeStatus: nota.sitramDaeStatus,
-    sitramDaeResumo: nota.sitramDaeResumo,
-    pagamentoManualEm: nota.pagamentoManualEm,
-  }) || (simulacoes.length > 0 ? 'EM_ABERTO' : 'CONSULTADO');
+  const statusAtualizado = semCobrancaAberta
+    ? 'SEM_DAE'
+    : statusDaeEfetivo({
+      sitramDetalhe: JSON.stringify(detalheAtualizado),
+      sitramDaeStatus: nota.sitramDaeStatus,
+      sitramDaeResumo: nota.sitramDaeResumo,
+      pagamentoManualEm: nota.pagamentoManualEm,
+    }) || (simulacoes.length > 0 ? 'EM_ABERTO' : 'CONSULTADO');
   detalheAtualizado.pagamentoIcms.status = statusAtualizado;
 
   await prisma.notaFiscal.update({
@@ -2928,7 +2957,9 @@ export async function consultarPagamentoIcmsNota(notaId: number): Promise<Result
 
   const pagos = documentosEnriquecidos.filter((documento) => documento.pago).length;
   const emitidos = documentosEnriquecidos.filter((documento) => /emitido/i.test(documento.tipo)).length;
-  const resumoDocs = documentosEnriquecidos.length
+  const resumoDocs = semCobrancaAberta
+    ? 'sem documento ou simulacao de DAE aberto no SITRAM'
+    : documentosEnriquecidos.length
     ? `${pagos} pago(s), ${emitidos} emitido(s)`
     : 'nenhum DAE emitido ainda';
   const resumoAnexos = anexosCriados > 0 ? `, ${anexosCriados} anexo(s) DAE criado(s)` : '';
@@ -3068,7 +3099,11 @@ export async function consultarPagamentoIcmsLote(input: ConsultaPagamentoIcmsLot
       .filter((vencimento): vencimento is string => !!vencimento)
       .sort()[0] ?? '9999-12-31';
 
-    return [{ nota, detalhe, lancamentos, ids: [...new Set(ids)], primeiroVencimento, daePago }];
+    const idsEmAbertoNota = lancamentosComId
+      .filter((item) => !item.normalizado?.pago)
+      .map((item) => item.id);
+
+    return [{ nota, detalhe, lancamentos, ids: [...new Set(ids)], idsEmAberto: [...new Set(idsEmAbertoNota)], primeiroVencimento, daePago }];
   }).sort((a, b) => {
     if (a.daePago !== b.daePago) return a.daePago ? 1 : -1;
     return a.primeiroVencimento.localeCompare(b.primeiroVencimento);
@@ -3123,10 +3158,12 @@ export async function consultarPagamentoIcmsLote(input: ConsultaPagamentoIcmsLot
   ))];
 
   const simulacoesTodas: unknown[] = [];
+  let simulacaoFalhou = false;
   for (const lote of lotesDe(idsEmAberto, 30)) {
     try {
       simulacoesTodas.push(...await simularDaeNotaFiscal(lote));
     } catch {
+      simulacaoFalhou = true;
       // A simulacao ajuda o boleto futuro, mas a consulta de documentos continua valida sem ela.
     }
   }
@@ -3167,6 +3204,12 @@ export async function consultarPagamentoIcmsLote(input: ConsultaPagamentoIcmsLot
         };
       });
 
+      const semCobrancaAberta = semCobrancaAbertaNoPagamentoIcms(
+        item.idsEmAberto,
+        documentosEnriquecidos,
+        simulacoes,
+        simulacaoFalhou
+      );
       const detalheAtualizado = {
         ...item.detalhe,
         lancamentos: lancamentosAtualizados,
@@ -3176,15 +3219,18 @@ export async function consultarPagamentoIcmsLote(input: ConsultaPagamentoIcmsLot
           documentos: documentosEnriquecidos,
           simulacoes,
           suspeitasDuplicidade,
+          semCobrancaAberta,
           origem: 'api-pagamento-lote',
         },
       };
-      const statusAtualizado = statusDaeEfetivo({
-        sitramDetalhe: JSON.stringify(detalheAtualizado),
-        sitramDaeStatus: item.nota.sitramDaeStatus,
-        sitramDaeResumo: item.nota.sitramDaeResumo,
-        pagamentoManualEm: item.nota.pagamentoManualEm,
-      }) || (simulacoes.length > 0 ? 'EM_ABERTO' : 'CONSULTADO');
+      const statusAtualizado = semCobrancaAberta
+        ? 'SEM_DAE'
+        : statusDaeEfetivo({
+          sitramDetalhe: JSON.stringify(detalheAtualizado),
+          sitramDaeStatus: item.nota.sitramDaeStatus,
+          sitramDaeResumo: item.nota.sitramDaeResumo,
+          pagamentoManualEm: item.nota.pagamentoManualEm,
+        }) || (simulacoes.length > 0 ? 'EM_ABERTO' : 'CONSULTADO');
       detalheAtualizado.pagamentoIcms.status = statusAtualizado;
 
       await prisma.notaFiscal.update({
