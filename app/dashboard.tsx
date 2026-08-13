@@ -21,6 +21,8 @@ import {
   importarXmlsDaPasta,
   alternarEtiqueta,
   aplicarEtiquetasLote,
+  consultarStatusRecebimentoNota,
+  consultarStatusRecebimentoLote,
   manifestarNotasLote,
   listarNotasPorAno,
   listarTodasNotas,
@@ -45,6 +47,7 @@ import {
   type ResultadoImportChave,
   type ResultadoManifestoLote,
   type ResultadoPagamentoIcmsLote,
+  type ConsultaStatusRecebimento,
   type NotaRelatorio,
   type ResultadoSitramManifesto,
   type ResumoInicio,
@@ -84,7 +87,18 @@ import MapaBrasil, { nomeUf, type ValorUf } from './components/MapaBrasil';
 import FornecedorIeConsulta from './components/FornecedorIeConsulta';
 import { useIdioma } from '@/lib/i18n';
 
-type NotaComCnpj = NotaFiscal & { cnpj: { cnpj: string; razaoSocial: string | null }; situacaoSefaz?: string };
+type NotaComCnpj = NotaFiscal & {
+  cnpj: { cnpj: string; razaoSocial: string | null };
+  situacaoSefaz?: string;
+  recebimentoStatus?: string | null;
+  recebimentoKanbanStatus?: string | null;
+  recebimentoStatusOperacional?: string | null;
+  recebimentoStatusOperacionalCodigo?: string | null;
+  recebimentoAtualizadoEm?: Date | string | null;
+  recebimentoAtualizadoPor?: string | null;
+  recebimentoConsultadoEm?: Date | string | null;
+  recebimentoErro?: string | null;
+};
 type CnpjComContagem = Cnpj & { _count: { notas: number } };
 type FiltroDaeSitram = 'todos' | 'consultado' | 'sem-consulta' | 'com-dae' | 'a-pagar' | 'em-aberto' | 'pago' | 'duplicidade' | 'sem-dae' | 'nao-encontrada';
 type FiltroSituacaoNota = 'inconsistente' | 'efetivada' | 'denegada' | 'pendente-conferencia' | 'com-erro' | 'pendente-recepcao' | 'cancelada' | 'pendente';
@@ -376,7 +390,15 @@ function salvarDanfeCacheLocal(notaId: number, danfe: DanfeData) {
 }
 
 // Etiquetas prontas para marcar com um clique, sem precisar digitar
-const ETIQUETAS_PRESET = ['Conferido', 'Pendente', 'Separado', 'Revisar', 'Divergência', 'Pago', 'Devolvido', 'Urgente'];
+const STATUS_RECEBIMENTO_PRESET = [
+  'NF A CHEGAR',
+  'CONCLUIDO RECEBIMENTO',
+  'AGUARDANDO PRECO',
+  'AGUARDANDO CADASTRO',
+  'AGUARDANDO ENVIO',
+  'NF ENVIADA',
+];
+const ETIQUETAS_PRESET = ['Conferido', 'Pendente', 'Separado', 'Revisar', 'Divergência', 'Pago', 'Devolvido', 'Urgente', ...STATUS_RECEBIMENTO_PRESET];
 
 // Uma nota pode ter várias etiquetas, guardadas separadas por vírgula
 function parseEtiquetas(s: string | null | undefined): string[] {
@@ -414,6 +436,14 @@ function toneDaeSitram(status: string | null | undefined): 'green' | 'orange' | 
   if (status === 'LIBERADA_PARA_GERAR') return 'amber';
   if (status === 'CONSULTADO') return 'blue';
   return 'gray';
+}
+
+function toneRecebimentoStatus(status: string | null | undefined): 'green' | 'orange' | 'gray' | 'amber' | 'blue' | 'indigo' {
+  if (!status) return 'gray';
+  if (status === 'CONCLUIDO RECEBIMENTO' || status === 'NF ENVIADA') return 'green';
+  if (status === 'AGUARDANDO PRECO' || status === 'AGUARDANDO CADASTRO' || status === 'AGUARDANDO ENVIO') return 'amber';
+  if (status === 'NF A CHEGAR') return 'blue';
+  return 'indigo';
 }
 
 function notaForaCeMais15DiasSemDaeOuPagamento(nota: NotaComCnpj, referencia = new Date()): boolean {
@@ -1745,6 +1775,14 @@ export default function Dashboard({
   const [manifestoLoteErros, setManifestoLoteErros] = useState<Array<{ chave: string; detalhe: string }> | null>(null);
   const [consultandoPagamentoLote, setConsultandoPagamentoLote] = useState(false);
   const [pagamentoLoteResultado, setPagamentoLoteResultado] = useState<ResultadoPagamentoIcmsLote | null>(null);
+  const [consultandoRecebimentoLote, setConsultandoRecebimentoLote] = useState(false);
+  const [recebimentoLoteResultado, setRecebimentoLoteResultado] = useState<{
+    processadas: number;
+    encontradas: number;
+    naoEncontradas: number;
+    erros: number;
+    resultados: ConsultaStatusRecebimento[];
+  } | null>(null);
   const [painelPagamentoLoteAberto, setPainelPagamentoLoteAberto] = useState(true);
   const [painelManifestoLoteAberto, setPainelManifestoLoteAberto] = useState(true);
   const [etiquetasLote, setEtiquetasLote] = useState<string[]>([]);
@@ -1928,6 +1966,46 @@ export default function Dashboard({
       setStatus({ success: false, message: (error as Error).message || 'Erro ao consultar pagamento ICMS em lote.' });
     } finally {
       setConsultandoPagamentoLote(false);
+    }
+  }
+
+  async function handleConsultarRecebimentoLote() {
+    if (consultandoRecebimentoLote) return;
+    const ids = [...selecionadas];
+    if (ids.length === 0) {
+      setStatus({ success: false, message: 'Selecione ao menos uma NF para consultar o status de recebimento.' });
+      return;
+    }
+
+    setConsultandoRecebimentoLote(true);
+    setRecebimentoLoteResultado(null);
+    try {
+      const res = await consultarStatusRecebimentoLote(ids);
+      setRecebimentoLoteResultado({
+        processadas: res.processadas,
+        encontradas: res.encontradas,
+        naoEncontradas: res.naoEncontradas,
+        erros: res.erros,
+        resultados: res.resultados,
+      });
+      setStatus({ success: res.success, message: res.message });
+
+      if (res.processadas > 0) {
+        if (anoCarregado !== null) {
+          const atualizadas = await listarNotasPorAno(anoCarregado);
+          setNotas(atualizadas as NotaComCnpj[]);
+          setNotasAlerta(atualizadas as NotaComCnpj[]);
+        } else {
+          const todas = await listarTodasNotas();
+          setNotas(todas as NotaComCnpj[]);
+          setNotasAlerta(todas as NotaComCnpj[]);
+          setTodasCarregadas(true);
+        }
+      }
+    } catch (error: unknown) {
+      setStatus({ success: false, message: (error as Error).message || 'Erro ao consultar status de recebimento.' });
+    } finally {
+      setConsultandoRecebimentoLote(false);
     }
   }
 
@@ -3615,6 +3693,32 @@ export default function Dashboard({
                         {pagamentoLoteResultado.limiteAplicado && <Badge tone="amber">limite aplicado</Badge>}
                       </div>
                     )}
+                  </div>
+                )}
+              </section>
+
+              <section className="rounded-xl border border-emerald-200 bg-emerald-50 p-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="min-w-[220px] flex-1">
+                    <p className="text-sm font-bold text-emerald-900">Status recebimento</p>
+                    <p className="mt-1 text-xs text-emerald-700">Consulta no app externo pela chave e grava o status como etiqueta.</p>
+                  </div>
+                  <Badge tone={selecionadas.size > 0 ? 'green' : 'gray'}>{selecionadas.size} selecionada(s)</Badge>
+                  <button
+                    type="button"
+                    onClick={handleConsultarRecebimentoLote}
+                    disabled={consultandoRecebimentoLote || selecionadas.size === 0}
+                    className="rounded-lg bg-emerald-700 px-4 py-1.5 text-sm font-bold text-white hover:bg-emerald-800 disabled:opacity-50"
+                  >
+                    {consultandoRecebimentoLote ? 'Consultando...' : 'Consultar status'}
+                  </button>
+                </div>
+                {recebimentoLoteResultado && (
+                  <div className="mt-2 flex flex-wrap gap-2 text-xs">
+                    <Badge tone="blue">{recebimentoLoteResultado.processadas} processada(s)</Badge>
+                    <Badge tone="green">{recebimentoLoteResultado.encontradas} encontrada(s)</Badge>
+                    <Badge tone="gray">{recebimentoLoteResultado.naoEncontradas} nao encontrada(s)</Badge>
+                    {recebimentoLoteResultado.erros > 0 && <Badge tone="red">{recebimentoLoteResultado.erros} erro(s)</Badge>}
                   </div>
                 )}
               </section>
@@ -6157,7 +6261,7 @@ function CompactFragmentNota({
   onToggleSelecionada: () => void;
   onNotaAtualizada: (nota: NotaComCnpj) => void;
 }) {
-  const tags = parseEtiquetas(nota.etiqueta);
+  const tags = parseEtiquetas(nota.etiqueta).filter((tag) => tag !== nota.recebimentoStatus);
   const dae = extrairResumoDae(nota);
   const situacaoSitram = situacaoSitramEfetiva(nota);
   const statusDae = statusDaeEfetivo(nota);
@@ -6254,6 +6358,7 @@ function CompactFragmentNota({
             <Badge tone={nota.status === 'COMPLETA' ? 'green' : 'blue'}>{nota.status}</Badge>
             {nota.situacaoSefaz === 'CANCELADA' && <Badge tone="orange">CANCELADA</Badge>}
             {nota.situacaoSefaz === 'DENEGADA' && <Badge tone="orange">DENEGADA</Badge>}
+            {nota.recebimentoStatus && <Badge tone={toneRecebimentoStatus(nota.recebimentoStatus)}>{nota.recebimentoStatus}</Badge>}
             {tags.slice(0, 2).map((tag) => <Badge key={tag} tone="indigo">{tag}</Badge>)}
             {tags.length > 2 && <Badge tone="gray">+{tags.length - 2}</Badge>}
           </div>
@@ -6285,7 +6390,7 @@ function FragmentNota({
   selecionada: boolean;
   onToggleSelecionada: () => void;
 }) {
-  const tags = parseEtiquetas(nota.etiqueta);
+  const tags = parseEtiquetas(nota.etiqueta).filter((tag) => tag !== nota.recebimentoStatus);
   const situacaoSitram = situacaoSitramEfetiva(nota);
   const statusDae = statusDaeEfetivo(nota);
   return (
@@ -6346,6 +6451,9 @@ function FragmentNota({
             )}
             {nota.situacaoSefaz === 'DENEGADA' && (
               <Badge tone="orange">DENEGADA</Badge>
+            )}
+            {nota.recebimentoStatus && (
+              <Badge tone={toneRecebimentoStatus(nota.recebimentoStatus)}>{nota.recebimentoStatus}</Badge>
             )}
           </div>
         </td>
@@ -6409,6 +6517,8 @@ function DetalheNota({
   const [msgSitramNota, setMsgSitramNota] = useState<{ ok: boolean; texto: string } | null>(null);
   const [consultandoPagamentoIcms, setConsultandoPagamentoIcms] = useState(false);
   const [msgPagamentoIcms, setMsgPagamentoIcms] = useState<{ ok: boolean; texto: string } | null>(null);
+  const [consultandoRecebimento, setConsultandoRecebimento] = useState(false);
+  const [msgRecebimento, setMsgRecebimento] = useState<{ ok: boolean; texto: string } | null>(null);
   const [anexosDaePagamento, setAnexosDaePagamento] = useState<Record<string, AnexoInfo>>({});
   const [carregandoAnexosDaePagamento, setCarregandoAnexosDaePagamento] = useState(false);
 
@@ -6549,6 +6659,18 @@ function DetalheNota({
     setConsultandoPagamentoIcms(false);
     if (res.success) {
       await carregarAnexosDaePagamento();
+      const atualizada = await obterNotaPorId(nota.id);
+      if (atualizada) onNotaAtualizada(atualizada);
+    }
+  }
+
+  async function handleConsultarRecebimento() {
+    setConsultandoRecebimento(true);
+    setMsgRecebimento(null);
+    const res = await consultarStatusRecebimentoNota(nota.id);
+    setMsgRecebimento({ ok: res.success, texto: res.message });
+    setConsultandoRecebimento(false);
+    if (res.success) {
       const atualizada = await obterNotaPorId(nota.id);
       if (atualizada) onNotaAtualizada(atualizada);
     }
@@ -6809,6 +6931,39 @@ function DetalheNota({
               <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-3">
                 <Campo rotulo="Transportadora" valor={nota.transportadoraNome || 'Sem transportadora'} />
               </div>
+            </div>
+            <div className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 p-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="min-w-[220px] flex-1">
+                  <p className="text-xs font-bold uppercase tracking-wide text-emerald-800">Recebimento externo</p>
+                  <div className="mt-1 flex flex-wrap items-center gap-2">
+                    {nota.recebimentoStatus ? (
+                      <Badge tone={toneRecebimentoStatus(nota.recebimentoStatus)}>{nota.recebimentoStatus}</Badge>
+                    ) : (
+                      <Badge tone="gray">Sem status</Badge>
+                    )}
+                    {nota.recebimentoStatusOperacional && <Badge tone="blue">{nota.recebimentoStatusOperacional}</Badge>}
+                  </div>
+                  <p className="mt-1 text-xs text-emerald-800">
+                    {nota.recebimentoConsultadoEm ? `Ultima consulta: ${dataHora(nota.recebimentoConsultadoEm)}` : 'Ainda nao consultada pelo app externo.'}
+                    {nota.recebimentoAtualizadoPor ? ` | Atualizado por: ${nota.recebimentoAtualizadoPor}` : ''}
+                  </p>
+                  {nota.recebimentoErro && <p className="mt-1 text-xs font-semibold text-red-700">{nota.recebimentoErro}</p>}
+                </div>
+                <button
+                  type="button"
+                  onClick={handleConsultarRecebimento}
+                  disabled={consultandoRecebimento}
+                  className="rounded-lg bg-emerald-700 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-800 disabled:opacity-50"
+                >
+                  {consultandoRecebimento ? 'Consultando...' : 'Consultar status'}
+                </button>
+              </div>
+              {msgRecebimento && (
+                <p className={`mt-2 rounded-lg px-3 py-2 text-sm ${msgRecebimento.ok ? 'bg-white/80 text-emerald-800' : 'bg-red-50 text-red-700'}`}>
+                  {msgRecebimento.texto}
+                </p>
+              )}
             </div>
             <div className="grid grid-cols-1 gap-x-8 gap-y-3 text-sm md:grid-cols-2 lg:grid-cols-3">
               <Campo rotulo="Empresa (destinatário)" valor={nota.cnpj.razaoSocial || formatarCnpj(nota.cnpj.cnpj)} />

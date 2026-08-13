@@ -118,6 +118,14 @@ model NotaFiscal {
   sitramDaeResumo      String?
   sitramDaeUrl         String?
   sitramDetalhe        String?
+  recebimentoStatus                  String?
+  recebimentoKanbanStatus            String?
+  recebimentoStatusOperacional       String?
+  recebimentoStatusOperacionalCodigo String?
+  recebimentoAtualizadoEm            DateTime?
+  recebimentoAtualizadoPor           String?
+  recebimentoConsultadoEm            DateTime?
+  recebimentoErro                    String?
   // Data da Ciência da Operação (evento 210210) já registrada para esta nota.
   // Quando preenchida, NÃO se deve manifestar de novo (SEFAZ só aceita 1x).
   manifestadaEm DateTime?
@@ -143,6 +151,7 @@ model NotaFiscal {
   @@index([cnpjId, status, manifestadaEm])
   @@index([cnpjId, sitramDaeStatus])
   @@index([cnpjId, situacaoSefaz])
+  @@index([cnpjId, recebimentoStatus])
 }
 
 model DaeCompartilhado {

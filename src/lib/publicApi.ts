@@ -92,6 +92,16 @@ export async function consultarNotaFiscalApi(chaveInformada: string, req: Reques
           pagamentoIcmsConsultadoEm: pagamentoIcms.consultadoEm,
           lancamentos,
         },
+        recebimento: {
+          status: nota.recebimentoStatus,
+          kanbanStatus: nota.recebimentoKanbanStatus,
+          statusOperacional: nota.recebimentoStatusOperacional,
+          statusOperacionalCodigo: nota.recebimentoStatusOperacionalCodigo,
+          atualizadoEm: nota.recebimentoAtualizadoEm,
+          atualizadoPor: nota.recebimentoAtualizadoPor,
+          consultadoEm: nota.recebimentoConsultadoEm,
+          erro: nota.recebimentoErro,
+        },
         links: {
           consulta: urlAbsoluta(req, `/api/v1/notas/${nota.chave}`),
           xml: nota.status === 'COMPLETA' ? urlAbsoluta(req, `/api/v1/notas/${nota.chave}/xml`) : null,

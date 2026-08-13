@@ -59,6 +59,11 @@ import {
   revogarApiKey as revogarApiKeyInterno,
 } from './apiKeys';
 export type { ApiKeyCriada, ApiKeyResumo } from './apiKeys';
+import {
+  consultarStatusRecebimentoPorNotaId,
+  type ConsultaStatusRecebimento,
+} from './nfStatusIntegration';
+export type { ConsultaStatusRecebimento } from './nfStatusIntegration';
 
 export interface ActionResult {
   success: boolean;
@@ -3367,6 +3372,71 @@ export async function aplicarEtiquetasLote(notaIds: number[], etiquetas: string[
   } catch (error: unknown) {
     return { success: false, message: `Erro ao aplicar etiquetas em lote: ${(error as Error).message}` };
   }
+}
+
+export async function consultarStatusRecebimentoNota(notaId: number): Promise<ConsultaStatusRecebimento> {
+  const usuario = await exigirUsuario();
+  const id = Number(notaId);
+  if (!Number.isFinite(id) || id <= 0) {
+    return { chave: '', success: false, found: false, status: null, etiqueta: null, message: 'Nota invalida.' };
+  }
+
+  const nota = await prisma.notaFiscal.findUnique({
+    where: { id },
+    select: { id: true, cnpjId: true },
+  });
+  if (!nota || !usuarioPodeAcessarCnpj(usuario, nota.cnpjId)) {
+    return { chave: '', success: false, found: false, status: null, etiqueta: null, message: 'Nota nao encontrada.' };
+  }
+
+  const resultado = await consultarStatusRecebimentoPorNotaId(id);
+  revalidatePath('/');
+  return resultado;
+}
+
+export async function consultarStatusRecebimentoLote(notaIds: number[]): Promise<{
+  success: boolean;
+  message: string;
+  processadas: number;
+  encontradas: number;
+  naoEncontradas: number;
+  erros: number;
+  resultados: ConsultaStatusRecebimento[];
+}> {
+  const usuario = await exigirUsuario();
+  const ids = [...new Set(notaIds.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0))];
+  if (ids.length === 0) {
+    return { success: false, message: 'Nenhuma nota selecionada.', processadas: 0, encontradas: 0, naoEncontradas: 0, erros: 0, resultados: [] };
+  }
+
+  const notasPermitidas = await prisma.notaFiscal.findMany({
+    where: {
+      id: { in: ids },
+      ...whereNotaPermitida(usuario),
+    },
+    select: { id: true },
+    orderBy: { emitidaEm: 'desc' },
+  });
+
+  const resultados: ConsultaStatusRecebimento[] = [];
+  for (const nota of notasPermitidas) {
+    resultados.push(await consultarStatusRecebimentoPorNotaId(nota.id));
+  }
+
+  const encontradas = resultados.filter((item) => item.success && item.found).length;
+  const naoEncontradas = resultados.filter((item) => item.success && !item.found).length;
+  const erros = resultados.filter((item) => !item.success).length;
+
+  revalidatePath('/');
+  return {
+    success: erros === 0,
+    message: `Status recebimento: ${resultados.length} nota(s), ${encontradas} encontrada(s), ${naoEncontradas} nao encontrada(s), ${erros} erro(s).`,
+    processadas: resultados.length,
+    encontradas,
+    naoEncontradas,
+    erros,
+    resultados,
+  };
 }
 
 export type StatusManifestoLote = 'manifestada' | 'ja-manifestada' | 'completa' | 'erro';
