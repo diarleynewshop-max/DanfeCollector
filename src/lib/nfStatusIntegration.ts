@@ -1,4 +1,6 @@
 import { prisma } from './prisma';
+import * as fs from 'fs';
+import * as path from 'path';
 
 export const STATUS_RECEBIMENTO_CONHECIDOS = [
   'NF A CHEGAR',
@@ -43,9 +45,27 @@ export type ConsultaStatusRecebimento = {
   message: string;
 };
 
+function envLocal(chave: string): string {
+  const direto = process.env[chave];
+  if (direto?.trim()) return direto.trim();
+
+  const arquivo = path.join(process.cwd(), '.env');
+  if (!fs.existsSync(arquivo)) return '';
+
+  const regex = new RegExp(`^${chave}\\s*=\\s*(.*)$`, 'm');
+  const match = fs.readFileSync(arquivo, 'utf8').match(regex);
+  if (!match) return '';
+
+  const valor = match[1].trim();
+  if ((valor.startsWith('"') && valor.endsWith('"')) || (valor.startsWith("'") && valor.endsWith("'"))) {
+    return valor.slice(1, -1).trim();
+  }
+  return valor;
+}
+
 function configStatusRecebimento() {
-  const baseUrl = (process.env.NF_STATUS_API_URL || 'https://api-recebimento.newgrup.cloud/functions/v1/nf-status-integration').trim();
-  const token = (process.env.NF_STATUS_API_TOKEN || '').trim();
+  const baseUrl = (envLocal('NF_STATUS_API_URL') || 'https://api-recebimento.newgrup.cloud/functions/v1/nf-status-integration').trim();
+  const token = envLocal('NF_STATUS_API_TOKEN');
   return { baseUrl, token };
 }
 
