@@ -16,6 +16,9 @@ export interface DanfeItem {
   vICMS: number;
   vBCST: number;
   vICMSST: number;
+  vFCP: number;
+  vFCPST: number;
+  vFCPSTRet: number;
 }
 
 export interface DanfeEndereco {
@@ -163,6 +166,9 @@ export function parseDanfe(xml: string): DanfeData | null {
         vICMS: n(icms.vICMS),
         vBCST: n(icms.vBCST),
         vICMSST: n(icms.vICMSST ?? icms.vST),
+        vFCP: n(icms.vFCP),
+        vFCPST: n(icms.vFCPST),
+        vFCPSTRet: n(icms.vFCPSTRet),
       };
     });
 

@@ -64,12 +64,42 @@ import {
   type ConsultaStatusRecebimento,
 } from './nfStatusIntegration';
 export type { ConsultaStatusRecebimento } from './nfStatusIntegration';
+import {
+  analisarSelagemAutomaticamenteTramita,
+  consultarAssuntoSanfit,
+  consultarAssuntoTramita,
+  consultarContribuinteSanfit,
+  consultarProcessoTramitaPorChave,
+  criarPedidoSanfitTramita,
+  tramitaAuthConfigurado,
+  tramitaEscritaHabilitada,
+  validarNotaSelagemTramita,
+} from './tramita/client';
 
 export interface ActionResult {
   success: boolean;
   message: string;
   data?: string;
 }
+
+export type TramitaSelagemPreview = {
+  ok: boolean;
+  message: string;
+  notaId: number;
+  chave: string;
+  numero: string | null;
+  emitente: string | null;
+  destinatario: string | null;
+  valorTotal: number | null;
+  assuntoId: number;
+  authConfigurado: boolean;
+  escritaHabilitada: boolean;
+  processoExistente: boolean;
+  processoMensagem: string | null;
+  processoRaw?: unknown;
+  avisos: string[];
+  podeConfirmar: boolean;
+};
 
 export type SyncHealthLevel = 'OK' | 'ATENCAO' | 'CRITICO';
 
@@ -1367,6 +1397,281 @@ export async function obterNotaPorId(notaId: number) {
   });
   if (!nota || !usuarioPodeAcessarCnpj(usuario, nota.cnpjId)) return null;
   return nota;
+}
+
+function assuntoSelagemTramitaId(): number {
+  const configurado = Number(process.env.TRAMITA_SELAGEM_ASSUNTO_ID);
+  return Number.isFinite(configurado) && configurado > 0 ? Math.trunc(configurado) : 371;
+}
+
+function modeloNfeDaChave(chave: string): string {
+  return chave.replace(/\D/g, '').slice(20, 22);
+}
+
+function detalheJsonSeguro(valor: string | null): Record<string, unknown> {
+  if (!valor) return {};
+  try {
+    const parsed = JSON.parse(valor);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+  } catch {
+    return {};
+  }
+}
+
+async function registrarTramitaSelagemNota(notaId: number, dados: Record<string, unknown>) {
+  const nota = await prisma.notaFiscal.findUnique({
+    where: { id: notaId },
+    select: { sitramDetalhe: true },
+  });
+  const detalhe = detalheJsonSeguro(nota?.sitramDetalhe ?? null);
+  const anterior =
+    detalhe.tramitaSelagem && typeof detalhe.tramitaSelagem === 'object' && !Array.isArray(detalhe.tramitaSelagem)
+      ? detalhe.tramitaSelagem as Record<string, unknown>
+      : {};
+
+  await prisma.notaFiscal.update({
+    where: { id: notaId },
+    data: {
+      sitramDetalhe: JSON.stringify({
+        ...detalhe,
+        tramitaSelagem: {
+          ...anterior,
+          ...dados,
+        },
+      }),
+    },
+  });
+}
+
+function textoNumeroNota(nota: { numero: string | null; chave: string }) {
+  return nota.numero || nota.chave.replace(/\D/g, '').slice(25, 34).replace(/^0+/, '') || null;
+}
+
+function montarNotaPedidoTramita(nota: Awaited<ReturnType<typeof obterNotaPorId>>) {
+  if (!nota) return null;
+  const numero = textoNumeroNota(nota);
+  const valor = nota.valorTotal == null ? null : Number(nota.valorTotal);
+  const emissao = nota.emitidaEm instanceof Date ? nota.emitidaEm.toISOString() : nota.emitidaEm;
+
+  return {
+    numero,
+    chaveAcesso: nota.chave,
+    emissao,
+    valor,
+    cpfCnpjEmitente: nota.emitenteCnpj,
+    emitente: nota.emitenteNome,
+    cpfCnpjDestinatario: nota.destCnpj,
+    destinatario: nota.destNome,
+    nota: {
+      numero,
+      chaveAcesso: nota.chave,
+      dataEmissao: emissao,
+      total: valor,
+      cnpjCpfEmitente: nota.emitenteCnpj,
+      nomeEmitente: nota.emitenteNome,
+      cnpjCpfDestinatario: nota.destCnpj,
+      nomeDestinatario: nota.destNome,
+      numeroSelo: nota.sitramAcaoFiscal,
+    },
+  };
+}
+
+export async function prepararSelagemTramitaNota(notaId: number): Promise<TramitaSelagemPreview> {
+  const usuario = await exigirUsuario();
+  const nota = await prisma.notaFiscal.findUnique({
+    where: { id: notaId },
+    include: { cnpj: { select: { cnpj: true, razaoSocial: true } } },
+  });
+
+  if (!nota || !usuarioPodeAcessarCnpj(usuario, nota.cnpjId)) {
+    return {
+      ok: false,
+      message: 'Nota nao encontrada ou sem permissao.',
+      notaId,
+      chave: '',
+      numero: null,
+      emitente: null,
+      destinatario: null,
+      valorTotal: null,
+      assuntoId: assuntoSelagemTramitaId(),
+      authConfigurado: tramitaAuthConfigurado(),
+      escritaHabilitada: tramitaEscritaHabilitada(),
+      processoExistente: false,
+      processoMensagem: null,
+      avisos: ['Sem permissao para acessar esta nota.'],
+      podeConfirmar: false,
+    };
+  }
+
+  const avisos: string[] = [];
+  const chave = nota.chave.replace(/\D/g, '');
+  if (chave.length !== 44) avisos.push('Chave NF-e invalida.');
+  if (modeloNfeDaChave(chave) !== '55') avisos.push('TRAMITA/SANFIT de selagem usa NF-e modelo 55.');
+  if (nota.situacaoSefaz === 'CANCELADA' || nota.situacaoSefaz === 'DENEGADA') {
+    avisos.push(`Nota com situacao SEFAZ ${nota.situacaoSefaz}; nao enviar para selagem.`);
+  }
+  if (nota.sitramSelada === true) avisos.push('SITRAM ja indica nota selada.');
+
+  const processo = await consultarProcessoTramitaPorChave(chave).catch((error: Error) => ({
+    ok: false,
+    status: 0,
+    data: { encontrado: false, raw: null, message: error.message },
+    message: error.message,
+  }));
+
+  if (!processo.ok) avisos.push(`Consulta TRAMITA falhou: ${processo.message}`);
+  if (processo.data?.encontrado) avisos.push('Ja existe processo TRAMITA/SANFIT para esta chave.');
+  if (!tramitaAuthConfigurado()) avisos.push('TRAMITA_AUTH_TOKEN nao configurado; somente consulta publica fica disponivel.');
+  if (!tramitaEscritaHabilitada()) avisos.push('TRAMITA_ENABLE_WRITE precisa ser true para criar pedido no TRAMITA.');
+
+  const bloqueiosConfirmacao = avisos.filter((aviso) =>
+    /invalida|modelo 55|CANCELADA|DENEGADA|ja existe|ja indica|TOKEN|ENABLE_WRITE|falhou/i.test(aviso),
+  );
+
+  return {
+    ok: processo.ok,
+    message: processo.data?.encontrado
+      ? 'Processo TRAMITA/SANFIT ja localizado para esta NF-e.'
+      : 'Selagem individual preparada para revisao.',
+    notaId: nota.id,
+    chave,
+    numero: textoNumeroNota(nota),
+    emitente: nota.emitenteNome,
+    destinatario: nota.destNome,
+    valorTotal: nota.valorTotal == null ? null : Number(nota.valorTotal),
+    assuntoId: assuntoSelagemTramitaId(),
+    authConfigurado: tramitaAuthConfigurado(),
+    escritaHabilitada: tramitaEscritaHabilitada(),
+    processoExistente: !!processo.data?.encontrado,
+    processoMensagem: processo.data?.message ?? processo.message,
+    processoRaw: processo.data?.raw,
+    avisos,
+    podeConfirmar: bloqueiosConfirmacao.length === 0,
+  };
+}
+
+export async function confirmarSelagemTramitaNota(notaId: number, confirmacao: string): Promise<ActionResult> {
+  const preview = await prepararSelagemTramitaNota(notaId);
+  if (!preview.podeConfirmar) {
+    return {
+      success: false,
+      message: `Selagem bloqueada: ${preview.avisos.join(' ') || preview.message}`,
+    };
+  }
+
+  if (confirmacao.trim().toUpperCase() !== 'SELAR') {
+    return { success: false, message: 'Digite SELAR para autorizar o envio individual ao TRAMITA/SANFIT.' };
+  }
+
+  const usuario = await exigirUsuario();
+  const nota = await prisma.notaFiscal.findUnique({
+    where: { id: notaId },
+    include: { cnpj: { select: { cnpj: true, razaoSocial: true } } },
+  });
+  if (!nota || !usuarioPodeAcessarCnpj(usuario, nota.cnpjId)) {
+    return { success: false, message: 'Nota nao encontrada ou sem permissao.' };
+  }
+
+  const validar = await validarNotaSelagemTramita(preview.chave, preview.assuntoId);
+  if (!validar.ok) {
+    await registrarTramitaSelagemNota(nota.id, {
+      status: 'validacao_falhou',
+      validadoEm: new Date().toISOString(),
+      assuntoId: preview.assuntoId,
+      erro: validar.message,
+      retornoValidacao: validar.data,
+    });
+    return { success: false, message: `TRAMITA recusou a validacao da nota: ${validar.message}` };
+  }
+
+  const assunto = await consultarAssuntoTramita(preview.assuntoId);
+  if (!assunto.ok || !assunto.data) {
+    return { success: false, message: `Nao foi possivel carregar o assunto TRAMITA ${preview.assuntoId}: ${assunto.message}` };
+  }
+
+  const assuntoSanfitBase = assunto.data.assuntoSanfit;
+  const assuntoSanfitId =
+    assuntoSanfitBase && typeof assuntoSanfitBase === 'object'
+      ? Number((assuntoSanfitBase as Record<string, unknown>).id)
+      : Number(assunto.data.assuntoSanfitId ?? assunto.data.assuntoId);
+  if (!Number.isFinite(assuntoSanfitId) || assuntoSanfitId <= 0) {
+    return { success: false, message: 'Assunto TRAMITA nao retornou assunto SANFIT valido.' };
+  }
+
+  const [assuntoSanfit, contribuinte] = await Promise.all([
+    consultarAssuntoSanfit(assuntoSanfitId),
+    consultarContribuinteSanfit(nota.cnpj.cnpj),
+  ]);
+  if (!assuntoSanfit.ok || !assuntoSanfit.data) {
+    return { success: false, message: `Nao foi possivel carregar assunto SANFIT: ${assuntoSanfit.message}` };
+  }
+  if (!contribuinte.ok || !contribuinte.data) {
+    return { success: false, message: `Nao foi possivel carregar contribuinte SANFIT: ${contribuinte.message}` };
+  }
+
+  const notaPedido = montarNotaPedidoTramita(nota);
+  if (!notaPedido) return { success: false, message: 'Nao foi possivel montar dados da nota para o TRAMITA.' };
+
+  const orgaoLocal = contribuinte.data.orgaoLocal;
+  const lotacao =
+    orgaoLocal && typeof orgaoLocal === 'object'
+      ? (orgaoLocal as Record<string, unknown>).id
+      : undefined;
+
+  const payload = {
+    documentos: [],
+    autor: nota.cnpj.cnpj.replace(/\D/g, ''),
+    assunto: assuntoSanfit.data,
+    assuntoId: assuntoSanfitId,
+    assuntoTramitaId: preview.assuntoId,
+    notasPedido: [notaPedido],
+    lotacao,
+    observacao: `Pedido individual de selagem gerado pelo DanfeCollector para a NF-e ${preview.chave}.`,
+  };
+
+  const criado = await criarPedidoSanfitTramita(payload);
+  if (!criado.ok || !criado.data) {
+    await registrarTramitaSelagemNota(nota.id, {
+      status: 'criacao_falhou',
+      confirmadoEm: new Date().toISOString(),
+      assuntoId: preview.assuntoId,
+      erro: criado.message,
+      retornoCriacao: criado.data,
+    });
+    return { success: false, message: `TRAMITA nao criou o pedido: ${criado.message}` };
+  }
+
+  const pedidoId = criado.data.pedidoId ?? criado.data.idPedido ?? criado.data.id;
+  const idProcesso = criado.data.idProcesso ?? criado.data.processoId ?? null;
+  let analise: Awaited<ReturnType<typeof analisarSelagemAutomaticamenteTramita>> | null = null;
+  if (pedidoId != null) {
+    analise = await analisarSelagemAutomaticamenteTramita(String(pedidoId)).catch((error: Error) => ({
+      ok: false,
+      status: 0,
+      data: null,
+      message: error.message,
+    }));
+  }
+
+  await registrarTramitaSelagemNota(nota.id, {
+    status: analise?.ok === false ? 'pedido_criado_analise_falhou' : 'pedido_criado',
+    confirmadoEm: new Date().toISOString(),
+    assuntoId: preview.assuntoId,
+    pedidoId,
+    idProcesso,
+    retornoCriacao: criado.data,
+    retornoAnalise: analise?.data ?? null,
+    erroAnalise: analise?.ok === false ? analise.message : null,
+  });
+
+  revalidatePath('/');
+  return {
+    success: true,
+    message: analise?.ok === false
+      ? `Pedido TRAMITA criado, mas a analise automatica retornou erro: ${analise.message}`
+      : `Pedido TRAMITA/SANFIT criado para a NF-e ${preview.chave}.`,
+    data: String(pedidoId ?? idProcesso ?? ''),
+  };
 }
 
 export async function listarNotas(pagina = 1, porPagina = 50) {

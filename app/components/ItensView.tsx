@@ -34,21 +34,40 @@ function itemSitramCorrespondente(
     ?? null;
 }
 
-function tributoPorItemXml(
+function valorFecopXml(item: DanfeItem): number {
+  return (item.vFCP ?? 0) + (item.vFCPST ?? 0) + (item.vFCPSTRet ?? 0);
+}
+
+function infoFiscalItem(
   item: DanfeItem,
   espelho: SitramEspelhoData | null | undefined
-): { label: string; classe: string } | null {
+): {
+  tributo: { label: string; classe: string } | null;
+  temFecop: boolean;
+  fecop: number | null;
+} {
   const itemSitram = itemSitramCorrespondente(item, espelho);
+  const fecopXml = valorFecopXml(item);
+  const fecop = itemSitram?.fecop ?? (fecopXml > 0 ? fecopXml : null);
+  const temFecop = itemSitram?.temFecop === true || (fecop !== null && fecop > 0);
 
   if (itemSitram?.temSt || item.vBCST > 0 || item.vICMSST > 0) {
-    return { label: '1031 - SUBT', classe: 'bg-red-100 text-red-700' };
+    return {
+      tributo: { label: '1031 - SUBT', classe: 'bg-red-100 text-red-700' },
+      temFecop,
+      fecop,
+    };
   }
 
   if (itemSitram?.temAntecipacao) {
-    return { label: '1023 - ANTC', classe: 'bg-amber-100 text-amber-800' };
+    return {
+      tributo: { label: '1023 - ANTC', classe: 'bg-amber-100 text-amber-800' },
+      temFecop,
+      fecop,
+    };
   }
 
-  return null;
+  return { tributo: null, temFecop, fecop };
 }
 
 export default function ItensView({
@@ -72,7 +91,7 @@ export default function ItensView({
       </div>
 
       {danfe.itens.map((it) => {
-        const tributo = tributoPorItemXml(it, espelho);
+        const fiscal = infoFiscalItem(it, espelho);
 
         return (
           <div key={it.nItem} className="rounded-lg border border-gray-200 p-3 hover:bg-gray-50">
@@ -83,9 +102,14 @@ export default function ItensView({
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-start gap-2">
                   <p className="min-w-0 flex-1 text-sm font-medium text-gray-800">{it.descricao}</p>
-                  {tributo && (
-                    <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${tributo.classe}`}>
-                      {tributo.label}
+                  {fiscal.tributo && (
+                    <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${fiscal.tributo.classe}`}>
+                      {fiscal.tributo.label}
+                    </span>
+                  )}
+                  {fiscal.temFecop && (
+                    <span className="rounded-full bg-sky-100 px-2 py-0.5 text-[10px] font-bold text-sky-800">
+                      {fiscal.fecop !== null && fiscal.fecop > 0 ? `FECOP ${moeda(fiscal.fecop)}` : 'FECOP'}
                     </span>
                   )}
                 </div>
@@ -115,6 +139,11 @@ export default function ItensView({
                   <span className="text-gray-500">
                     ICMS ST: <strong className="text-gray-700">{moeda(it.vICMSST)}</strong>
                   </span>
+                  {fiscal.temFecop && (
+                    <span className="text-gray-500">
+                      FECOP: <strong className="text-gray-700">{fiscal.fecop !== null ? moeda(fiscal.fecop) : 'Sim'}</strong>
+                    </span>
+                  )}
                 </div>
               </div>
             </div>

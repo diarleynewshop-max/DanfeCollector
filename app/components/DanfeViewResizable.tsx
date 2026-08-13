@@ -14,6 +14,54 @@ function qtd(v: number | null | undefined): string {
   return v.toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 4 });
 }
 
+function normalizarTexto(v: string | number | null | undefined): string {
+  return String(v ?? '').replace(/\D/g, '').replace(/^0+/, '');
+}
+
+function itemSitramCorrespondente(
+  item: DanfeData['itens'][number],
+  espelho: SitramEspelhoData | null | undefined
+): SitramEspelhoData['itens'][number] | null {
+  if (!espelho?.itens?.length) return null;
+
+  const nItem = normalizarTexto(item.nItem);
+  const codigo = normalizarTexto(item.codigo);
+  const ncm = normalizarTexto(item.ncm);
+  const cfop = normalizarTexto(item.cfop);
+
+  return espelho.itens.find((sitramItem) => normalizarTexto(sitramItem.nItem) === nItem)
+    ?? espelho.itens.find((sitramItem) => codigo && normalizarTexto(sitramItem.codigo) === codigo)
+    ?? espelho.itens.find((sitramItem) =>
+      ncm && cfop && normalizarTexto(sitramItem.ncm) === ncm && normalizarTexto(sitramItem.cfop) === cfop
+    )
+    ?? null;
+}
+
+function valorFecopXml(item: DanfeData['itens'][number]): number {
+  return (item.vFCP ?? 0) + (item.vFCPST ?? 0) + (item.vFCPSTRet ?? 0);
+}
+
+function tributoItem(
+  item: DanfeData['itens'][number],
+  espelho: SitramEspelhoData | null | undefined
+): { tipo: string; fecop: string } {
+  const sitram = itemSitramCorrespondente(item, espelho);
+  const fecopXml = valorFecopXml(item);
+  const fecop = sitram?.fecop ?? (fecopXml > 0 ? fecopXml : null);
+  const temFecop = sitram?.temFecop === true || (fecop !== null && fecop > 0);
+
+  const tipo = sitram?.temSt || item.vBCST > 0 || item.vICMSST > 0
+    ? '1031 - SUBT'
+    : sitram?.temAntecipacao
+      ? '1023 - ANTC'
+      : '-';
+
+  return {
+    tipo,
+    fecop: temFecop ? (fecop !== null ? moeda(fecop) : 'Sim') : '-',
+  };
+}
+
 function cnpjFmt(v: string): string {
   if (v.length === 14) return v.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, '$1.$2.$3/$4-$5');
   if (v.length === 11) return v.replace(/^(\d{3})(\d{3})(\d{3})(\d{2})$/, '$1.$2.$3-$4');
@@ -271,26 +319,33 @@ export default function DanfeViewResizable({ danfe, espelho }: { danfe: DanfeDat
             <th className="border border-gray-300 px-1 py-0.5 text-right">ICMS</th>
             <th className="border border-gray-300 px-1 py-0.5 text-right">BC ST</th>
             <th className="border border-gray-300 px-1 py-0.5 text-right">ICMS ST</th>
+            <th className="border border-gray-300 px-1 py-0.5">SITRAM</th>
+            <th className="border border-gray-300 px-1 py-0.5 text-right">FECOP</th>
           </tr>
         </thead>
         <tbody>
-          {danfe.itens.map((it) => (
-            <tr key={it.nItem}>
-              <td className="border border-gray-300 px-1 py-0.5">{it.codigo}</td>
-              <td className="border border-gray-300 px-1 py-0.5">{it.descricao}</td>
-              <td className="border border-gray-300 px-1 py-0.5">{it.ncm}</td>
-              <td className="border border-gray-300 px-1 py-0.5">{it.cfop}</td>
-              <td className="border border-gray-300 px-1 py-0.5">{it.unidade}</td>
-              <td className="border border-gray-300 px-1 py-0.5 text-right">{qtd(it.quantidade)}</td>
-              <td className="border border-gray-300 px-1 py-0.5 text-right">{moeda(it.valorUnitario)}</td>
-              <td className="border border-gray-300 px-1 py-0.5 text-right">{moeda(it.valorTotal)}</td>
-              <td className="border border-gray-300 px-1 py-0.5 text-right">{moeda(it.vBC)}</td>
-              <td className="border border-gray-300 px-1 py-0.5 text-right">{it.pICMS ? `${moeda(it.pICMS)}%` : '-'}</td>
-              <td className="border border-gray-300 px-1 py-0.5 text-right">{moeda(it.vICMS)}</td>
-              <td className="border border-gray-300 px-1 py-0.5 text-right">{moeda(it.vBCST)}</td>
-              <td className="border border-gray-300 px-1 py-0.5 text-right">{moeda(it.vICMSST)}</td>
-            </tr>
-          ))}
+          {danfe.itens.map((it) => {
+            const fiscal = tributoItem(it, espelho);
+            return (
+              <tr key={it.nItem}>
+                <td className="border border-gray-300 px-1 py-0.5">{it.codigo}</td>
+                <td className="border border-gray-300 px-1 py-0.5">{it.descricao}</td>
+                <td className="border border-gray-300 px-1 py-0.5">{it.ncm}</td>
+                <td className="border border-gray-300 px-1 py-0.5">{it.cfop}</td>
+                <td className="border border-gray-300 px-1 py-0.5">{it.unidade}</td>
+                <td className="border border-gray-300 px-1 py-0.5 text-right">{qtd(it.quantidade)}</td>
+                <td className="border border-gray-300 px-1 py-0.5 text-right">{moeda(it.valorUnitario)}</td>
+                <td className="border border-gray-300 px-1 py-0.5 text-right">{moeda(it.valorTotal)}</td>
+                <td className="border border-gray-300 px-1 py-0.5 text-right">{moeda(it.vBC)}</td>
+                <td className="border border-gray-300 px-1 py-0.5 text-right">{it.pICMS ? `${moeda(it.pICMS)}%` : '-'}</td>
+                <td className="border border-gray-300 px-1 py-0.5 text-right">{moeda(it.vICMS)}</td>
+                <td className="border border-gray-300 px-1 py-0.5 text-right">{moeda(it.vBCST)}</td>
+                <td className="border border-gray-300 px-1 py-0.5 text-right">{moeda(it.vICMSST)}</td>
+                <td className="border border-gray-300 px-1 py-0.5">{fiscal.tipo}</td>
+                <td className="border border-gray-300 px-1 py-0.5 text-right">{fiscal.fecop}</td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
 

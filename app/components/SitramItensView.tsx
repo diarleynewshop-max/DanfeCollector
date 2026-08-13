@@ -23,6 +23,12 @@ function tipoTributo(item: SitramEspelhoData['itens'][number]): string {
   return 'Sem ST/ANT';
 }
 
+function textoFecop(item: SitramEspelhoData['itens'][number]): string {
+  if (!item.temFecop && !(item.fecop !== null && item.fecop !== undefined && item.fecop > 0)) return '-';
+  if (item.fecop !== null && item.fecop !== undefined) return moeda(item.fecop);
+  return item.temFecop ? 'Sim' : '-';
+}
+
 export default function SitramItensView({ espelho }: { espelho: SitramEspelhoData }) {
   return (
     <div className="space-y-2">
@@ -54,6 +60,11 @@ export default function SitramItensView({ espelho }: { espelho: SitramEspelhoDat
                 <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${item.temSt ? 'bg-red-100 text-red-700' : item.temAntecipacao ? 'bg-amber-100 text-amber-800' : 'bg-[var(--surface-2)] text-[var(--ink-mut)]'}`}>
                   {tipoTributo(item)}
                 </span>
+                {item.temFecop && (
+                  <span className="rounded-full bg-sky-100 px-2 py-0.5 text-[10px] font-bold text-sky-800">
+                    FECOP
+                  </span>
+                )}
               </div>
               <p className="mt-0.5 text-xs text-[var(--ink-mut)]">
                 Cod. {item.codigo || '-'} | NCM {item.ncm || '-'} | CFOP {item.cfop || '-'} | CST {item.cst || '-'}
@@ -79,7 +90,7 @@ export default function SitramItensView({ espelho }: { espelho: SitramEspelhoDat
                   ICMS: <strong className="text-[var(--ink)]">{moeda(item.icms ?? item.icmsDestacado)}</strong>
                 </span>
                 <span className="text-[var(--ink-mut)]">
-                  FECOP: <strong className="text-[var(--ink)]">{moeda(item.fecop)}</strong>
+                  FECOP: <strong className="text-[var(--ink)]">{textoFecop(item)}</strong>
                 </span>
                 <span className="text-[var(--ink-mut)]">
                   BC ST: <strong className="text-[var(--ink)]">{moeda(item.baseCalculoSt)}</strong>

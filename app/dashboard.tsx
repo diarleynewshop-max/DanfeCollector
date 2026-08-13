@@ -32,6 +32,8 @@ import {
   anexarComprovanteLote,
   type PreviewPagamentoSitram,
   atualizarSitramPorChaves,
+  prepararSelagemTramitaNota,
+  confirmarSelagemTramitaNota,
   consultarPagamentoIcmsNota,
   consultarPagamentoIcmsLote,
   listarChavesSitramParaAtualizacao,
@@ -52,6 +54,7 @@ import {
   type ResultadoSitramManifesto,
   type ResumoInicio,
   type SyncHealth,
+  type TramitaSelagemPreview,
 } from '@/lib/actions';
 import type { DanfeData } from '@/lib/sefaz/detalhe';
 import {
@@ -6519,6 +6522,12 @@ function DetalheNota({
   const [msgPagamentoIcms, setMsgPagamentoIcms] = useState<{ ok: boolean; texto: string } | null>(null);
   const [consultandoRecebimento, setConsultandoRecebimento] = useState(false);
   const [msgRecebimento, setMsgRecebimento] = useState<{ ok: boolean; texto: string } | null>(null);
+  const [preparandoSelagem, setPreparandoSelagem] = useState(false);
+  const [enviandoSelagem, setEnviandoSelagem] = useState(false);
+  const [previewSelagem, setPreviewSelagem] = useState<TramitaSelagemPreview | null>(null);
+  const [autorizaSelagem, setAutorizaSelagem] = useState(false);
+  const [confirmacaoSelagem, setConfirmacaoSelagem] = useState('');
+  const [msgSelagem, setMsgSelagem] = useState<{ ok: boolean; texto: string } | null>(null);
   const [anexosDaePagamento, setAnexosDaePagamento] = useState<Record<string, AnexoInfo>>({});
   const [carregandoAnexosDaePagamento, setCarregandoAnexosDaePagamento] = useState(false);
 
@@ -6676,6 +6685,29 @@ function DetalheNota({
     }
   }
 
+  async function handlePrepararSelagem() {
+    setPreparandoSelagem(true);
+    setMsgSelagem(null);
+    setAutorizaSelagem(false);
+    setConfirmacaoSelagem('');
+    const res = await prepararSelagemTramitaNota(nota.id);
+    setPreviewSelagem(res);
+    setMsgSelagem({ ok: res.ok, texto: res.message });
+    setPreparandoSelagem(false);
+  }
+
+  async function handleConfirmarSelagem() {
+    setEnviandoSelagem(true);
+    setMsgSelagem(null);
+    const res = await confirmarSelagemTramitaNota(nota.id, confirmacaoSelagem);
+    setMsgSelagem({ ok: res.success, texto: res.message });
+    setEnviandoSelagem(false);
+    if (res.success) {
+      const atualizada = await obterNotaPorId(nota.id);
+      if (atualizada) onNotaAtualizada(atualizada);
+    }
+  }
+
   function BannerManifestar() {
     const jaManifestada = !!nota.manifestadaEm;
     return (
@@ -6734,6 +6766,110 @@ function DetalheNota({
           </p>
         )}
       </div>
+    );
+  }
+
+  function PainelSelagemTramita() {
+    const podeEnviar =
+      !!previewSelagem?.podeConfirmar &&
+      autorizaSelagem &&
+      confirmacaoSelagem.trim().toUpperCase() === 'SELAR' &&
+      !enviandoSelagem;
+
+    return (
+      <section className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
+        <div className="mb-3 flex flex-wrap items-center gap-2 border-b border-[var(--border)] pb-3">
+          <div>
+            <p className="text-xs font-bold uppercase tracking-wide text-[var(--ink-mut)]">TRAMITA / SANFIT</p>
+            <h3 className="font-bold text-[var(--ink)]">Selagem individual da NF-e</h3>
+          </div>
+          <button
+            type="button"
+            onClick={handlePrepararSelagem}
+            disabled={preparandoSelagem || enviandoSelagem}
+            className="ml-auto rounded-lg border border-[var(--border)] px-4 py-2 text-sm font-medium text-[var(--ink)] hover:bg-[var(--surface-2)] disabled:opacity-50"
+          >
+            {preparandoSelagem ? 'Preparando...' : 'Preparar selagem'}
+          </button>
+        </div>
+
+        <div className="grid gap-3 text-sm md:grid-cols-2">
+          <Campo rotulo="Chave NF-e" valor={nota.chave} />
+          <Campo rotulo="Empresa" valor={nota.cnpj.razaoSocial || nota.cnpj.cnpj} />
+          <Campo rotulo="Emitente" valor={nota.emitenteNome || nota.emitenteCnpj || '-'} />
+          <Campo rotulo="Destinatario" valor={nota.destNome || nota.destCnpj || '-'} />
+        </div>
+
+        {previewSelagem && (
+          <div className="mt-4 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-3">
+            <div className="grid gap-2 text-sm md:grid-cols-2">
+              <Campo rotulo="Assunto TRAMITA" valor={String(previewSelagem.assuntoId)} />
+              <Campo rotulo="Token TRAMITA" valor={previewSelagem.authConfigurado ? 'Configurado' : 'Nao configurado'} />
+              <Campo rotulo="Escrita habilitada" valor={previewSelagem.escritaHabilitada ? 'Sim' : 'Nao'} />
+              <Campo rotulo="Processo existente" valor={previewSelagem.processoExistente ? 'Sim' : 'Nao localizado'} />
+            </div>
+
+            {previewSelagem.processoMensagem && (
+              <p className="mt-3 rounded-md bg-white/70 p-2 text-xs text-[var(--ink-mut)]">
+                {previewSelagem.processoMensagem}
+              </p>
+            )}
+
+            {previewSelagem.avisos.length > 0 && (
+              <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-amber-900">
+                <p className="text-xs font-bold uppercase">Avisos antes de enviar</p>
+                <ul className="mt-2 list-disc space-y-1 pl-5 text-sm">
+                  {previewSelagem.avisos.map((aviso, idx) => (
+                    <li key={`${aviso}-${idx}`}>{aviso}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            <div className="mt-4 rounded-md border border-red-200 bg-red-50 p-3 text-red-900">
+              <label className="flex items-start gap-2 text-sm font-medium">
+                <input
+                  type="checkbox"
+                  checked={autorizaSelagem}
+                  onChange={(event) => setAutorizaSelagem(event.target.checked)}
+                  className="mt-1"
+                />
+                <span>
+                  Autorizo enviar somente esta NF-e para abertura de selagem no TRAMITA/SANFIT.
+                </span>
+              </label>
+              <label className="mt-3 block text-xs font-bold uppercase tracking-wide">
+                Digite SELAR para confirmar
+              </label>
+              <input
+                value={confirmacaoSelagem}
+                onChange={(event) => setConfirmacaoSelagem(event.target.value)}
+                className="mt-1 w-full rounded-lg border border-red-200 bg-white px-3 py-2 text-sm font-bold uppercase text-red-900 outline-none focus:border-red-400"
+                placeholder="SELAR"
+              />
+              <button
+                type="button"
+                onClick={handleConfirmarSelagem}
+                disabled={!podeEnviar}
+                className="mt-3 rounded-lg bg-red-600 px-4 py-2 text-sm font-bold text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {enviandoSelagem ? 'Enviando...' : 'Enviar pedido individual de selagem'}
+              </button>
+              {!previewSelagem.podeConfirmar && (
+                <p className="mt-2 text-xs">
+                  O envio esta bloqueado ate resolver os avisos acima.
+                </p>
+              )}
+            </div>
+          </div>
+        )}
+
+        {msgSelagem && (
+          <p className={`mt-3 rounded-lg px-3 py-2 text-sm ${msgSelagem.ok ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'}`}>
+            {msgSelagem.texto}
+          </p>
+        )}
+      </section>
     );
   }
 
@@ -7057,6 +7193,7 @@ function DetalheNota({
       {aba === 'sitram' && (
         <div className="space-y-4">
           {nota.sitramConsultadaEm || temDaeDetalhe ? <ResumoDaeVisual nota={nota} /> : <PainelAtualizarSitramNota />}
+          <PainelSelagemTramita />
           <PainelPagamentoIcms />
           <section className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
             <div className="grid grid-cols-1 gap-3 text-sm md:grid-cols-2">

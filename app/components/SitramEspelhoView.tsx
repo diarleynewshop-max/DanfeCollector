@@ -18,6 +18,12 @@ function percentual(v: number | null | undefined): string {
   return `${v.toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}%`;
 }
 
+function fecopItem(item: SitramEspelhoData['itens'][number]): string {
+  if (!item.temFecop && !(item.fecop !== null && item.fecop !== undefined && item.fecop > 0)) return '-';
+  if (item.fecop !== null && item.fecop !== undefined) return moeda(item.fecop);
+  return item.temFecop ? 'Sim' : '-';
+}
+
 function cnpjFmt(v: string | null | undefined): string {
   const limpo = (v ?? '').replace(/\D/g, '');
   if (limpo.length === 14) return limpo.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, '$1.$2.$3/$4-$5');
@@ -262,7 +268,7 @@ export default function SitramEspelhoView({ espelho }: { espelho: SitramEspelhoD
               <td className="border border-gray-300 px-1 py-0.5 text-right">{moeda(item.icmsSt)}</td>
               <td className="border border-gray-300 px-1 py-0.5 text-right">{moeda(item.baseCalculoAntecipacao)}</td>
               <td className="border border-gray-300 px-1 py-0.5 text-right">{moeda(item.icmsAntecipacao)}</td>
-              <td className="border border-gray-300 px-1 py-0.5 text-right">{moeda(item.fecop)}</td>
+              <td className="border border-gray-300 px-1 py-0.5 text-right">{fecopItem(item)}</td>
             </tr>
           ))}
         </tbody>

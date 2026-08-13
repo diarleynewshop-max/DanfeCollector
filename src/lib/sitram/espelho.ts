@@ -47,6 +47,7 @@ export interface SitramEspelhoItem {
   icmsAntecipacao: number | null;
   icmsDestacado: number | null;
   fecop: number | null;
+  temFecop: boolean;
   ipi: number | null;
   tipoTributo: TipoTributoDae;
   temSt: boolean;
@@ -159,6 +160,17 @@ function somaNumeros(itens: SitramEspelhoItem[], seletor: (item: SitramEspelhoIt
   return encontrou ? total : null;
 }
 
+function somaFecop(itens: SitramEspelhoItem[]): number | null {
+  let total = 0;
+  let encontrou = false;
+  for (const item of itens) {
+    if (item.fecop === null || item.fecop <= 0) continue;
+    total += item.fecop;
+    encontrou = true;
+  }
+  return encontrou ? total : null;
+}
+
 function somaLancamentos(lancamentos: SitramEspelhoLancamento[], codigo: string): number | null {
   let total = 0;
   let encontrou = false;
@@ -169,6 +181,89 @@ function somaLancamentos(lancamentos: SitramEspelhoLancamento[], codigo: string)
   }
   return encontrou ? total : null;
 }
+
+function semAcentos(valor: string): string {
+  return valor
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+}
+
+function chaveNormalizada(chave: string): string {
+  return semAcentos(chave).replace(/[^a-z0-9]/g, '');
+}
+
+function coletarValoresCampos(
+  valor: unknown,
+  chaveRelevante: (chave: string) => boolean,
+  dentroDeCampoRelevante = false,
+  profundidade = 0
+): string[] {
+  if (profundidade > 6) return [];
+
+  const textoDireto = texto(valor);
+  if (textoDireto && dentroDeCampoRelevante) return [textoDireto];
+  if (!valor || typeof valor !== 'object') return [];
+
+  if (Array.isArray(valor)) {
+    return valor.flatMap((item) =>
+      coletarValoresCampos(item, chaveRelevante, dentroDeCampoRelevante, profundidade + 1)
+    );
+  }
+
+  return Object.entries(valor as Registro).flatMap(([chave, item]) => {
+    const relevante = dentroDeCampoRelevante || chaveRelevante(chaveNormalizada(chave));
+    return coletarValoresCampos(item, chaveRelevante, relevante, profundidade + 1);
+  });
+}
+
+function primeiroNumeroPorChaves(valor: unknown, chaves: Set<string>, profundidade = 0): number | null {
+  if (profundidade > 6 || !valor || typeof valor !== 'object') return null;
+  let fallbackZero: number | null = null;
+
+  if (Array.isArray(valor)) {
+    for (const item of valor) {
+      const encontrado = primeiroNumeroPorChaves(item, chaves, profundidade + 1);
+      if (encontrado !== null && encontrado > 0) return encontrado;
+      if (encontrado !== null && fallbackZero === null) fallbackZero = encontrado;
+    }
+    return fallbackZero;
+  }
+
+  for (const [chave, item] of Object.entries(valor as Registro)) {
+    if (chaves.has(chaveNormalizada(chave))) {
+      const encontrado = numero(item);
+      if (encontrado !== null && encontrado > 0) return encontrado;
+      if (encontrado !== null && fallbackZero === null) fallbackZero = encontrado;
+    }
+    const encontrado = primeiroNumeroPorChaves(item, chaves, profundidade + 1);
+    if (encontrado !== null && encontrado > 0) return encontrado;
+    if (encontrado !== null && fallbackZero === null) fallbackZero = encontrado;
+  }
+  return fallbackZero;
+}
+
+function temNumeroPositivoPorChave(valor: unknown, padraoChave: RegExp, profundidade = 0): boolean {
+  if (profundidade > 6 || !valor || typeof valor !== 'object') return false;
+  if (Array.isArray(valor)) return valor.some((item) => temNumeroPositivoPorChave(item, padraoChave, profundidade + 1));
+
+  for (const [chave, item] of Object.entries(valor as Registro)) {
+    if (padraoChave.test(chaveNormalizada(chave)) && (numero(item) ?? 0) > 0) return true;
+    if (temNumeroPositivoPorChave(item, padraoChave, profundidade + 1)) return true;
+  }
+  return false;
+}
+
+const CHAVES_VALOR_FECOP = new Set([
+  'valorfecop',
+  'valorfcp',
+  'vfcp',
+  'vfcpst',
+  'vfcpstret',
+  'vfcpuFdest'.toLowerCase(),
+  'vfcufdest',
+  'valorfcpuFdest'.toLowerCase(),
+]);
 
 function numeroDaChave(chave: string): string | null {
   const normalizada = chave.replace(/\D/g, '');
@@ -204,9 +299,14 @@ function itensBrutosDoDetalhe(detalhe: Registro): unknown[] {
 }
 
 function textoTributoItem(raw: Registro): string {
+  const camposTributarios = coletarValoresCampos(raw, (chave) =>
+    /receita|regime|tribut|cobranc|configuracao|alteracao|incidencia|ajuste|calculoicms|calculadora/.test(chave)
+  );
+
   return [
     primeiroTexto(raw.codigoReceita, raw.receita, raw.codReceita),
     primeiroTexto(raw.tipoRegime, raw.tipoCobranca, raw.nomeConfiguracao, raw.tipoAlteracaoNotaItem),
+    ...camposTributarios,
   ].filter(Boolean).join(' ').toLowerCase();
 }
 
@@ -237,6 +337,13 @@ function normalizarItem(valorBruto: unknown, indice: number, tiposNota: TipoTrib
   const icmsSt = icmsStDireto ?? (tipoTributo === 'ST' ? icms : null);
   const baseCalculoAntecipacao = tipoTributo === 'ANTECIPACAO' ? baseCalculo : null;
   const icmsAntecipacao = tipoTributo === 'ANTECIPACAO' ? icms : null;
+  const fecop = primeiroNumeroPorChaves(raw, CHAVES_VALOR_FECOP);
+  const textoFecop = coletarValoresCampos(raw, (chave) => /fecop|fcp|receita|tribut|calculadora|calculoicms/.test(chave))
+    .join(' ');
+  const temFecop =
+    (fecop !== null && fecop > 0) ||
+    temNumeroPositivoPorChave(raw, /fecop|fcp/) ||
+    /\bfecop\b|\bfcp\b|\b2020\b/i.test(textoFecop);
 
   return {
     nItem: primeiroTexto(raw.numero, raw.nItem, raw.item) ?? String(indice + 1),
@@ -256,7 +363,8 @@ function normalizarItem(valorBruto: unknown, indice: number, tiposNota: TipoTrib
     baseCalculoAntecipacao,
     icmsAntecipacao,
     icmsDestacado: numero(raw.valorIcmsDestacado),
-    fecop: numero(raw.valorFecop),
+    fecop,
+    temFecop,
     ipi: numero(raw.valorIPI),
     tipoTributo,
     temSt: tipoTributo === 'ST',
@@ -330,7 +438,7 @@ export function extrairEspelhoSitram(nota: NotaComEspelhoSitram): SitramEspelhoD
       valorLancamentoSt: somaLancamentos(lancamentos, '1031'),
       valorLancamentoAntecipacao: somaLancamentos(lancamentos, '1023'),
       icmsDestacado: nota.valorIcms ?? somaNumeros(itens, (item) => item.icmsDestacado),
-      fecop: somaNumeros(itens, (item) => item.fecop),
+      fecop: somaFecop(itens),
       ipi: somaNumeros(itens, (item) => item.ipi),
     },
     dae: {
