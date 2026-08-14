@@ -9,6 +9,10 @@ import {
   type ResumoTributosItensSitram,
   type TipoTributoItemSitram,
 } from '@/lib/sitram/espelho';
+import {
+  notaPassaFiltroTransferenciaNewshop,
+  type FiltroTransferenciaNewshop,
+} from '@/lib/notasNewshop';
 
 export interface FiltrosRelatorioTransporte {
   usuario: UsuarioLogado;
@@ -20,6 +24,7 @@ export interface FiltrosRelatorioTransporte {
   daeFiltros?: string[];
   fornecedores?: string[];
   tributoItem?: TipoTributoItemSitram;
+  newshopInterna?: FiltroTransferenciaNewshop;
 }
 
 type LinhaRelatorio = {
@@ -386,6 +391,7 @@ export async function gerarRelatorioTransporteExcel(filtros: FiltrosRelatorioTra
   }));
 
   const notasFiltradas = notasComTributos.filter(({ nota, resumoTributos }) => {
+    if (!notaPassaFiltroTransferenciaNewshop(nota, filtros.newshopInterna ?? 'ocultar')) return false;
     if (filtros.daeFiltros?.length && !notaPassaFiltroDae(nota, filtros.daeFiltros)) return false;
     if (filtros.tributoItem) {
       const quantidade = filtros.tributoItem === 'ST' ? resumoTributos.st : resumoTributos.antecipacao;

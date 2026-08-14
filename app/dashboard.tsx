@@ -74,6 +74,11 @@ import {
   type ResumoTributosItensSitram,
   type TipoTributoItemSitram,
 } from '@/lib/sitram/espelho';
+import {
+  notaNewshopParaNewshop,
+  notaPassaFiltroTransferenciaNewshop,
+  type FiltroTransferenciaNewshop,
+} from '@/lib/notasNewshop';
 import type { UsuarioLogado } from '@/lib/usuarios/auth';
 import {
   listarUsuariosAdmin,
@@ -147,6 +152,7 @@ type FiltrosNotasAplicados = {
   manifestos: FiltroManifestoNota[];
   modalidades: FiltroModalidadeNota[];
   tributoItem: FiltroTributoItem;
+  transferenciaNewshop: FiltroTransferenciaNewshop;
 };
 type FiltrosRelatorioAplicados = {
   dataInicio: string;
@@ -160,6 +166,7 @@ type FiltrosRelatorioAplicados = {
   risco: string;
   busca: string;
   tributoItem: FiltroTributoItem;
+  transferenciaNewshop: FiltroTransferenciaNewshop;
 };
 
 // DAE "a pagar" = DAE em aberto ou ainda a gerar (imposto pendente de pagamento)
@@ -213,6 +220,11 @@ const TRIBUTO_ITEM_OPCOES: Array<{ valor: TipoTributoItemSitram; label: string }
   { valor: 'ANTECIPACAO', label: '1023 - ANTC' },
   { valor: 'ST', label: '1031 - SUBT' },
 ];
+const TRANSFERENCIA_NEWSHOP_OPCOES: Array<{ valor: FiltroTransferenciaNewshop; label: string }> = [
+  { valor: 'ocultar', label: 'Ocultar Newshop -> Newshop' },
+  { valor: 'mostrar', label: 'Mostrar junto' },
+  { valor: 'somente', label: 'Somente Newshop -> Newshop' },
+];
 const CAMPO_FILTRO_NOTAS =
   'h-9 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-300 disabled:bg-slate-100 disabled:text-slate-500';
 const LARGURAS_COLUNAS_PADRAO: Record<ColunaRedimensionavel, number> = {
@@ -257,6 +269,7 @@ function filtrosNotasPadrao(): FiltrosNotasAplicados {
     manifestos: [],
     modalidades: [],
     tributoItem: 'todos',
+    transferenciaNewshop: 'ocultar',
   };
 }
 
@@ -908,6 +921,7 @@ export default function Dashboard({
   const [filtroManifestos, setFiltroManifestos] = useState<FiltroManifestoNota[]>([]);
   const [filtroModalidades, setFiltroModalidades] = useState<FiltroModalidadeNota[]>([]);
   const [filtroTributoItem, setFiltroTributoItem] = useState<FiltroTributoItem>('todos');
+  const [filtroTransferenciaNewshop, setFiltroTransferenciaNewshop] = useState<FiltroTransferenciaNewshop>('ocultar');
   const [filtrosAplicadosNotas, setFiltrosAplicadosNotas] = useState<FiltrosNotasAplicados>(() => filtrosNotasPadrao());
 
   const daePorNota = useMemo(
@@ -1061,6 +1075,7 @@ export default function Dashboard({
     filtroManifestos.length > 0 ? '1' : '',
     filtroModalidades.length > 0 ? '1' : '',
     filtroTributoItem !== 'todos' ? '1' : '',
+    filtroTransferenciaNewshop !== 'ocultar' ? '1' : '',
     filtroEtiquetas.length > 0 ? '1' : '',
     filtroExcluirEmitentes.length > 0 ? '1' : '',
   ].filter(Boolean).length;
@@ -1092,6 +1107,7 @@ export default function Dashboard({
     filtrosAplicadosNotas.manifestos.length > 0 ? '1' : '',
     filtrosAplicadosNotas.modalidades.length > 0 ? '1' : '',
     filtrosAplicadosNotas.tributoItem !== 'todos' ? '1' : '',
+    filtrosAplicadosNotas.transferenciaNewshop !== 'ocultar' ? '1' : '',
     filtrosAplicadosNotas.etiquetas.length > 0 ? '1' : '',
     filtrosAplicadosNotas.excluirEmitentes.length > 0 ? '1' : '',
   ].filter(Boolean).length;
@@ -1125,6 +1141,7 @@ export default function Dashboard({
     filtrosAplicadosNotas.manifestos.join('\u0001') !== filtroManifestos.join('\u0001') ||
     filtrosAplicadosNotas.modalidades.join('\u0001') !== filtroModalidades.join('\u0001') ||
     filtrosAplicadosNotas.tributoItem !== filtroTributoItem ||
+    filtrosAplicadosNotas.transferenciaNewshop !== filtroTransferenciaNewshop ||
     filtrosAplicadosNotas.etiquetas.join('\u0001') !== filtroEtiquetas.join('\u0001') ||
     filtrosAplicadosNotas.excluirEmitentes.join('\u0001') !== filtroExcluirEmitentes.join('\u0001');
   // Há alguma busca/filtro ativo? (inclui empresa, status e a busca por número)
@@ -1199,6 +1216,7 @@ export default function Dashboard({
       manifestos: [...filtroManifestos],
       modalidades: [...filtroModalidades],
       tributoItem: filtroTributoItem,
+      transferenciaNewshop: filtroTransferenciaNewshop,
       ...overrides,
     };
   }
@@ -1367,6 +1385,7 @@ export default function Dashboard({
     setFiltroManifestos([]);
     setFiltroModalidades([]);
     setFiltroTributoItem('todos');
+    setFiltroTransferenciaNewshop('ocultar');
     setDestaqueTributoNotaAberta(null);
     setFiltroEtiquetas([]);
     setFiltroExcluirEmitentes([]);
@@ -1487,6 +1506,7 @@ export default function Dashboard({
   const filtroManifestosBusca = filtrosAplicadosNotas.manifestos;
   const filtroModalidadesBusca = filtrosAplicadosNotas.modalidades;
   const filtroTributoItemBusca = filtrosAplicadosNotas.tributoItem;
+  const filtroTransferenciaNewshopBusca = filtrosAplicadosNotas.transferenciaNewshop;
   const filtroEtiquetasBusca = filtrosAplicadosNotas.etiquetas;
   const filtroExcluirEmitentesBusca = filtrosAplicadosNotas.excluirEmitentes;
   const notasBuscaIndex = useMemo(() => new Map(notas.map((n) => [
@@ -1503,6 +1523,7 @@ export default function Dashboard({
       etiquetas: parseEtiquetas(n.etiqueta),
       modalidades: modalidadesDaNota(n),
       tributosItens: resumoTributosItensNota(n),
+      transferenciaNewshop: notaNewshopParaNewshop(n),
       situacaoSitram: situacaoSitramEfetiva(n) ?? '',
       dae: statusDaeEfetivo(n),
       suspeitasDuplicidade: extrairPagamentoIcmsSitram(n).suspeitasDuplicidade.length,
@@ -1526,6 +1547,8 @@ export default function Dashboard({
     return notas.filter((n) => {
       const idx = notasBuscaIndex.get(n.id);
       if (!idx) return false;
+      if (filtroTransferenciaNewshopBusca === 'ocultar' && idx.transferenciaNewshop) return false;
+      if (filtroTransferenciaNewshopBusca === 'somente' && !idx.transferenciaNewshop) return false;
       if (filtroCnpjIdBusca !== 'todos' && n.cnpjId !== filtroCnpjIdBusca) return false;
       if (filtroStatusBusca !== 'todos' && n.status !== filtroStatusBusca) return false;
       if (chaveBuscaDigitos && !n.chave.includes(chaveBuscaDigitos)) return false;
@@ -1696,6 +1719,7 @@ export default function Dashboard({
     filtroManifestosBusca,
     filtroModalidadesBusca,
     filtroTributoItemBusca,
+    filtroTransferenciaNewshopBusca,
     filtroEtiquetasBusca,
     filtroExcluirEmitentesBusca,
   ]);
@@ -1733,6 +1757,7 @@ export default function Dashboard({
     filtroManifestosBusca,
     filtroModalidadesBusca,
     filtroTributoItemBusca,
+    filtroTransferenciaNewshopBusca,
     filtroEtiquetasBusca,
     filtroExcluirEmitentesBusca,
   ]);
@@ -1820,11 +1845,13 @@ export default function Dashboard({
 
   function abrirResultadoBuscaHome(nota: NotaComCnpj) {
     const numero = numeroNotaSistema(nota);
+    const transferenciaNewshop: FiltroTransferenciaNewshop = notaNewshopParaNewshop(nota) ? 'mostrar' : 'ocultar';
     setFiltroNumero(numero);
     setFiltroChave(nota.chave);
+    setFiltroTransferenciaNewshop(transferenciaNewshop);
     setSecaoAtual('notas');
     setMostrarFiltros(true);
-    void aplicarFiltrosNotas({ numero, chave: nota.chave });
+    void aplicarFiltrosNotas({ numero, chave: nota.chave, transferenciaNewshop });
   }
 
   function abrirFilaNotasHome(filtros: Partial<FiltrosNotasAplicados>) {
@@ -1866,10 +1893,13 @@ export default function Dashboard({
     setFiltroCnpjId('todos');
     setFiltroStatus('todos');
     setFiltroTributoItem(destaque);
+    const transferenciaNewshop: FiltroTransferenciaNewshop = notaNewshopParaNewshop(nota) ? 'mostrar' : 'ocultar';
+    setFiltroTransferenciaNewshop(transferenciaNewshop);
     setFiltrosAplicadosNotas({
       ...filtrosNotasPadrao(),
       chave: nota.chave,
       tributoItem: destaque,
+      transferenciaNewshop,
     });
     setPaginaCliente(1);
     setExpandida(nota.id);
@@ -3163,6 +3193,17 @@ export default function Dashboard({
                         <option value="COMPLETA">Completa</option>
                       </select>
                     </CampoFiltroNotas>
+                    <CampoFiltroNotas label="Newshop -> Newshop" className="lg:col-span-3">
+                      <select
+                        value={filtroTransferenciaNewshop}
+                        onChange={(e) => setFiltroTransferenciaNewshop(e.target.value as FiltroTransferenciaNewshop)}
+                        className={CAMPO_FILTRO_NOTAS}
+                      >
+                        {TRANSFERENCIA_NEWSHOP_OPCOES.map((opcao) => (
+                          <option key={opcao.valor} value={opcao.valor}>{opcao.label}</option>
+                        ))}
+                      </select>
+                    </CampoFiltroNotas>
                     <CampoFiltroNotas label="Emissao - inicio" className="lg:col-span-3">
                       <input type="date" value={filtroDataInicio} onChange={(e) => setFiltroDataInicio(e.target.value)} className={CAMPO_FILTRO_NOTAS} />
                     </CampoFiltroNotas>
@@ -4404,6 +4445,7 @@ function RelatoriosDashboard({
   const [filtroRiscoRelatorio, setFiltroRiscoRelatorio] = useState('todos');
   const [buscaRelatorio, setBuscaRelatorio] = useState('');
   const [filtroTributoItemRelatorio, setFiltroTributoItemRelatorio] = useState<FiltroTributoItem>('todos');
+  const [filtroTransferenciaNewshopRelatorio, setFiltroTransferenciaNewshopRelatorio] = useState<FiltroTransferenciaNewshop>('ocultar');
   const [limiteTabela, setLimiteTabela] = useState(20);
   const [baixandoExcelTransporte, setBaixandoExcelTransporte] = useState(false);
   const [erroExcelTransporte, setErroExcelTransporte] = useState<string | null>(null);
@@ -4419,6 +4461,7 @@ function RelatoriosDashboard({
     risco: 'todos',
     busca: '',
     tributoItem: 'todos',
+    transferenciaNewshop: 'ocultar',
   });
   const inicioPeriodo = filtrosRelatorioAplicados.dataInicio && filtrosRelatorioAplicados.dataFim && filtrosRelatorioAplicados.dataInicio > filtrosRelatorioAplicados.dataFim
     ? filtrosRelatorioAplicados.dataFim
@@ -4477,6 +4520,7 @@ function RelatoriosDashboard({
       tipoLabel: nota.tipoOperacao || 'Entrada',
       emitenteChave: nota.emitenteCnpj || nota.emitenteNome || `nota-${nota.id}`,
       emitenteNomeRelatorio: nota.emitenteNome || nota.emitenteCnpj || 'Sem emitente',
+      transferenciaNewshop: notaNewshopParaNewshop(nota),
       buscaTexto: normalizarBuscaFiltro([
         nota.numero,
         nota.serie,
@@ -4576,6 +4620,7 @@ function RelatoriosDashboard({
     const busca = normalizarBuscaFiltro(filtrosRelatorioAplicados.busca);
     return notasIndexadas.filter((n) => {
       if (!n.dataChave) return false;
+      if (!notaPassaFiltroTransferenciaNewshop(n, filtrosRelatorioAplicados.transferenciaNewshop)) return false;
       if (inicioPeriodo && n.dataChave < inicioPeriodo) return false;
       if (fimPeriodo && n.dataChave > fimPeriodo) return false;
       if (filtrosRelatorioAplicados.raizesEmpresa.length === 0 || !filtrosRelatorioAplicados.raizesEmpresa.includes(n.empresaRaiz)) return false;
@@ -4815,7 +4860,8 @@ function RelatoriosDashboard({
     filtrosRelatorioAplicados.fornecedorAtivo !== fornecedorFiltroAtivo ||
     filtrosRelatorioAplicados.risco !== filtroRiscoRelatorio ||
     filtrosRelatorioAplicados.busca !== buscaRelatorio ||
-    filtrosRelatorioAplicados.tributoItem !== filtroTributoItemRelatorio;
+    filtrosRelatorioAplicados.tributoItem !== filtroTributoItemRelatorio ||
+    filtrosRelatorioAplicados.transferenciaNewshop !== filtroTransferenciaNewshopRelatorio;
 
   function aplicarFiltrosRelatorio() {
     setFiltrosRelatorioAplicados({
@@ -4830,6 +4876,7 @@ function RelatoriosDashboard({
       risco: filtroRiscoRelatorio,
       busca: buscaRelatorio,
       tributoItem: filtroTributoItemRelatorio,
+      transferenciaNewshop: filtroTransferenciaNewshopRelatorio,
     });
     setUfSelecionada(null);
     setLimiteTabela(20);
@@ -4850,6 +4897,7 @@ function RelatoriosDashboard({
     setFiltroRiscoRelatorio('todos');
     setBuscaRelatorio('');
     setFiltroTributoItemRelatorio('todos');
+    setFiltroTransferenciaNewshopRelatorio('ocultar');
     setFiltrosRelatorioAplicados({
       dataInicio: '',
       dataFim: '',
@@ -4862,6 +4910,7 @@ function RelatoriosDashboard({
       risco: 'todos',
       busca: '',
       tributoItem: 'todos',
+      transferenciaNewshop: 'ocultar',
     });
     setUfSelecionada(null);
     setLimiteTabela(20);
@@ -4888,6 +4937,7 @@ function RelatoriosDashboard({
       risco: filtroRiscoRelatorio,
       busca: buscaRelatorio,
       tributoItem: filtroTributoItemRelatorio,
+      transferenciaNewshop: filtroTransferenciaNewshopRelatorio,
     };
   }
 
@@ -4921,6 +4971,7 @@ function RelatoriosDashboard({
     if (filtros.risco !== 'todos') params.set('risco', filtros.risco);
     if (filtros.busca.trim()) params.set('busca', filtros.busca.trim());
     if (filtros.tributoItem !== 'todos') params.set('tributoItem', filtros.tributoItem);
+    if (filtros.transferenciaNewshop !== 'ocultar') params.set('newshopInterna', filtros.transferenciaNewshop);
     return params;
   }
 
@@ -5150,6 +5201,18 @@ function RelatoriosDashboard({
           >
             <option value="todos">Todos</option>
             {TRIBUTO_ITEM_OPCOES.map((opcao) => (
+              <option key={opcao.valor} value={opcao.valor}>{opcao.label}</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="block text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-mut)]">Newshop {'->'} Newshop</label>
+          <select
+            value={filtroTransferenciaNewshopRelatorio}
+            onChange={(e) => setFiltroTransferenciaNewshopRelatorio(e.target.value as FiltroTransferenciaNewshop)}
+            className="mt-1 rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-1.5 text-sm text-[var(--ink)]"
+          >
+            {TRANSFERENCIA_NEWSHOP_OPCOES.map((opcao) => (
               <option key={opcao.valor} value={opcao.valor}>{opcao.label}</option>
             ))}
           </select>

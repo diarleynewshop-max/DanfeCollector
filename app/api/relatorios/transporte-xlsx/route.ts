@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { gerarRelatorioTransporteExcel } from '@/lib/relatorios/transporteExcel';
 import { normalizarTipoTributoItemSitram } from '@/lib/sitram/espelho';
+import { normalizarFiltroTransferenciaNewshop, type FiltroTransferenciaNewshop } from '@/lib/notasNewshop';
 import { exigirUsuario } from '@/lib/usuarios/auth';
 
 export const dynamic = 'force-dynamic';
@@ -55,6 +56,14 @@ function parametroTributoItem(url: URL): 'ST' | 'ANTECIPACAO' | undefined {
   throw new Error('Tributo por item invalido.');
 }
 
+function parametroNewshopInterna(url: URL): FiltroTransferenciaNewshop | undefined {
+  const valor = parametroTexto(url, 'newshopInterna');
+  const filtro = normalizarFiltroTransferenciaNewshop(valor);
+  if (!valor) return undefined;
+  if (filtro) return filtro;
+  throw new Error('Filtro Newshop interno invalido.');
+}
+
 export async function GET(req: Request) {
   try {
     const usuario = await exigirUsuario();
@@ -69,6 +78,7 @@ export async function GET(req: Request) {
       daeFiltros: parametrosLista(url, 'dae'),
       fornecedores: parametrosLista(url, 'fornecedor'),
       tributoItem: parametroTributoItem(url),
+      newshopInterna: parametroNewshopInterna(url),
     });
     const filename = encodeURIComponent(arquivo.filename);
 

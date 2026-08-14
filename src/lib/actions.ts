@@ -50,6 +50,7 @@ import {
   resumirTributosItensSitram,
   type ItemTributadoSitramResumo,
 } from './sitram/espelho';
+import { RAIZ_CNPJ_NEWSHOP } from './notasNewshop';
 import { parseRelacaoPagamentoSitram, chaveCruzamento, extrairDaChave } from './sitram/pagamento';
 import {
   consultarDaePorCodigo,
@@ -1683,6 +1684,23 @@ export async function confirmarSelagemTramitaNota(notaId: number, confirmacao: s
   };
 }
 
+function whereOcultarTransferenciaNewshop(): Prisma.NotaFiscalWhereInput {
+  return {
+    NOT: {
+      AND: [
+        { emitenteCnpj: { startsWith: RAIZ_CNPJ_NEWSHOP } },
+        {
+          OR: [
+            { destCnpj: { startsWith: RAIZ_CNPJ_NEWSHOP } },
+            { AND: [{ destCnpj: null }, { cnpj: { cnpj: { startsWith: RAIZ_CNPJ_NEWSHOP } } }] },
+            { AND: [{ destCnpj: '' }, { cnpj: { cnpj: { startsWith: RAIZ_CNPJ_NEWSHOP } } }] },
+          ],
+        },
+      ],
+    },
+  };
+}
+
 export async function listarNotas(pagina = 1, porPagina = 50) {
   const usuario = await exigirUsuario();
   const include = { cnpj: { select: { cnpj: true, razaoSocial: true } } } as const;
@@ -1691,6 +1709,7 @@ export async function listarNotas(pagina = 1, porPagina = 50) {
   const where = {
     ...whereNotaPermitida(usuario),
     situacaoSefaz: { not: 'CANCELADA' as const },
+    ...whereOcultarTransferenciaNewshop(),
   };
 
   // Mantém as 2000 recentes e inclui qualquer DAE antigo, para nenhum
@@ -1867,6 +1886,7 @@ export async function contarNotasTotal(): Promise<number> {
     where: {
       ...whereNotaPermitida(usuario),
       situacaoSefaz: { not: 'CANCELADA' },
+      ...whereOcultarTransferenciaNewshop(),
     },
   });
 }
