@@ -123,6 +123,16 @@ Depois do `HTTP 200`, abrir `https://danfe.newgrup.cloud/login` e validar no nav
 
 ---
 
+### Conferencia SITRAM por item
+
+Depois de reconsultar uma NF-e no SITRAM, abrir a aba `Itens` e conferir:
+
+- `1031 - SUBT`, `1023 - ANTC` ou `Sem ST/ANT` no item correto;
+- FECOP individual quando a calculadora retornar a receita `2020`;
+- base e ICMS da calculadora, incluindo BC/ICMS ST ou ANTC.
+
+---
+
 ## Se algo travar
 - **scp bloqueado / "data exfiltration"**: normal no modo auto. O usuário roda o `scp` do passo 2 manualmente.
 - **`node: command not found`**: esqueceu de exportar o PATH do nvm (passo 4/5).
