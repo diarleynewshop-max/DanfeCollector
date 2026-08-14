@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { gerarRelatorioTransporteExcel } from '@/lib/relatorios/transporteExcel';
+import { normalizarTipoTributoItemSitram } from '@/lib/sitram/espelho';
 import { exigirUsuario } from '@/lib/usuarios/auth';
 
 export const dynamic = 'force-dynamic';
@@ -48,8 +49,9 @@ function parametrosRaizesCnpj(url: URL): string[] | undefined {
 
 function parametroTributoItem(url: URL): 'ST' | 'ANTECIPACAO' | undefined {
   const valor = parametroTexto(url, 'tributoItem');
-  if (!valor || valor === 'todos') return undefined;
-  if (valor === 'ST' || valor === 'ANTECIPACAO') return valor;
+  const tipo = normalizarTipoTributoItemSitram(valor);
+  if (!valor || valor.toLowerCase() === 'todos') return undefined;
+  if (tipo) return tipo;
   throw new Error('Tributo por item invalido.');
 }
 

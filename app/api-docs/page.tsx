@@ -15,6 +15,21 @@ const exemploJson = `{
     "valores": {
       "totalNota": 1500.9
     },
+    "itensFiscais": {
+      "filtro": "todos",
+      "qtdSt": 1,
+      "qtdAntecipacao": 2,
+      "itens": [
+        {
+          "item": "1",
+          "codigo": "12345",
+          "produto": "PRODUTO EXEMPLO",
+          "tipoTributo": "ANTECIPACAO",
+          "codigoReceita": "1023",
+          "descricao": "1023 - ANTC"
+        }
+      ]
+    },
     "dae": {
       "status": "PAGO",
       "valorAberto": null
@@ -82,7 +97,7 @@ export default function ApiDocsPage() {
           <p className="text-xs font-bold uppercase tracking-wide text-[var(--ink-mut)]">DanfeCollector</p>
           <h1 className="mt-1 text-2xl font-black text-[var(--ink)]">Documentacao da API</h1>
           <p className="mt-2 max-w-3xl text-sm text-[var(--ink-mut)]">
-            Use esta API para consultar nota fiscal, status, XML, ICMS/SITRAM, DAE e IE de fornecedor por chave de acesso.
+            Use esta API para consultar nota fiscal, status, XML, ICMS/SITRAM, DAE, itens ST/ANTC e IE de fornecedor por chave de acesso.
           </p>
         </header>
 
@@ -93,10 +108,14 @@ x-api-key: SUA_CHAVE_API`}</BlocoCodigo>
         </Secao>
 
         <Secao titulo="Consultar nota em JSON">
-          <p>Retorna dados principais da NF-e, emitente, destinatario, valores, status fiscal, DAE e links uteis.</p>
+          <p>Retorna dados principais da NF-e, emitente, destinatario, valores, itens fiscais ST/ANTC, status fiscal, DAE e links uteis.</p>
           <BlocoCodigo>{`GET /api/v1/notas/{chave}`}</BlocoCodigo>
           <p>Para incluir o XML dentro do JSON, use:</p>
           <BlocoCodigo>{`GET /api/v1/notas/{chave}?xml=1`}</BlocoCodigo>
+          <p>Para trazer somente itens ANTC ou somente itens ST, use:</p>
+          <BlocoCodigo>{`GET /api/v1/notas/{chave}?tributoItem=ANTC
+GET /api/v1/notas/{chave}?tributoItem=ST`}</BlocoCodigo>
+          <p>Tambem aceita 1023, ANTECIPACAO, 1031 e SUBT.</p>
         </Secao>
 
         <Secao titulo="Baixar XML direto">

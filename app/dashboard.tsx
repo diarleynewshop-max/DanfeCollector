@@ -460,6 +460,23 @@ function rotuloTributoItem(tipo: FiltroTributoItem | null | undefined): string {
   return 'Todos';
 }
 
+type ItemTributadoRelatorio = NotaRelatorio['itensTributados'][number];
+
+function itensTributadosPorTipoRelatorio(
+  itens: ItemTributadoRelatorio[],
+  tipo: TipoTributoItemSitram,
+  filtro: FiltroTributoItem = 'todos'
+): ItemTributadoRelatorio[] {
+  if (filtro !== 'todos' && filtro !== tipo) return [];
+  return itens.filter((item) => item.tipoTributo === tipo);
+}
+
+function textoItensTributadosRelatorio(itens: ItemTributadoRelatorio[]): string {
+  return itens
+    .map((item) => `${rotuloTributoItem(item.tipoTributo)} ${item.codigo ?? item.nItem} - ${item.produto}`)
+    .join(' | ');
+}
+
 function resumoTributosItensNota(nota: NotaComCnpj): ResumoTributosItensSitram {
   return resumirTributosItensSitram(nota);
 }
@@ -2515,7 +2532,7 @@ export default function Dashboard({
                 <code className="mt-2 block break-all text-xs text-[var(--ink)]">
                   GET {apiOrigem || 'https://seu-dominio.com'}/api/v1/notas/CHAVE_NFE
                 </code>
-                <p className="mt-2 text-xs text-[var(--ink-mut)]">Use `?xml=1` se quiser o XML junto no JSON.</p>
+                <p className="mt-2 text-xs text-[var(--ink-mut)]">Use `?xml=1` para XML no JSON e `?tributoItem=ANTC` ou `?tributoItem=ST` para filtrar os itens fiscais.</p>
               </div>
               <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-4">
                 <p className="text-xs font-bold uppercase tracking-wide text-[var(--ink-mut)]">XML direto</p>
@@ -4416,6 +4433,10 @@ function RelatoriosDashboard({
     const daeStatus = statusDaeEfetivo(nota);
     const diasDae = diasAteVencimento(nota.daeVencimento);
     const daePendente = DAE_A_PAGAR.includes(daeStatus);
+    const itensAntc = itensTributadosPorTipoRelatorio(nota.itensTributados, 'ANTECIPACAO');
+    const itensSt = itensTributadosPorTipoRelatorio(nota.itensTributados, 'ST');
+    const itensAntcTexto = textoItensTributadosRelatorio(itensAntc);
+    const itensStTexto = textoItensTributadosRelatorio(itensSt);
     const itensTributadosTexto = nota.itensTributados
       .map((item) => `${rotuloTributoItem(item.tipoTributo)} ${item.nItem} ${item.codigo ?? ''} ${item.ncm ?? ''} ${item.produto}`)
       .join(' | ');
@@ -4469,6 +4490,8 @@ function RelatoriosDashboard({
         itensTributadosTexto,
       ].filter(Boolean).join(' ')),
       itensTributadosTexto,
+      itensAntcTexto,
+      itensStTexto,
     };
   }), [notas]);
 
@@ -4655,10 +4678,12 @@ function RelatoriosDashboard({
       if (nota.daeStatus === 'SEM_DAE') daeSemCobrancaQtd++;
       if (nota.situacaoSefaz === 'CANCELADA' || nota.situacaoSefaz === 'DENEGADA') canceladas++;
       if (nota.status === 'RESUMO') aguardandoConferencia++;
-      itensSt += nota.qtdItensSt;
-      itensAntecipacao += nota.qtdItensAntecipacao;
-      if (nota.qtdItensSt > 0) notasComSt++;
-      if (nota.qtdItensAntecipacao > 0) notasComAntecipacao++;
+      const itensStNota = itensTributadosPorTipoRelatorio(nota.itensTributados, 'ST', filtrosRelatorioAplicados.tributoItem).length;
+      const itensAntecipacaoNota = itensTributadosPorTipoRelatorio(nota.itensTributados, 'ANTECIPACAO', filtrosRelatorioAplicados.tributoItem).length;
+      itensSt += itensStNota;
+      itensAntecipacao += itensAntecipacaoNota;
+      if (itensStNota > 0) notasComSt++;
+      if (itensAntecipacaoNota > 0) notasComAntecipacao++;
       if (nota.risco in riscos) riscos[nota.risco as keyof typeof riscos]++;
       if (nota.daePendente && nota.diasDae !== null && nota.diasDae < 0) {
         daeVencidoQtd++;
@@ -4703,7 +4728,7 @@ function RelatoriosDashboard({
       maxMes: Math.max(...meses.map(([, v]) => v.valor), 0),
       topEmitentes,
     };
-  }, [notasPeriodo]);
+  }, [notasPeriodo, filtrosRelatorioAplicados.tributoItem]);
   const comparativoMes = useMemo(() => {
     const meses = resumoFiscal.meses;
     const atual = meses.at(-1);
@@ -4974,17 +4999,15 @@ function RelatoriosDashboard({
       nota.valor,
       nota.icms,
       textoDaeSitram(nota.daeStatus),
-      nota.qtdItensAntecipacao,
-      nota.qtdItensSt,
+      itensTributadosPorTipoRelatorio(nota.itensTributados, 'ANTECIPACAO', filtrosRelatorioAplicados.tributoItem).length,
+      itensTributadosPorTipoRelatorio(nota.itensTributados, 'ST', filtrosRelatorioAplicados.tributoItem).length,
       nota.risco,
     ]));
   }
 
-  function baixarRelatorioProdutosTributadosCsv() {
-    const tipoFiltro = filtrosRelatorioAplicados.tributoItem;
+  function baixarRelatorioProdutosTributadosCsv(tipo: TipoTributoItemSitram) {
     const linhas = notasPeriodo.flatMap((nota) =>
-      nota.itensTributados
-        .filter((item) => tipoFiltro === 'todos' || item.tipoTributo === tipoFiltro)
+      itensTributadosPorTipoRelatorio(nota.itensTributados, tipo, filtrosRelatorioAplicados.tributoItem)
         .map((item) => [
           data(nota.emitidaEm),
           numeroNotaSistema(nota),
@@ -5005,7 +5028,7 @@ function RelatoriosDashboard({
     );
 
     baixarCsv(
-      tipoFiltro === 'todos' ? 'relatorio-produtos-st-antc.csv' : `relatorio-produtos-${tipoFiltro === 'ST' ? 'st' : 'antc'}.csv`,
+      `relatorio-produtos-${tipo === 'ST' ? 'st' : 'antc'}.csv`,
       ['Emissao', 'NF', 'Serie', 'Empresa', 'Fornecedor', 'CNPJ fornecedor', 'Tributo', 'Item', 'Codigo', 'NCM', 'Produto', 'Valor produto', 'ICMS ST', 'ICMS ANTC', 'Chave'],
       linhas
     );
@@ -5049,8 +5072,12 @@ function RelatoriosDashboard({
       return;
     }
 
-    const linhas = notasPeriodo.map((nota) => `<tr><td>${escaparHtmlRelatorio(data(nota.emitidaEm))}</td><td>${escaparHtmlRelatorio(numeroNotaSistema(nota))}</td><td>${escaparHtmlRelatorio(nota.empresaLabel)}</td><td>${escaparHtmlRelatorio(nota.emitenteNomeRelatorio)}</td><td>${escaparHtmlRelatorio(moeda(nota.valor))}</td><td>${escaparHtmlRelatorio(textoDaeSitram(nota.daeStatus))}</td><td>${escaparHtmlRelatorio(nota.risco)}</td></tr>`).join('');
-    janela.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Relatório fiscal DanfeCollector</title><style>body{font:12px Arial,sans-serif;color:#1f2937;padding:28px}h1{font-size:22px;margin:0 0 5px}p{color:#6b7280;margin:4px 0 18px}table{border-collapse:collapse;width:100%;margin-top:20px}th,td{border:1px solid #d1d5db;padding:7px;text-align:left}th{background:#f3f4f6;font-size:11px}td:nth-child(5){text-align:right}@media print{button{display:none}}</style></head><body><h1>Relatório fiscal</h1><p>DanfeCollector · ${escaparHtmlRelatorio(new Date().toLocaleString('pt-BR'))} · ${notasPeriodo.length} nota(s) · Total ${escaparHtmlRelatorio(moeda(totalValorPeriodo))}</p><table><thead><tr><th>Emissão</th><th>NF</th><th>Empresa</th><th>Fornecedor</th><th>Total NF</th><th>DAE</th><th>Risco</th></tr></thead><tbody>${linhas || '<tr><td colspan="7">Nenhuma nota no filtro atual.</td></tr>'}</tbody></table><script>window.onload=function(){window.print()}</script></body></html>`);
+    const linhas = notasPeriodo.map((nota) => {
+      const itensAntc = itensTributadosPorTipoRelatorio(nota.itensTributados, 'ANTECIPACAO', filtrosRelatorioAplicados.tributoItem).length;
+      const itensSt = itensTributadosPorTipoRelatorio(nota.itensTributados, 'ST', filtrosRelatorioAplicados.tributoItem).length;
+      return `<tr><td>${escaparHtmlRelatorio(data(nota.emitidaEm))}</td><td>${escaparHtmlRelatorio(numeroNotaSistema(nota))}</td><td>${escaparHtmlRelatorio(nota.empresaLabel)}</td><td>${escaparHtmlRelatorio(nota.emitenteNomeRelatorio)}</td><td>${escaparHtmlRelatorio(moeda(nota.valor))}</td><td>${itensAntc}</td><td>${itensSt}</td><td>${escaparHtmlRelatorio(textoDaeSitram(nota.daeStatus))}</td><td>${escaparHtmlRelatorio(nota.risco)}</td></tr>`;
+    }).join('');
+    janela.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Relatório fiscal DanfeCollector</title><style>body{font:12px Arial,sans-serif;color:#1f2937;padding:28px}h1{font-size:22px;margin:0 0 5px}p{color:#6b7280;margin:4px 0 18px}table{border-collapse:collapse;width:100%;margin-top:20px}th,td{border:1px solid #d1d5db;padding:7px;text-align:left}th{background:#f3f4f6;font-size:11px}td:nth-child(5),td:nth-child(6),td:nth-child(7){text-align:right}@media print{button{display:none}}</style></head><body><h1>Relatório fiscal</h1><p>DanfeCollector · ${escaparHtmlRelatorio(new Date().toLocaleString('pt-BR'))} · ${notasPeriodo.length} nota(s) · Total ${escaparHtmlRelatorio(moeda(totalValorPeriodo))}</p><table><thead><tr><th>Emissão</th><th>NF</th><th>Empresa</th><th>Fornecedor</th><th>Total NF</th><th>ANTC</th><th>ST</th><th>DAE</th><th>Risco</th></tr></thead><tbody>${linhas || '<tr><td colspan="9">Nenhuma nota no filtro atual.</td></tr>'}</tbody></table><script>window.onload=function(){window.print()}</script></body></html>`);
     janela.document.close();
   }
 
@@ -5244,8 +5271,11 @@ function RelatoriosDashboard({
           <button type="button" onClick={baixarRelatorioNotasCsv} className="rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm font-semibold text-[var(--ink)] hover:bg-[var(--surface-2)]">
             Notas fiscais CSV
           </button>
-          <button type="button" onClick={baixarRelatorioProdutosTributadosCsv} className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-800 hover:bg-amber-100">
-            Produtos ST/ANTC CSV
+          <button type="button" onClick={() => baixarRelatorioProdutosTributadosCsv('ANTECIPACAO')} className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-800 hover:bg-amber-100">
+            Produtos ANTC CSV
+          </button>
+          <button type="button" onClick={() => baixarRelatorioProdutosTributadosCsv('ST')} className="rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm font-semibold text-red-800 hover:bg-red-100">
+            Produtos ST CSV
           </button>
           <button type="button" onClick={baixarRelatorioPendenciasCsv} className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-800 hover:bg-amber-100">
             Pendências CSV ({todasPendencias.length})
@@ -5280,7 +5310,7 @@ function RelatoriosDashboard({
         <KpiCard label="Itens ANTC" value={String(resumoFiscal.itensAntecipacao)} sub={`${resumoFiscal.notasComAntecipacao} nota(s) com 1023`} tone="warn" />
         <KpiCard label="Itens ST" value={String(resumoFiscal.itensSt)} sub={`${resumoFiscal.notasComSt} nota(s) com 1031`} tone="crit" />
         <KpiCard label="Filtro item" value={rotuloTributoItem(filtrosRelatorioAplicados.tributoItem)} sub="Base por produto SITRAM" tone="neu" />
-        <KpiCard label="Produtos trib." value={String(resumoFiscal.itensAntecipacao + resumoFiscal.itensSt)} sub="ST + ANTC no filtro" tone="neu" />
+        <KpiCard label="Produtos trib." value={String(resumoFiscal.itensAntecipacao + resumoFiscal.itensSt)} sub={filtrosRelatorioAplicados.tributoItem === 'todos' ? 'ST e ANTC separados' : rotuloTributoItem(filtrosRelatorioAplicados.tributoItem)} tone="neu" />
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
@@ -5551,7 +5581,7 @@ function RelatoriosDashboard({
           <div className="text-xs text-[var(--ink-mut)]">{notasPeriodo.length} nota(s) filtrada(s)</div>
         </div>
         <div className="overflow-x-auto">
-          <table className="min-w-[1280px] text-left text-xs">
+          <table className="min-w-[1460px] text-left text-xs">
             <thead className="text-[var(--ink-mut)]">
               <tr>
                 <th className="px-2 py-2 font-semibold">{rt('Emissão', '开票日期')}</th>
@@ -5564,12 +5594,16 @@ function RelatoriosDashboard({
                 <th className="px-2 py-2 text-right font-semibold">Total</th>
                 <th className="px-2 py-2 text-right font-semibold">ICMS</th>
                 <th className="px-2 py-2 font-semibold">DAE</th>
-                <th className="px-2 py-2 font-semibold">Item fiscal</th>
+                <th className="px-2 py-2 font-semibold">ANTC 1023</th>
+                <th className="px-2 py-2 font-semibold">ST 1031</th>
                 <th className="px-2 py-2 font-semibold">Risco</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[var(--border)]">
-              {notasTabela.map((nota) => (
+              {notasTabela.map((nota) => {
+                const itensAntc = itensTributadosPorTipoRelatorio(nota.itensTributados, 'ANTECIPACAO', filtrosRelatorioAplicados.tributoItem);
+                const itensSt = itensTributadosPorTipoRelatorio(nota.itensTributados, 'ST', filtrosRelatorioAplicados.tributoItem);
+                return (
                 <tr
                   key={`nota-rel-${nota.id}`}
                   className="cursor-pointer hover:bg-[var(--surface-2)]"
@@ -5586,24 +5620,36 @@ function RelatoriosDashboard({
                   <td className="px-2 py-2 text-right font-semibold text-[var(--ink)]">{moeda(nota.valor)}</td>
                   <td className="px-2 py-2 text-right text-[var(--ink)]">{moeda(nota.icms)}</td>
                   <td className="px-2 py-2"><Badge tone={nota.daeStatus === 'PAGO' ? 'green' : nota.daePendente ? 'red' : 'gray'}>{textoDaeSitram(nota.daeStatus)}</Badge></td>
-                  <td className="max-w-[240px] px-2 py-2">
+                  <td className="max-w-[260px] px-2 py-2">
                     <div className="flex flex-wrap gap-1">
-                      {nota.qtdItensAntecipacao > 0 && <Badge tone="amber">ANTC {nota.qtdItensAntecipacao}</Badge>}
-                      {nota.qtdItensSt > 0 && <Badge tone="red">ST {nota.qtdItensSt}</Badge>}
-                      {nota.itensTributados.length === 0 && <span className="text-[var(--ink-mut)]">-</span>}
+                      {itensAntc.length > 0 && <Badge tone="amber">ANTC {itensAntc.length}</Badge>}
+                      {itensAntc.length === 0 && <span className="text-[var(--ink-mut)]">-</span>}
                     </div>
-                    {nota.itensTributados.length > 0 && (
-                      <p className="mt-1 truncate text-[11px] text-[var(--ink-mut)]" title={nota.itensTributadosTexto}>
-                        {nota.itensTributados.slice(0, 2).map((item) => `${item.codigo ?? item.nItem} - ${item.produto}`).join(' | ')}
-                        {nota.itensTributados.length > 2 ? ` +${nota.itensTributados.length - 2}` : ''}
+                    {itensAntc.length > 0 && (
+                      <p className="mt-1 truncate text-[11px] text-[var(--ink-mut)]" title={nota.itensAntcTexto}>
+                        {itensAntc.slice(0, 2).map((item) => `${item.codigo ?? item.nItem} - ${item.produto}`).join(' | ')}
+                        {itensAntc.length > 2 ? ` +${itensAntc.length - 2}` : ''}
+                      </p>
+                    )}
+                  </td>
+                  <td className="max-w-[260px] px-2 py-2">
+                    <div className="flex flex-wrap gap-1">
+                      {itensSt.length > 0 && <Badge tone="red">ST {itensSt.length}</Badge>}
+                      {itensSt.length === 0 && <span className="text-[var(--ink-mut)]">-</span>}
+                    </div>
+                    {itensSt.length > 0 && (
+                      <p className="mt-1 truncate text-[11px] text-[var(--ink-mut)]" title={nota.itensStTexto}>
+                        {itensSt.slice(0, 2).map((item) => `${item.codigo ?? item.nItem} - ${item.produto}`).join(' | ')}
+                        {itensSt.length > 2 ? ` +${itensSt.length - 2}` : ''}
                       </p>
                     )}
                   </td>
                   <td className="px-2 py-2"><Badge tone={nota.risco === 'baixo' ? 'green' : nota.risco === 'medio' ? 'amber' : nota.risco === 'alto' ? 'orange' : 'red'}>{nota.risco === 'critico' ? rt('crítico', '严重') : nota.risco === 'medio' ? rt('médio', '中') : nota.risco === 'alto' ? rt('alto', '高') : rt('baixo', '低')}</Badge></td>
                 </tr>
-              ))}
+                );
+              })}
               {notasTabela.length === 0 && (
-                <tr><td colSpan={12} className="px-2 py-4 text-center text-[var(--ink-mut)]">Nenhuma nota no filtro atual.</td></tr>
+                <tr><td colSpan={13} className="px-2 py-4 text-center text-[var(--ink-mut)]">Nenhuma nota no filtro atual.</td></tr>
               )}
             </tbody>
           </table>

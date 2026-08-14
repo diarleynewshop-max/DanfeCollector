@@ -7,6 +7,12 @@ import {
   lancamentosVisiveisDae,
   statusDaeEfetivo,
 } from './sitram/dae';
+import {
+  codigoReceitaTributoItemSitram,
+  resumirTributosItensSitram,
+  rotuloTributoItemSitram,
+  type TipoTributoItemSitram,
+} from './sitram/espelho';
 import { consultarIeFornecedor, limparCnpjFornecedor } from './ieFornecedor';
 
 function soma(valores: Array<number | null | undefined>): number {
@@ -17,7 +23,12 @@ function urlAbsoluta(req: Request, caminho: string): string {
   return new URL(caminho, req.url).toString();
 }
 
-export async function consultarNotaFiscalApi(chaveInformada: string, req: Request, incluirXml = false) {
+export async function consultarNotaFiscalApi(
+  chaveInformada: string,
+  req: Request,
+  incluirXml = false,
+  tributoItem?: TipoTributoItemSitram
+) {
   const chave = chaveInformada.replace(/\D/g, '');
   if (chave.length !== 44) {
     return { status: 400, body: { success: false, message: 'Chave de acesso invalida. Informe 44 digitos.' } };
@@ -43,6 +54,8 @@ export async function consultarNotaFiscalApi(chaveInformada: string, req: Reques
   const daeValorAberto = soma(lancamentos.map((lancamento) => lancamento.valorAberto));
   const xml = incluirXml ? await lerXmlComFallback(nota.xmlStorageKey, nota.xmlPath) : null;
   const danfe = xml ? parseDanfe(xml) : null;
+  const resumoItensFiscais = resumirTributosItensSitram(nota);
+  const itensFiscais = resumoItensFiscais.itens.filter((item) => !tributoItem || item.tipoTributo === tributoItem);
 
   return {
     status: 200,
@@ -76,6 +89,24 @@ export async function consultarNotaFiscalApi(chaveInformada: string, req: Reques
         impostos: {
           icms: nota.valorIcms,
           totalTributosXml: danfe?.total.vTotTrib ?? null,
+        },
+        itensFiscais: {
+          filtro: tributoItem ?? 'todos',
+          qtdSt: resumoItensFiscais.st,
+          qtdAntecipacao: resumoItensFiscais.antecipacao,
+          itens: itensFiscais.map((item) => ({
+            item: item.nItem,
+            codigo: item.codigo,
+            ncm: item.ncm,
+            produto: item.produto,
+            tipoTributo: item.tipoTributo,
+            codigoReceita: codigoReceitaTributoItemSitram(item.tipoTributo),
+            descricao: rotuloTributoItemSitram(item.tipoTributo),
+            valorProduto: item.valorTotal,
+            icmsSt: item.icmsSt,
+            icmsAntecipacao: item.icmsAntecipacao,
+            origem: item.origemTributo,
+          })),
         },
         dae: {
           status: statusDae || null,

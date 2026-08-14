@@ -131,6 +131,22 @@ export interface ResumoTributosItensSitram {
   itens: ItemTributadoSitramResumo[];
 }
 
+export function normalizarTipoTributoItemSitram(valor: string | null | undefined): TipoTributoItemSitram | undefined {
+  const texto = String(valor ?? '').trim().toUpperCase();
+  if (!texto || texto === 'TODOS') return undefined;
+  if (texto === 'ST' || texto === 'SUBT' || texto === '1031') return 'ST';
+  if (texto === 'ANTECIPACAO' || texto === 'ANTECIPAÇÃO' || texto === 'ANTC' || texto === '1023') return 'ANTECIPACAO';
+  return undefined;
+}
+
+export function codigoReceitaTributoItemSitram(tipo: TipoTributoItemSitram): '1031' | '1023' {
+  return tipo === 'ST' ? '1031' : '1023';
+}
+
+export function rotuloTributoItemSitram(tipo: TipoTributoItemSitram): '1031 - SUBT' | '1023 - ANTC' {
+  return tipo === 'ST' ? '1031 - SUBT' : '1023 - ANTC';
+}
+
 function registro(valor: unknown): Registro {
   return valor && typeof valor === 'object' && !Array.isArray(valor) ? valor as Registro : {};
 }

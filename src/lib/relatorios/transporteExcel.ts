@@ -34,7 +34,8 @@ type LinhaRelatorio = {
   icmsDestacado: number | null;
   itensAntc: number;
   itensSt: number;
-  produtosTributados: string;
+  produtosAntc: string;
+  produtosSt: string;
   situacaoNfe: string;
   tipo: string;
   status: string;
@@ -52,7 +53,8 @@ const COLUNAS = [
   { key: 'icmsDestacado', header: 'ICMS Destacado', width: 17.38, hidden: false, numFmt: '#,##0.00' },
   { key: 'itensAntc', header: 'Itens ANTC 1023', width: 16, hidden: false },
   { key: 'itensSt', header: 'Itens ST 1031', width: 14, hidden: false },
-  { key: 'produtosTributados', header: 'Produtos ST/ANTC', width: 54, hidden: false },
+  { key: 'produtosAntc', header: 'Produtos ANTC 1023', width: 54, hidden: false },
+  { key: 'produtosSt', header: 'Produtos ST 1031', width: 54, hidden: false },
   { key: 'situacaoNfe', header: 'Situação NF-e', width: 14.88, hidden: false },
   { key: 'tipo', header: 'TIPO', width: 14.63, hidden: false },
   { key: 'status', header: 'STATUS', width: 34.38, hidden: false },
@@ -160,13 +162,24 @@ function rotuloTributoItem(tipo: TipoTributoItemSitram): string {
   return tipo === 'ST' ? '1031 - SUBT' : '1023 - ANTC';
 }
 
-function textoProdutosTributados(resumo: ResumoTributosItensSitram): string {
+function textoProdutosTributados(resumo: ResumoTributosItensSitram, tipo: TipoTributoItemSitram): string {
   return resumo.itens
+    .filter((item) => item.tipoTributo === tipo)
     .map((item) => `${rotuloTributoItem(item.tipoTributo)} | item ${item.nItem} | ${item.codigo ?? '-'} | ${item.produto}`)
     .join(' ; ');
 }
 
-function montarLinha(nota: NotaTransporte, resumoTributos: ResumoTributosItensSitram): LinhaRelatorio {
+function contarItensRelatorio(resumo: ResumoTributosItensSitram, tipo: TipoTributoItemSitram, filtro?: TipoTributoItemSitram): number {
+  if (filtro && filtro !== tipo) return 0;
+  return tipo === 'ST' ? resumo.st : resumo.antecipacao;
+}
+
+function textoProdutosRelatorio(resumo: ResumoTributosItensSitram, tipo: TipoTributoItemSitram, filtro?: TipoTributoItemSitram): string {
+  if (filtro && filtro !== tipo) return '';
+  return textoProdutosTributados(resumo, tipo);
+}
+
+function montarLinha(nota: NotaTransporte, resumoTributos: ResumoTributosItensSitram, filtroTributoItem?: TipoTributoItemSitram): LinhaRelatorio {
   return {
     chaveAcesso: nota.chave,
     numeroNota: nota.numero || numeroNotaDaChave(nota.chave),
@@ -177,9 +190,10 @@ function montarLinha(nota: NotaTransporte, resumoTributos: ResumoTributosItensSi
     uf: nota.emitenteUf || '',
     valorNfe: nota.valorTotal ?? null,
     icmsDestacado: nota.valorIcms ?? null,
-    itensAntc: resumoTributos.antecipacao,
-    itensSt: resumoTributos.st,
-    produtosTributados: textoProdutosTributados(resumoTributos),
+    itensAntc: contarItensRelatorio(resumoTributos, 'ANTECIPACAO', filtroTributoItem),
+    itensSt: contarItensRelatorio(resumoTributos, 'ST', filtroTributoItem),
+    produtosAntc: textoProdutosRelatorio(resumoTributos, 'ANTECIPACAO', filtroTributoItem),
+    produtosSt: textoProdutosRelatorio(resumoTributos, 'ST', filtroTributoItem),
     situacaoNfe: textoSituacao(nota.situacaoSefaz),
     tipo: '',
     status: '',
@@ -384,7 +398,7 @@ export async function gerarRelatorioTransporteExcel(filtros: FiltrosRelatorioTra
   for (const { nota, resumoTributos } of notasFiltradas) {
     const mes = chaveMes(nota.emitidaEm);
     const linhasMes = linhasPorMes.get(mes) ?? [];
-    linhasMes.push(montarLinha(nota, resumoTributos));
+    linhasMes.push(montarLinha(nota, resumoTributos, filtros.tributoItem));
     linhasPorMes.set(mes, linhasMes);
   }
 
