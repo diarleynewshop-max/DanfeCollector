@@ -68,7 +68,12 @@ import {
   statusDaeEfetivo,
   type LancamentoDaeNormalizado,
 } from '@/lib/sitram/dae';
-import { extrairEspelhoSitram } from '@/lib/sitram/espelho';
+import {
+  extrairEspelhoSitram,
+  resumirTributosItensSitram,
+  type ResumoTributosItensSitram,
+  type TipoTributoItemSitram,
+} from '@/lib/sitram/espelho';
 import type { UsuarioLogado } from '@/lib/usuarios/auth';
 import {
   listarUsuariosAdmin,
@@ -108,6 +113,7 @@ type FiltroSituacaoNota = 'inconsistente' | 'efetivada' | 'denegada' | 'pendente
 type FiltroOrigemNota = 'proprio' | 'terceiro';
 type FiltroManifestoNota = 'manifestada' | 'nao-manifestada' | 'pendente-processando' | 'com-erros';
 type FiltroModalidadeNota = 'simplificada' | 'estorno' | 'devolucao' | 'transferencia' | 'normal' | 'ajuste-icms';
+type FiltroTributoItem = 'todos' | TipoTributoItemSitram;
 type SecaoApp = 'home' | 'notas' | 'relatorios' | 'ie-fornecedor' | 'empresas' | 'usuarios' | 'configuracao';
 type ColunaRedimensionavel = 'nf' | 'emitente' | 'destinatario' | 'valores' | 'transporte' | 'sitram' | 'status';
 type FiltrosNotasAplicados = {
@@ -140,6 +146,7 @@ type FiltrosNotasAplicados = {
   origens: FiltroOrigemNota[];
   manifestos: FiltroManifestoNota[];
   modalidades: FiltroModalidadeNota[];
+  tributoItem: FiltroTributoItem;
 };
 type FiltrosRelatorioAplicados = {
   dataInicio: string;
@@ -152,6 +159,7 @@ type FiltrosRelatorioAplicados = {
   fornecedorAtivo: boolean;
   risco: string;
   busca: string;
+  tributoItem: FiltroTributoItem;
 };
 
 // DAE "a pagar" = DAE em aberto ou ainda a gerar (imposto pendente de pagamento)
@@ -201,6 +209,10 @@ const MODALIDADE_NOTA_OPCOES: Array<{ valor: FiltroModalidadeNota; label: string
   { valor: 'normal', label: 'Normal' },
   { valor: 'ajuste-icms', label: 'Ajuste - ICMS' },
 ];
+const TRIBUTO_ITEM_OPCOES: Array<{ valor: TipoTributoItemSitram; label: string }> = [
+  { valor: 'ANTECIPACAO', label: '1023 - ANTC' },
+  { valor: 'ST', label: '1031 - SUBT' },
+];
 const CAMPO_FILTRO_NOTAS =
   'h-9 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-300 disabled:bg-slate-100 disabled:text-slate-500';
 const LARGURAS_COLUNAS_PADRAO: Record<ColunaRedimensionavel, number> = {
@@ -244,6 +256,7 @@ function filtrosNotasPadrao(): FiltrosNotasAplicados {
     origens: [],
     manifestos: [],
     modalidades: [],
+    tributoItem: 'todos',
   };
 }
 
@@ -439,6 +452,21 @@ function toneDaeSitram(status: string | null | undefined): 'green' | 'orange' | 
   if (status === 'LIBERADA_PARA_GERAR') return 'amber';
   if (status === 'CONSULTADO') return 'blue';
   return 'gray';
+}
+
+function rotuloTributoItem(tipo: FiltroTributoItem | null | undefined): string {
+  if (tipo === 'ST') return '1031 - SUBT';
+  if (tipo === 'ANTECIPACAO') return '1023 - ANTC';
+  return 'Todos';
+}
+
+function resumoTributosItensNota(nota: NotaComCnpj): ResumoTributosItensSitram {
+  return resumirTributosItensSitram(nota);
+}
+
+function notaTemTributoItem(resumo: Pick<ResumoTributosItensSitram, 'st' | 'antecipacao'>, tipo: FiltroTributoItem): boolean {
+  if (tipo === 'todos') return true;
+  return tipo === 'ST' ? resumo.st > 0 : resumo.antecipacao > 0;
 }
 
 function toneRecebimentoStatus(status: string | null | undefined): 'green' | 'orange' | 'gray' | 'amber' | 'blue' | 'indigo' {
@@ -799,6 +827,7 @@ export default function Dashboard({
   const [filtroCnpjId, setFiltroCnpjId] = useState<number | 'todos'>('todos');
   const [filtroStatus, setFiltroStatus] = useState<'todos' | 'RESUMO' | 'COMPLETA'>('todos');
   const [expandida, setExpandida] = useState<number | null>(null);
+  const [destaqueTributoNotaAberta, setDestaqueTributoNotaAberta] = useState<TipoTributoItemSitram | null>(null);
 
   // Painel de importação da relação de pagamento SITRAM
   const [mostrarPagamento, setMostrarPagamento] = useState(false);
@@ -861,6 +890,7 @@ export default function Dashboard({
   const [filtroOrigens, setFiltroOrigens] = useState<FiltroOrigemNota[]>([]);
   const [filtroManifestos, setFiltroManifestos] = useState<FiltroManifestoNota[]>([]);
   const [filtroModalidades, setFiltroModalidades] = useState<FiltroModalidadeNota[]>([]);
+  const [filtroTributoItem, setFiltroTributoItem] = useState<FiltroTributoItem>('todos');
   const [filtrosAplicadosNotas, setFiltrosAplicadosNotas] = useState<FiltrosNotasAplicados>(() => filtrosNotasPadrao());
 
   const daePorNota = useMemo(
@@ -970,6 +1000,10 @@ export default function Dashboard({
     setFiltroModalidades((atuais) => alternarValorFiltro(atuais, valor) as FiltroModalidadeNota[]);
   }
 
+  function toggleFiltroTributoItem(valor: string) {
+    setFiltroTributoItem((atual) => (atual === valor ? 'todos' : valor as TipoTributoItemSitram));
+  }
+
   function adicionarExclusaoEmitente() {
     const valor = excluirEmitenteInput.trim();
     if (!valor) return;
@@ -1009,6 +1043,7 @@ export default function Dashboard({
     filtroOrigens.length > 0 ? '1' : '',
     filtroManifestos.length > 0 ? '1' : '',
     filtroModalidades.length > 0 ? '1' : '',
+    filtroTributoItem !== 'todos' ? '1' : '',
     filtroEtiquetas.length > 0 ? '1' : '',
     filtroExcluirEmitentes.length > 0 ? '1' : '',
   ].filter(Boolean).length;
@@ -1039,6 +1074,7 @@ export default function Dashboard({
     filtrosAplicadosNotas.origens.length > 0 ? '1' : '',
     filtrosAplicadosNotas.manifestos.length > 0 ? '1' : '',
     filtrosAplicadosNotas.modalidades.length > 0 ? '1' : '',
+    filtrosAplicadosNotas.tributoItem !== 'todos' ? '1' : '',
     filtrosAplicadosNotas.etiquetas.length > 0 ? '1' : '',
     filtrosAplicadosNotas.excluirEmitentes.length > 0 ? '1' : '',
   ].filter(Boolean).length;
@@ -1071,6 +1107,7 @@ export default function Dashboard({
     filtrosAplicadosNotas.origens.join('\u0001') !== filtroOrigens.join('\u0001') ||
     filtrosAplicadosNotas.manifestos.join('\u0001') !== filtroManifestos.join('\u0001') ||
     filtrosAplicadosNotas.modalidades.join('\u0001') !== filtroModalidades.join('\u0001') ||
+    filtrosAplicadosNotas.tributoItem !== filtroTributoItem ||
     filtrosAplicadosNotas.etiquetas.join('\u0001') !== filtroEtiquetas.join('\u0001') ||
     filtrosAplicadosNotas.excluirEmitentes.join('\u0001') !== filtroExcluirEmitentes.join('\u0001');
   // Há alguma busca/filtro ativo? (inclui empresa, status e a busca por número)
@@ -1144,6 +1181,7 @@ export default function Dashboard({
       origens: [...filtroOrigens],
       manifestos: [...filtroManifestos],
       modalidades: [...filtroModalidades],
+      tributoItem: filtroTributoItem,
       ...overrides,
     };
   }
@@ -1311,6 +1349,8 @@ export default function Dashboard({
     setFiltroOrigens([]);
     setFiltroManifestos([]);
     setFiltroModalidades([]);
+    setFiltroTributoItem('todos');
+    setDestaqueTributoNotaAberta(null);
     setFiltroEtiquetas([]);
     setFiltroExcluirEmitentes([]);
     setExcluirEmitenteInput('');
@@ -1429,6 +1469,7 @@ export default function Dashboard({
   const filtroOrigensBusca = filtrosAplicadosNotas.origens;
   const filtroManifestosBusca = filtrosAplicadosNotas.manifestos;
   const filtroModalidadesBusca = filtrosAplicadosNotas.modalidades;
+  const filtroTributoItemBusca = filtrosAplicadosNotas.tributoItem;
   const filtroEtiquetasBusca = filtrosAplicadosNotas.etiquetas;
   const filtroExcluirEmitentesBusca = filtrosAplicadosNotas.excluirEmitentes;
   const notasBuscaIndex = useMemo(() => new Map(notas.map((n) => [
@@ -1444,6 +1485,7 @@ export default function Dashboard({
       entradaEm: new Date(n.createdAt),
       etiquetas: parseEtiquetas(n.etiqueta),
       modalidades: modalidadesDaNota(n),
+      tributosItens: resumoTributosItensNota(n),
       situacaoSitram: situacaoSitramEfetiva(n) ?? '',
       dae: statusDaeEfetivo(n),
       suspeitasDuplicidade: extrairPagamentoIcmsSitram(n).suspeitasDuplicidade.length,
@@ -1572,6 +1614,8 @@ export default function Dashboard({
         return false;
       }
 
+      if (!notaTemTributoItem(idx.tributosItens, filtroTributoItemBusca)) return false;
+
       if (filtroDaeSitramBusca !== 'todos') {
         const dae = idx.dae;
         const consultada = !!n.sitramConsultadaEm || !!dae;
@@ -1634,6 +1678,7 @@ export default function Dashboard({
     filtroOrigensBusca,
     filtroManifestosBusca,
     filtroModalidadesBusca,
+    filtroTributoItemBusca,
     filtroEtiquetasBusca,
     filtroExcluirEmitentesBusca,
   ]);
@@ -1670,6 +1715,7 @@ export default function Dashboard({
     filtroOrigensBusca,
     filtroManifestosBusca,
     filtroModalidadesBusca,
+    filtroTributoItemBusca,
     filtroEtiquetasBusca,
     filtroExcluirEmitentesBusca,
   ]);
@@ -1770,6 +1816,57 @@ export default function Dashboard({
     if (filtros.status) setFiltroStatus(filtros.status);
     if (filtros.daeSitram) setFiltroDaeSitram(filtros.daeSitram);
     void aplicarFiltrosNotas(filtros);
+  }
+
+  function alternarNotaVisivel(nota: NotaComCnpj) {
+    const vaiAbrir = expandida !== nota.id;
+    setExpandida(vaiAbrir ? nota.id : null);
+    if (!vaiAbrir) return;
+    setDestaqueTributoNotaAberta(filtroTributoItemBusca === 'todos' ? null : filtroTributoItemBusca);
+  }
+
+  async function abrirNotaComDestaque(notaId: number, destaque: FiltroTributoItem = 'todos') {
+    let nota = notas.find((item) => item.id === notaId) ?? null;
+
+    if (!nota) {
+      const encontrada = await obterNotaPorId(notaId);
+      if (!encontrada) {
+        setStatus({ success: false, message: 'Nota nao encontrada ou sem acesso.' });
+        return;
+      }
+      nota = encontrada as NotaComCnpj;
+      notasEstendidasRef.current = true;
+      setNotas((atuais) => atuais.some((item) => item.id === notaId) ? atuais : [nota as NotaComCnpj, ...atuais]);
+      setNotasAlerta((atuais) => atuais.some((item) => item.id === notaId) ? atuais : [nota as NotaComCnpj, ...atuais]);
+    }
+
+    const destaqueAtivo = destaque === 'todos' ? null : destaque;
+    setSecaoAtual('notas');
+    setMostrarFiltros(true);
+    setModoFiltroNotas('avancado');
+    setFiltroNumero('');
+    setFiltroChave(nota.chave);
+    setFiltroCnpjId('todos');
+    setFiltroStatus('todos');
+    setFiltroTributoItem(destaque);
+    setFiltrosAplicadosNotas({
+      ...filtrosNotasPadrao(),
+      chave: nota.chave,
+      tributoItem: destaque,
+    });
+    setPaginaCliente(1);
+    setExpandida(nota.id);
+    setDestaqueTributoNotaAberta(destaqueAtivo);
+    setStatus({
+      success: true,
+      message: destaqueAtivo ? `NF aberta com destaque ${rotuloTributoItem(destaqueAtivo)}.` : 'NF aberta.',
+    });
+
+    if (typeof window !== 'undefined') {
+      window.requestAnimationFrame(() => {
+        document.getElementById('lista-notas-resultados')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+    }
   }
   // Manifestação em lote
   const [selecionadas, setSelecionadas] = useState<Set<number>>(new Set());
@@ -2311,6 +2408,7 @@ export default function Dashboard({
             total={totalRelatorio}
             temMais={temMaisRelatorio}
             onCarregarMais={carregarMaisRelatorio}
+            onAbrirNota={abrirNotaComDestaque}
           />
         )}
 
@@ -3167,6 +3265,12 @@ export default function Dashboard({
                       onToggle={(valor) => setFiltroDaeSitram(filtroDaeSitram === valor ? 'todos' : valor as FiltroDaeSitram)}
                     />
                     <div className="space-y-2">
+                      <GrupoCheckboxFiltro
+                        titulo="Tributo por item"
+                        opcoes={TRIBUTO_ITEM_OPCOES}
+                        selecionados={filtroTributoItem === 'todos' ? [] : [filtroTributoItem]}
+                        onToggle={toggleFiltroTributoItem}
+                      />
                       <CampoFiltroNotas label="Situacao SITRAM">
                         <CampoBuscaOpcoesFiltro
                           valor={filtroSituacaoSitram}
@@ -3990,11 +4094,13 @@ export default function Dashboard({
                       key={n.id}
                       nota={n}
                       aberta={expandida === n.id}
-                      onToggle={() => setExpandida(expandida === n.id ? null : n.id)}
+                      onToggle={() => alternarNotaVisivel(n)}
                       selecionavel={true}
                       selecionada={selecionadas.has(n.id)}
                       onToggleSelecionada={() => toggleSelecionada(n.id)}
                       onNotaAtualizada={atualizarNotaLocal}
+                      abaInicialDetalhe={filtroTributoItemBusca === 'todos' ? 'dados' : 'itens'}
+                      destaqueTributoItem={expandida === n.id ? destaqueTributoNotaAberta : null}
                     />
                   ))}
                 </tbody>
@@ -4258,12 +4364,14 @@ function RelatoriosDashboard({
   total,
   temMais,
   onCarregarMais,
+  onAbrirNota,
 }: {
   notas: NotaRelatorio[];
   carregando: boolean;
   total: number;
   temMais: boolean;
   onCarregarMais: () => void;
+  onAbrirNota: (notaId: number, destaque: FiltroTributoItem) => void;
 }) {
   const { idioma, t } = useIdioma();
   const [ufSelecionada, setUfSelecionada] = useState<string | null>(null);
@@ -4278,6 +4386,7 @@ function RelatoriosDashboard({
   const [buscaFornecedorRelatorio, setBuscaFornecedorRelatorio] = useState('');
   const [filtroRiscoRelatorio, setFiltroRiscoRelatorio] = useState('todos');
   const [buscaRelatorio, setBuscaRelatorio] = useState('');
+  const [filtroTributoItemRelatorio, setFiltroTributoItemRelatorio] = useState<FiltroTributoItem>('todos');
   const [limiteTabela, setLimiteTabela] = useState(20);
   const [baixandoExcelTransporte, setBaixandoExcelTransporte] = useState(false);
   const [erroExcelTransporte, setErroExcelTransporte] = useState<string | null>(null);
@@ -4292,6 +4401,7 @@ function RelatoriosDashboard({
     fornecedorAtivo: false,
     risco: 'todos',
     busca: '',
+    tributoItem: 'todos',
   });
   const inicioPeriodo = filtrosRelatorioAplicados.dataInicio && filtrosRelatorioAplicados.dataFim && filtrosRelatorioAplicados.dataInicio > filtrosRelatorioAplicados.dataFim
     ? filtrosRelatorioAplicados.dataFim
@@ -4306,6 +4416,9 @@ function RelatoriosDashboard({
     const daeStatus = statusDaeEfetivo(nota);
     const diasDae = diasAteVencimento(nota.daeVencimento);
     const daePendente = DAE_A_PAGAR.includes(daeStatus);
+    const itensTributadosTexto = nota.itensTributados
+      .map((item) => `${rotuloTributoItem(item.tipoTributo)} ${item.nItem} ${item.codigo ?? ''} ${item.ncm ?? ''} ${item.produto}`)
+      .join(' | ');
     const pendencias = [
       nota.status === 'RESUMO' ? 'XML completo pendente' : null,
       !nota.manifestadaEm ? 'Sem manifestação' : null,
@@ -4353,7 +4466,9 @@ function RelatoriosDashboard({
         nota.destCnpj,
         nota.cnpj.razaoSocial,
         nota.cnpj.cnpj,
+        itensTributadosTexto,
       ].filter(Boolean).join(' ')),
+      itensTributadosTexto,
     };
   }), [notas]);
 
@@ -4445,6 +4560,7 @@ function RelatoriosDashboard({
       if (filtrosRelatorioAplicados.tipo !== 'todos' && n.tipoLabel !== filtrosRelatorioAplicados.tipo) return false;
       if (filtrosRelatorioAplicados.situacoes.length === 0 || !filtrosRelatorioAplicados.situacoes.includes(n.situacaoSefaz)) return false;
       if (!notaPassaFiltroDaeRelatorio(n)) return false;
+      if (!notaTemTributoItem({ st: n.qtdItensSt, antecipacao: n.qtdItensAntecipacao }, filtrosRelatorioAplicados.tributoItem)) return false;
       if (filtrosRelatorioAplicados.risco !== 'todos' && n.risco !== filtrosRelatorioAplicados.risco) return false;
       if (busca && !n.buscaTexto.includes(busca)) return false;
       return true;
@@ -4523,6 +4639,10 @@ function RelatoriosDashboard({
     let aguardandoConferencia = 0;
     let daeVencidoQtd = 0;
     let daeVencidoValor = 0;
+    let itensSt = 0;
+    let itensAntecipacao = 0;
+    let notasComSt = 0;
+    let notasComAntecipacao = 0;
     const riscos = { baixo: 0, medio: 0, alto: 0, critico: 0 };
 
     for (const nota of notasPeriodo) {
@@ -4535,6 +4655,10 @@ function RelatoriosDashboard({
       if (nota.daeStatus === 'SEM_DAE') daeSemCobrancaQtd++;
       if (nota.situacaoSefaz === 'CANCELADA' || nota.situacaoSefaz === 'DENEGADA') canceladas++;
       if (nota.status === 'RESUMO') aguardandoConferencia++;
+      itensSt += nota.qtdItensSt;
+      itensAntecipacao += nota.qtdItensAntecipacao;
+      if (nota.qtdItensSt > 0) notasComSt++;
+      if (nota.qtdItensAntecipacao > 0) notasComAntecipacao++;
       if (nota.risco in riscos) riscos[nota.risco as keyof typeof riscos]++;
       if (nota.daePendente && nota.diasDae !== null && nota.diasDae < 0) {
         daeVencidoQtd++;
@@ -4570,6 +4694,10 @@ function RelatoriosDashboard({
       aguardandoConferencia,
       daeVencidoQtd,
       daeVencidoValor,
+      itensSt,
+      itensAntecipacao,
+      notasComSt,
+      notasComAntecipacao,
       riscos,
       meses,
       maxMes: Math.max(...meses.map(([, v]) => v.valor), 0),
@@ -4661,7 +4789,8 @@ function RelatoriosDashboard({
     filtrosRelatorioAplicados.fornecedores.join('\u0001') !== filtroFornecedoresRelatorio.join('\u0001') ||
     filtrosRelatorioAplicados.fornecedorAtivo !== fornecedorFiltroAtivo ||
     filtrosRelatorioAplicados.risco !== filtroRiscoRelatorio ||
-    filtrosRelatorioAplicados.busca !== buscaRelatorio;
+    filtrosRelatorioAplicados.busca !== buscaRelatorio ||
+    filtrosRelatorioAplicados.tributoItem !== filtroTributoItemRelatorio;
 
   function aplicarFiltrosRelatorio() {
     setFiltrosRelatorioAplicados({
@@ -4675,6 +4804,7 @@ function RelatoriosDashboard({
       fornecedorAtivo: fornecedorFiltroAtivo,
       risco: filtroRiscoRelatorio,
       busca: buscaRelatorio,
+      tributoItem: filtroTributoItemRelatorio,
     });
     setUfSelecionada(null);
     setLimiteTabela(20);
@@ -4694,6 +4824,7 @@ function RelatoriosDashboard({
     setBuscaFornecedorRelatorio('');
     setFiltroRiscoRelatorio('todos');
     setBuscaRelatorio('');
+    setFiltroTributoItemRelatorio('todos');
     setFiltrosRelatorioAplicados({
       dataInicio: '',
       dataFim: '',
@@ -4705,6 +4836,7 @@ function RelatoriosDashboard({
       fornecedorAtivo: false,
       risco: 'todos',
       busca: '',
+      tributoItem: 'todos',
     });
     setUfSelecionada(null);
     setLimiteTabela(20);
@@ -4730,6 +4862,7 @@ function RelatoriosDashboard({
       fornecedorAtivo: fornecedorFiltroAtivo,
       risco: filtroRiscoRelatorio,
       busca: buscaRelatorio,
+      tributoItem: filtroTributoItemRelatorio,
     };
   }
 
@@ -4762,6 +4895,7 @@ function RelatoriosDashboard({
     }
     if (filtros.risco !== 'todos') params.set('risco', filtros.risco);
     if (filtros.busca.trim()) params.set('busca', filtros.busca.trim());
+    if (filtros.tributoItem !== 'todos') params.set('tributoItem', filtros.tributoItem);
     return params;
   }
 
@@ -4828,7 +4962,7 @@ function RelatoriosDashboard({
   }
 
   function baixarRelatorioNotasCsv() {
-    baixarCsv('relatorio-notas-fiscais.csv', ['Emissao', 'NF', 'Serie', 'Empresa', 'Fornecedor', 'CNPJ fornecedor', 'UF', 'XML', 'Total NF', 'ICMS', 'DAE', 'Risco'], notasPeriodo.map((nota) => [
+    baixarCsv('relatorio-notas-fiscais.csv', ['Emissao', 'NF', 'Serie', 'Empresa', 'Fornecedor', 'CNPJ fornecedor', 'UF', 'XML', 'Total NF', 'ICMS', 'DAE', 'Itens ANTC', 'Itens ST', 'Risco'], notasPeriodo.map((nota) => [
       data(nota.emitidaEm),
       numeroNotaSistema(nota),
       serieNotaSistema(nota),
@@ -4840,8 +4974,41 @@ function RelatoriosDashboard({
       nota.valor,
       nota.icms,
       textoDaeSitram(nota.daeStatus),
+      nota.qtdItensAntecipacao,
+      nota.qtdItensSt,
       nota.risco,
     ]));
+  }
+
+  function baixarRelatorioProdutosTributadosCsv() {
+    const tipoFiltro = filtrosRelatorioAplicados.tributoItem;
+    const linhas = notasPeriodo.flatMap((nota) =>
+      nota.itensTributados
+        .filter((item) => tipoFiltro === 'todos' || item.tipoTributo === tipoFiltro)
+        .map((item) => [
+          data(nota.emitidaEm),
+          numeroNotaSistema(nota),
+          serieNotaSistema(nota),
+          nota.empresaLabel,
+          nota.emitenteNomeRelatorio,
+          nota.emitenteCnpj ? formatarCnpj(nota.emitenteCnpj) : '',
+          rotuloTributoItem(item.tipoTributo),
+          item.nItem,
+          item.codigo ?? '',
+          item.ncm ?? '',
+          item.produto,
+          item.valorTotal ?? '',
+          item.icmsSt ?? '',
+          item.icmsAntecipacao ?? '',
+          nota.chave,
+        ])
+    );
+
+    baixarCsv(
+      tipoFiltro === 'todos' ? 'relatorio-produtos-st-antc.csv' : `relatorio-produtos-${tipoFiltro === 'ST' ? 'st' : 'antc'}.csv`,
+      ['Emissao', 'NF', 'Serie', 'Empresa', 'Fornecedor', 'CNPJ fornecedor', 'Tributo', 'Item', 'Codigo', 'NCM', 'Produto', 'Valor produto', 'ICMS ST', 'ICMS ANTC', 'Chave'],
+      linhas
+    );
   }
 
   function baixarRelatorioPendenciasCsv() {
@@ -4947,6 +5114,19 @@ function RelatoriosDashboard({
           onLimpar={() => setFiltroDaesRelatorio([])}
           maxHeight="max-h-44"
         />
+        <div>
+          <label className="block text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-mut)]">Tributo item</label>
+          <select
+            value={filtroTributoItemRelatorio}
+            onChange={(e) => setFiltroTributoItemRelatorio(e.target.value as FiltroTributoItem)}
+            className="mt-1 rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-1.5 text-sm text-[var(--ink)]"
+          >
+            <option value="todos">Todos</option>
+            {TRIBUTO_ITEM_OPCOES.map((opcao) => (
+              <option key={opcao.valor} value={opcao.valor}>{opcao.label}</option>
+            ))}
+          </select>
+        </div>
         <ChecklistFiltro
           titulo="Fornecedor"
           opcoes={fornecedoresVisiveisRelatorio}
@@ -5064,6 +5244,9 @@ function RelatoriosDashboard({
           <button type="button" onClick={baixarRelatorioNotasCsv} className="rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm font-semibold text-[var(--ink)] hover:bg-[var(--surface-2)]">
             Notas fiscais CSV
           </button>
+          <button type="button" onClick={baixarRelatorioProdutosTributadosCsv} className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-800 hover:bg-amber-100">
+            Produtos ST/ANTC CSV
+          </button>
           <button type="button" onClick={baixarRelatorioPendenciasCsv} className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-800 hover:bg-amber-100">
             Pendências CSV ({todasPendencias.length})
           </button>
@@ -5091,6 +5274,13 @@ function RelatoriosDashboard({
         <KpiCard label="DAE pago" value={moeda(resumoFiscal.impostoPago)} sub={`${resumoFiscal.daePagoQtd} nota(s) paga(s)`} tone="good" />
         <KpiCard label="DAE a pagar" value={moeda(resumoFiscal.impostoPendente)} sub={`${resumoFiscal.daeAbertoQtd} nota(s) em aberto/a gerar`} tone="crit" />
         <KpiCard label="Sem consulta SITRAM" value={String(resumoFiscal.semSitram)} sub={`${resumoFiscal.canceladas} cancelada/denegada`} tone="warn" />
+      </div>
+
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <KpiCard label="Itens ANTC" value={String(resumoFiscal.itensAntecipacao)} sub={`${resumoFiscal.notasComAntecipacao} nota(s) com 1023`} tone="warn" />
+        <KpiCard label="Itens ST" value={String(resumoFiscal.itensSt)} sub={`${resumoFiscal.notasComSt} nota(s) com 1031`} tone="crit" />
+        <KpiCard label="Filtro item" value={rotuloTributoItem(filtrosRelatorioAplicados.tributoItem)} sub="Base por produto SITRAM" tone="neu" />
+        <KpiCard label="Produtos trib." value={String(resumoFiscal.itensAntecipacao + resumoFiscal.itensSt)} sub="ST + ANTC no filtro" tone="neu" />
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
@@ -5361,7 +5551,7 @@ function RelatoriosDashboard({
           <div className="text-xs text-[var(--ink-mut)]">{notasPeriodo.length} nota(s) filtrada(s)</div>
         </div>
         <div className="overflow-x-auto">
-          <table className="min-w-[1120px] text-left text-xs">
+          <table className="min-w-[1280px] text-left text-xs">
             <thead className="text-[var(--ink-mut)]">
               <tr>
                 <th className="px-2 py-2 font-semibold">{rt('Emissão', '开票日期')}</th>
@@ -5374,12 +5564,18 @@ function RelatoriosDashboard({
                 <th className="px-2 py-2 text-right font-semibold">Total</th>
                 <th className="px-2 py-2 text-right font-semibold">ICMS</th>
                 <th className="px-2 py-2 font-semibold">DAE</th>
+                <th className="px-2 py-2 font-semibold">Item fiscal</th>
                 <th className="px-2 py-2 font-semibold">Risco</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[var(--border)]">
               {notasTabela.map((nota) => (
-                <tr key={`nota-rel-${nota.id}`} className="hover:bg-[var(--surface-2)]">
+                <tr
+                  key={`nota-rel-${nota.id}`}
+                  className="cursor-pointer hover:bg-[var(--surface-2)]"
+                  onClick={() => onAbrirNota(nota.id, filtrosRelatorioAplicados.tributoItem)}
+                  title="Abrir nota"
+                >
                   <td className="px-2 py-2 text-[var(--ink)]">{data(nota.emitidaEm)}</td>
                   <td className="px-2 py-2 font-semibold text-[var(--ink)]">{numeroNotaSistema(nota) || '-'}</td>
                   <td className="px-2 py-2 text-[var(--ink-mut)]">{serieNotaSistema(nota) || '-'}</td>
@@ -5390,11 +5586,24 @@ function RelatoriosDashboard({
                   <td className="px-2 py-2 text-right font-semibold text-[var(--ink)]">{moeda(nota.valor)}</td>
                   <td className="px-2 py-2 text-right text-[var(--ink)]">{moeda(nota.icms)}</td>
                   <td className="px-2 py-2"><Badge tone={nota.daeStatus === 'PAGO' ? 'green' : nota.daePendente ? 'red' : 'gray'}>{textoDaeSitram(nota.daeStatus)}</Badge></td>
+                  <td className="max-w-[240px] px-2 py-2">
+                    <div className="flex flex-wrap gap-1">
+                      {nota.qtdItensAntecipacao > 0 && <Badge tone="amber">ANTC {nota.qtdItensAntecipacao}</Badge>}
+                      {nota.qtdItensSt > 0 && <Badge tone="red">ST {nota.qtdItensSt}</Badge>}
+                      {nota.itensTributados.length === 0 && <span className="text-[var(--ink-mut)]">-</span>}
+                    </div>
+                    {nota.itensTributados.length > 0 && (
+                      <p className="mt-1 truncate text-[11px] text-[var(--ink-mut)]" title={nota.itensTributadosTexto}>
+                        {nota.itensTributados.slice(0, 2).map((item) => `${item.codigo ?? item.nItem} - ${item.produto}`).join(' | ')}
+                        {nota.itensTributados.length > 2 ? ` +${nota.itensTributados.length - 2}` : ''}
+                      </p>
+                    )}
+                  </td>
                   <td className="px-2 py-2"><Badge tone={nota.risco === 'baixo' ? 'green' : nota.risco === 'medio' ? 'amber' : nota.risco === 'alto' ? 'orange' : 'red'}>{nota.risco === 'critico' ? rt('crítico', '严重') : nota.risco === 'medio' ? rt('médio', '中') : nota.risco === 'alto' ? rt('alto', '高') : rt('baixo', '低')}</Badge></td>
                 </tr>
               ))}
               {notasTabela.length === 0 && (
-                <tr><td colSpan={11} className="px-2 py-4 text-center text-[var(--ink-mut)]">Nenhuma nota no filtro atual.</td></tr>
+                <tr><td colSpan={12} className="px-2 py-4 text-center text-[var(--ink-mut)]">Nenhuma nota no filtro atual.</td></tr>
               )}
             </tbody>
           </table>
@@ -6255,6 +6464,8 @@ function CompactFragmentNota({
   selecionada,
   onToggleSelecionada,
   onNotaAtualizada,
+  abaInicialDetalhe = 'dados',
+  destaqueTributoItem = null,
 }: {
   nota: NotaComCnpj;
   aberta: boolean;
@@ -6263,9 +6474,12 @@ function CompactFragmentNota({
   selecionada: boolean;
   onToggleSelecionada: () => void;
   onNotaAtualizada: (nota: NotaComCnpj) => void;
+  abaInicialDetalhe?: Aba;
+  destaqueTributoItem?: TipoTributoItemSitram | null;
 }) {
   const tags = parseEtiquetas(nota.etiqueta).filter((tag) => tag !== nota.recebimentoStatus);
   const dae = extrairResumoDae(nota);
+  const resumoTributosItem = resumoTributosItensNota(nota);
   const situacaoSitram = situacaoSitramEfetiva(nota);
   const statusDae = statusDaeEfetivo(nota);
   const lancamentoDestaque = dae.lancamentos.find((l) => !l.pago) ?? dae.lancamentos[0];
@@ -6335,6 +6549,8 @@ function CompactFragmentNota({
             ) : (
               <Badge tone="gray">Sem DAE</Badge>
             )}
+            {resumoTributosItem.antecipacao > 0 && <Badge tone="amber">ANTC {resumoTributosItem.antecipacao}</Badge>}
+            {resumoTributosItem.st > 0 && <Badge tone="red">ST {resumoTributosItem.st}</Badge>}
           </div>
           {lancamentoDestaque ? (
             <div className="mt-1">
@@ -6370,7 +6586,12 @@ function CompactFragmentNota({
       {aberta && (
         <tr className="bg-[var(--surface-2)]/70">
           <td colSpan={8} className="px-4 py-4">
-            <DetalheNota nota={nota} onNotaAtualizada={onNotaAtualizada} />
+            <DetalheNota
+              nota={nota}
+              onNotaAtualizada={onNotaAtualizada}
+              abaInicial={abaInicialDetalhe}
+              destaqueTributoItem={destaqueTributoItem}
+            />
           </td>
         </tr>
       )}
@@ -6505,12 +6726,16 @@ type Aba = 'dados' | 'sitram' | 'frete' | 'danfe' | 'itens' | 'anexos';
 function DetalheNota({
   nota,
   onNotaAtualizada,
+  abaInicial = 'dados',
+  destaqueTributoItem = null,
 }: {
   nota: NotaComCnpj;
   onNotaAtualizada: (nota: NotaComCnpj) => void;
+  abaInicial?: Aba;
+  destaqueTributoItem?: TipoTributoItemSitram | null;
 }) {
   const router = useRouter();
-  const [aba, setAba] = useState<Aba>('dados');
+  const [aba, setAba] = useState<Aba>(abaInicial);
   const [danfe, setDanfe] = useState<DanfeData | null>(null);
   const [carregando, setCarregando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
@@ -6577,6 +6802,10 @@ function DetalheNota({
   useEffect(() => {
     setTagsOtimizadas(parseEtiquetas(nota.etiqueta));
   }, [nota.etiqueta]);
+
+  useEffect(() => {
+    setAba(abaInicial);
+  }, [abaInicial, nota.id]);
 
   async function handleClicarEtiqueta(tag: string) {
     const antes = tagsOtimizadas;
@@ -7276,11 +7505,11 @@ function DetalheNota({
           {danfe && aba === 'itens' && (
             <div className="space-y-4">
               {!espelhoSitram && <PainelAtualizarSitramNota />}
-              <ItensView danfe={danfe} espelho={espelhoSitram} />
-              {espelhoSitram && <SitramItensView espelho={espelhoSitram} />}
+              <ItensView danfe={danfe} espelho={espelhoSitram} destaqueTributo={destaqueTributoItem} />
+              {espelhoSitram && <SitramItensView espelho={espelhoSitram} destaqueTributo={destaqueTributoItem} />}
             </div>
           )}
-          {!danfe && espelhoSitram && aba === 'itens' && <SitramItensView espelho={espelhoSitram} />}
+          {!danfe && espelhoSitram && aba === 'itens' && <SitramItensView espelho={espelhoSitram} destaqueTributo={destaqueTributoItem} />}
           {!danfe && !espelhoSitram && !carregando && aba === 'itens' && <PainelAtualizarSitramNota />}
         </div>
       )}

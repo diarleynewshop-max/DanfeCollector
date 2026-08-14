@@ -58,6 +58,7 @@ function infoFiscalItem(
   item: DanfeItem,
   espelho: SitramEspelhoData | null | undefined
 ): {
+  tipoTributo: 'ST' | 'ANTECIPACAO' | null;
   tributo: { label: string; classe: string } | null;
   temFecop: boolean;
   fecop: number | null;
@@ -69,6 +70,7 @@ function infoFiscalItem(
 
   if (itemSitram?.temSt || item.vBCST > 0 || item.vICMSST > 0) {
     return {
+      tipoTributo: 'ST',
       tributo: { label: '1031 - SUBT', classe: 'bg-red-100 text-red-700' },
       temFecop,
       fecop,
@@ -77,6 +79,7 @@ function infoFiscalItem(
 
   if (itemSitram?.temAntecipacao) {
     return {
+      tipoTributo: 'ANTECIPACAO',
       tributo: { label: '1023 - ANTC', classe: 'bg-amber-100 text-amber-800' },
       temFecop,
       fecop,
@@ -85,25 +88,43 @@ function infoFiscalItem(
 
   if (itemSitram?.temCalculadoraSitram) {
     return {
+      tipoTributo: null,
       tributo: { label: 'Sem ST/ANT', classe: 'bg-gray-100 text-gray-600' },
       temFecop,
       fecop,
     };
   }
 
-  return { tributo: null, temFecop, fecop };
+  return { tipoTributo: null, tributo: null, temFecop, fecop };
+}
+
+function rotuloDestaque(tipo: 'ST' | 'ANTECIPACAO'): string {
+  return tipo === 'ST' ? '1031 - SUBT' : '1023 - ANTC';
+}
+
+function classeDestaque(tipo: 'ST' | 'ANTECIPACAO'): string {
+  return tipo === 'ST'
+    ? 'border-red-300 bg-red-50 ring-2 ring-red-100'
+    : 'border-amber-300 bg-amber-50 ring-2 ring-amber-100';
 }
 
 export default function ItensView({
   danfe,
   espelho,
+  destaqueTributo,
 }: {
   danfe: DanfeData;
   espelho?: SitramEspelhoData | null;
+  destaqueTributo?: 'ST' | 'ANTECIPACAO' | null;
 }) {
   if (danfe.itens.length === 0) {
     return <p className="py-4 text-sm text-gray-400">Nenhum item nesta nota.</p>;
   }
+
+  const itens = danfe.itens.map((it) => ({ it, fiscal: infoFiscalItem(it, espelho) }));
+  const totalDestaque = destaqueTributo
+    ? itens.filter(({ fiscal }) => fiscal.tipoTributo === destaqueTributo).length
+    : 0;
 
   return (
     <div className="space-y-2">
@@ -113,12 +134,17 @@ export default function ItensView({
           Total dos produtos: <strong className="text-gray-700">{moeda(danfe.total.vProd)}</strong>
         </span>
       </div>
+      {destaqueTributo && (
+        <div className={`rounded-lg border px-3 py-2 text-xs font-semibold ${destaqueTributo === 'ST' ? 'border-red-200 bg-red-50 text-red-800' : 'border-amber-200 bg-amber-50 text-amber-900'}`}>
+          Destaque: {totalDestaque} item(ns) com {rotuloDestaque(destaqueTributo)} nesta nota.
+        </div>
+      )}
 
-      {danfe.itens.map((it) => {
-        const fiscal = infoFiscalItem(it, espelho);
+      {itens.map(({ it, fiscal }) => {
+        const destacado = destaqueTributo && fiscal.tipoTributo === destaqueTributo;
 
         return (
-          <div key={it.nItem} className="rounded-lg border border-gray-200 p-3 hover:bg-gray-50">
+          <div key={it.nItem} className={`rounded-lg border p-3 ${destacado ? classeDestaque(destaqueTributo) : 'border-gray-200 hover:bg-gray-50'}`}>
             <div className="flex items-start gap-3">
               <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gray-800 text-xs font-bold text-white">
                 {it.nItem}

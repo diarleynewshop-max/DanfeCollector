@@ -30,7 +30,29 @@ function textoFecop(item: SitramEspelhoData['itens'][number]): string {
   return item.temFecop ? 'Sim' : '-';
 }
 
-export default function SitramItensView({ espelho }: { espelho: SitramEspelhoData }) {
+function classeDestaque(tipo: 'ST' | 'ANTECIPACAO'): string {
+  return tipo === 'ST'
+    ? 'border-red-300 bg-red-50 ring-2 ring-red-100'
+    : 'border-amber-300 bg-amber-50 ring-2 ring-amber-100';
+}
+
+function itemEhDestaque(item: SitramEspelhoData['itens'][number], tipo: 'ST' | 'ANTECIPACAO' | null | undefined): boolean {
+  if (tipo === 'ST') return item.temSt;
+  if (tipo === 'ANTECIPACAO') return item.temAntecipacao;
+  return false;
+}
+
+export default function SitramItensView({
+  espelho,
+  destaqueTributo,
+}: {
+  espelho: SitramEspelhoData;
+  destaqueTributo?: 'ST' | 'ANTECIPACAO' | null;
+}) {
+  const totalDestaque = destaqueTributo
+    ? espelho.itens.filter((item) => itemEhDestaque(item, destaqueTributo)).length
+    : 0;
+
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
@@ -48,9 +70,16 @@ export default function SitramItensView({ espelho }: { espelho: SitramEspelhoDat
           Base Ant.: <strong>{moeda(espelho.totais.baseCalculoAntecipacao)}</strong>
         </span>
       </div>
+      {destaqueTributo && (
+        <div className={`rounded-lg border px-3 py-2 text-xs font-semibold ${destaqueTributo === 'ST' ? 'border-red-200 bg-red-50 text-red-800' : 'border-amber-200 bg-amber-50 text-amber-900'}`}>
+          Destaque: {totalDestaque} item(ns) com {destaqueTributo === 'ST' ? '1031 - SUBT' : '1023 - ANTC'} nesta nota.
+        </div>
+      )}
 
-      {espelho.itens.map((item, indice) => (
-        <div key={`${item.nItem}-${item.codigo ?? indice}`} className="rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3 hover:bg-[var(--surface-2)]">
+      {espelho.itens.map((item, indice) => {
+        const destacado = itemEhDestaque(item, destaqueTributo);
+        return (
+        <div key={`${item.nItem}-${item.codigo ?? indice}`} className={`rounded-lg border p-3 ${destacado && destaqueTributo ? classeDestaque(destaqueTributo) : 'border-[var(--border)] bg-[var(--surface)] hover:bg-[var(--surface-2)]'}`}>
           <div className="flex items-start gap-3">
             <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[var(--ink)] text-xs font-bold text-white">
               {item.nItem}
@@ -109,7 +138,8 @@ export default function SitramItensView({ espelho }: { espelho: SitramEspelhoDat
             </div>
           </div>
         </div>
-      ))}
+        );
+      })}
     </div>
   );
 }

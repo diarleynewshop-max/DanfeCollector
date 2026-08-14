@@ -4,6 +4,11 @@ import { prisma } from '@/lib/prisma';
 import type { UsuarioLogado } from '@/lib/usuarios/auth';
 import { whereNotaPermitida } from '@/lib/usuarios/auth';
 import { extrairResumoDae, lancamentosVisiveisDae, statusDaeEfetivo } from '@/lib/sitram/dae';
+import {
+  resumirTributosItensSitram,
+  type ResumoTributosItensSitram,
+  type TipoTributoItemSitram,
+} from '@/lib/sitram/espelho';
 
 export interface FiltrosRelatorioTransporte {
   usuario: UsuarioLogado;
@@ -14,6 +19,7 @@ export interface FiltrosRelatorioTransporte {
   situacoes?: string[];
   daeFiltros?: string[];
   fornecedores?: string[];
+  tributoItem?: TipoTributoItemSitram;
 }
 
 type LinhaRelatorio = {
@@ -26,6 +32,9 @@ type LinhaRelatorio = {
   uf: string;
   valorNfe: number | null;
   icmsDestacado: number | null;
+  itensAntc: number;
+  itensSt: number;
+  produtosTributados: string;
   situacaoNfe: string;
   tipo: string;
   status: string;
@@ -41,6 +50,9 @@ const COLUNAS = [
   { key: 'uf', header: 'UF', width: 7, hidden: false },
   { key: 'valorNfe', header: 'Valor da NF-e', width: 14.38, hidden: false, numFmt: '#,##0.00' },
   { key: 'icmsDestacado', header: 'ICMS Destacado', width: 17.38, hidden: false, numFmt: '#,##0.00' },
+  { key: 'itensAntc', header: 'Itens ANTC 1023', width: 16, hidden: false },
+  { key: 'itensSt', header: 'Itens ST 1031', width: 14, hidden: false },
+  { key: 'produtosTributados', header: 'Produtos ST/ANTC', width: 54, hidden: false },
   { key: 'situacaoNfe', header: 'Situação NF-e', width: 14.88, hidden: false },
   { key: 'tipo', header: 'TIPO', width: 14.63, hidden: false },
   { key: 'status', header: 'STATUS', width: 34.38, hidden: false },
@@ -144,7 +156,17 @@ function nomeArquivo(inicio?: string, fim?: string): string {
   return `${partes.join('_')}.xlsx`;
 }
 
-function montarLinha(nota: NotaTransporte): LinhaRelatorio {
+function rotuloTributoItem(tipo: TipoTributoItemSitram): string {
+  return tipo === 'ST' ? '1031 - SUBT' : '1023 - ANTC';
+}
+
+function textoProdutosTributados(resumo: ResumoTributosItensSitram): string {
+  return resumo.itens
+    .map((item) => `${rotuloTributoItem(item.tipoTributo)} | item ${item.nItem} | ${item.codigo ?? '-'} | ${item.produto}`)
+    .join(' ; ');
+}
+
+function montarLinha(nota: NotaTransporte, resumoTributos: ResumoTributosItensSitram): LinhaRelatorio {
   return {
     chaveAcesso: nota.chave,
     numeroNota: nota.numero || numeroNotaDaChave(nota.chave),
@@ -155,6 +177,9 @@ function montarLinha(nota: NotaTransporte): LinhaRelatorio {
     uf: nota.emitenteUf || '',
     valorNfe: nota.valorTotal ?? null,
     icmsDestacado: nota.valorIcms ?? null,
+    itensAntc: resumoTributos.antecipacao,
+    itensSt: resumoTributos.st,
+    produtosTributados: textoProdutosTributados(resumoTributos),
     situacaoNfe: textoSituacao(nota.situacaoSefaz),
     tipo: '',
     status: '',
@@ -196,8 +221,19 @@ function notaPassaFiltroDae(nota: NotaTransporte, filtros: string[] | undefined)
   });
 }
 
+function colunaExcel(indice: number): string {
+  let n = indice;
+  let nome = '';
+  while (n > 0) {
+    const resto = (n - 1) % 26;
+    nome = String.fromCharCode(65 + resto) + nome;
+    n = Math.floor((n - 1) / 26);
+  }
+  return nome;
+}
+
 function aplicarLayout(sheet: ExcelJS.Worksheet) {
-  sheet.autoFilter = '$A$1:$L$1';
+  sheet.autoFilter = `$A$1:$${colunaExcel(COLUNAS.length)}$1`;
 
   const header = sheet.getRow(1);
   header.eachCell((cell) => {
@@ -330,15 +366,25 @@ export async function gerarRelatorioTransporteExcel(filtros: FiltrosRelatorioTra
     select: selectNotaTransporte,
   });
 
-  const notasFiltradas = filtros.daeFiltros?.length
-    ? notas.filter((nota) => notaPassaFiltroDae(nota, filtros.daeFiltros))
-    : notas;
+  const notasComTributos = notas.map((nota) => ({
+    nota,
+    resumoTributos: resumirTributosItensSitram(nota),
+  }));
+
+  const notasFiltradas = notasComTributos.filter(({ nota, resumoTributos }) => {
+    if (filtros.daeFiltros?.length && !notaPassaFiltroDae(nota, filtros.daeFiltros)) return false;
+    if (filtros.tributoItem) {
+      const quantidade = filtros.tributoItem === 'ST' ? resumoTributos.st : resumoTributos.antecipacao;
+      if (quantidade <= 0) return false;
+    }
+    return true;
+  });
 
   const linhasPorMes = new Map<string, LinhaRelatorio[]>();
-  for (const nota of notasFiltradas) {
+  for (const { nota, resumoTributos } of notasFiltradas) {
     const mes = chaveMes(nota.emitidaEm);
     const linhasMes = linhasPorMes.get(mes) ?? [];
-    linhasMes.push(montarLinha(nota));
+    linhasMes.push(montarLinha(nota, resumoTributos));
     linhasPorMes.set(mes, linhasMes);
   }
 
@@ -346,7 +392,7 @@ export async function gerarRelatorioTransporteExcel(filtros: FiltrosRelatorioTra
   workbook.creator = 'DanfeCollector';
   workbook.created = new Date();
 
-  const meses = mesesDoPeriodo(inicio, fim, notasFiltradas);
+  const meses = mesesDoPeriodo(inicio, fim, notasFiltradas.map(({ nota }) => nota));
   const incluirAno = new Set(meses.map((data) => data.getFullYear())).size > 1;
 
   if (meses.length === 0) {

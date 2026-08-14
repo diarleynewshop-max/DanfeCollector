@@ -111,6 +111,26 @@ export interface SitramEspelhoData {
   itens: SitramEspelhoItem[];
 }
 
+export type TipoTributoItemSitram = Extract<TipoTributoDae, 'ST' | 'ANTECIPACAO'>;
+
+export interface ItemTributadoSitramResumo {
+  nItem: string;
+  codigo: string | null;
+  ncm: string | null;
+  produto: string;
+  tipoTributo: TipoTributoItemSitram;
+  valorTotal: number | null;
+  icmsSt: number | null;
+  icmsAntecipacao: number | null;
+  origemTributo: OrigemTributoSitram;
+}
+
+export interface ResumoTributosItensSitram {
+  st: number;
+  antecipacao: number;
+  itens: ItemTributadoSitramResumo[];
+}
+
 function registro(valor: unknown): Registro {
   return valor && typeof valor === 'object' && !Array.isArray(valor) ? valor as Registro : {};
 }
@@ -696,6 +716,47 @@ export function extrairEspelhoSitram(nota: NotaComEspelhoSitram): SitramEspelhoD
       situacaoImposto: resumoDae.situacaoImposto,
       lancamentos,
     },
+    itens,
+  };
+}
+
+export function tipoTributoItemSitram(item: Pick<SitramEspelhoItem, 'temSt' | 'temAntecipacao'>): TipoTributoItemSitram | null {
+  if (item.temSt) return 'ST';
+  if (item.temAntecipacao) return 'ANTECIPACAO';
+  return null;
+}
+
+export function itemTemTributoSitram(
+  item: Pick<SitramEspelhoItem, 'temSt' | 'temAntecipacao'>,
+  tipo: TipoTributoItemSitram
+): boolean {
+  return tipoTributoItemSitram(item) === tipo;
+}
+
+export function resumirTributosItensSitram(nota: NotaComEspelhoSitram): ResumoTributosItensSitram {
+  const espelho = extrairEspelhoSitram(nota);
+  const itens: ItemTributadoSitramResumo[] = [];
+
+  for (const item of espelho?.itens ?? []) {
+    const tipoTributo = tipoTributoItemSitram(item);
+    if (!tipoTributo) continue;
+
+    itens.push({
+      nItem: item.nItem,
+      codigo: item.codigo,
+      ncm: item.ncm,
+      produto: item.produto,
+      tipoTributo,
+      valorTotal: item.valorTotal,
+      icmsSt: item.icmsSt,
+      icmsAntecipacao: item.icmsAntecipacao,
+      origemTributo: item.origemTributo,
+    });
+  }
+
+  return {
+    st: itens.filter((item) => item.tipoTributo === 'ST').length,
+    antecipacao: itens.filter((item) => item.tipoTributo === 'ANTECIPACAO').length,
     itens,
   };
 }

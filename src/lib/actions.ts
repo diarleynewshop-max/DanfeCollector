@@ -46,6 +46,10 @@ import {
   lancamentosVisiveisDae,
   statusDaeEfetivo,
 } from './sitram/dae';
+import {
+  resumirTributosItensSitram,
+  type ItemTributadoSitramResumo,
+} from './sitram/espelho';
 import { parseRelacaoPagamentoSitram, chaveCruzamento, extrairDaChave } from './sitram/pagamento';
 import {
   consultarDaePorCodigo,
@@ -284,6 +288,9 @@ export type NotaRelatorio = {
   daeDescricao: string | null;
   daeTipo: string | null;
   daeClassificacao: string | null;
+  qtdItensSt: number;
+  qtdItensAntecipacao: number;
+  itensTributados: ItemTributadoSitramResumo[];
   cnpj: { cnpj: string; razaoSocial: string | null };
 };
 
@@ -1766,6 +1773,7 @@ export async function listarNotasRelatorio(pagina = 1, porPagina = 120): Promise
 
   const resultado = notas.map((nota) => {
     const resumo = extrairResumoDae(nota);
+    const resumoItens = resumirTributosItensSitram(nota);
     const lancamento = lancamentosVisiveisDae(resumo.lancamentos).find((item) => !item.pago)
       ?? lancamentosVisiveisDae(resumo.lancamentos)[0]
       ?? null;
@@ -1781,6 +1789,9 @@ export async function listarNotasRelatorio(pagina = 1, porPagina = 120): Promise
       daeDescricao: lancamento?.descricao ?? null,
       daeTipo: lancamento?.tipo ?? null,
       daeClassificacao: resumo.classificacao ?? null,
+      qtdItensSt: resumoItens.st,
+      qtdItensAntecipacao: resumoItens.antecipacao,
+      itensTributados: resumoItens.itens,
     };
   });
 

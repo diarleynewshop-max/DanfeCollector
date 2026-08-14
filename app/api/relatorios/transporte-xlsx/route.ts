@@ -46,6 +46,13 @@ function parametrosRaizesCnpj(url: URL): string[] | undefined {
   return [...new Set(raizes)];
 }
 
+function parametroTributoItem(url: URL): 'ST' | 'ANTECIPACAO' | undefined {
+  const valor = parametroTexto(url, 'tributoItem');
+  if (!valor || valor === 'todos') return undefined;
+  if (valor === 'ST' || valor === 'ANTECIPACAO') return valor;
+  throw new Error('Tributo por item invalido.');
+}
+
 export async function GET(req: Request) {
   try {
     const usuario = await exigirUsuario();
@@ -59,6 +66,7 @@ export async function GET(req: Request) {
       situacoes: parametrosLista(url, 'situacao'),
       daeFiltros: parametrosLista(url, 'dae'),
       fornecedores: parametrosLista(url, 'fornecedor'),
+      tributoItem: parametroTributoItem(url),
     });
     const filename = encodeURIComponent(arquivo.filename);
 
