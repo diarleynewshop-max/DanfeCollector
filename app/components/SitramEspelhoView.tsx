@@ -24,6 +24,12 @@ function fecopItem(item: SitramEspelhoData['itens'][number]): string {
   return item.temFecop ? 'Sim' : '-';
 }
 
+function tributoItem(item: SitramEspelhoData['itens'][number]): string {
+  if (item.temSt) return 'ST 1031';
+  if (item.temAntecipacao) return 'ANT 1023';
+  return item.temCalculadoraSitram ? 'Sem ST/ANT' : '-';
+}
+
 function cnpjFmt(v: string | null | undefined): string {
   const limpo = (v ?? '').replace(/\D/g, '');
   if (limpo.length === 14) return limpo.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, '$1.$2.$3/$4-$5');
@@ -257,7 +263,7 @@ export default function SitramEspelhoView({ espelho }: { espelho: SitramEspelhoD
               <td className="border border-gray-300 px-1 py-0.5">{item.ncm || '-'}</td>
               <td className="border border-gray-300 px-1 py-0.5">{item.cfop || '-'}</td>
               <td className="border border-gray-300 px-1 py-0.5">{item.cst || '-'}</td>
-              <td className="border border-gray-300 px-1 py-0.5">{item.temSt ? 'ST 1031' : item.temAntecipacao ? 'ANT 1023' : '-'}</td>
+              <td className="border border-gray-300 px-1 py-0.5">{tributoItem(item)}</td>
               <td className="border border-gray-300 px-1 py-0.5 text-right">{numero(item.quantidade)}</td>
               <td className="border border-gray-300 px-1 py-0.5 text-right">{moeda(item.valorUnitario)}</td>
               <td className="border border-gray-300 px-1 py-0.5 text-right">{moeda(item.valorTotal)}</td>

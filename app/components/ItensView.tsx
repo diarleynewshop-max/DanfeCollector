@@ -26,12 +26,28 @@ function itemSitramCorrespondente(
   const ncm = normalizarTexto(item.ncm);
   const cfop = normalizarTexto(item.cfop);
 
-  return espelho.itens.find((sitramItem) => normalizarTexto(sitramItem.nItem) === nItem)
-    ?? espelho.itens.find((sitramItem) => codigo && normalizarTexto(sitramItem.codigo) === codigo)
-    ?? espelho.itens.find((sitramItem) =>
-      ncm && cfop && normalizarTexto(sitramItem.ncm) === ncm && normalizarTexto(sitramItem.cfop) === cfop
+  const porNumero = nItem
+    ? espelho.itens.filter((sitramItem) => normalizarTexto(sitramItem.nItem) === nItem)
+    : [];
+  if (porNumero.length === 1) return porNumero[0];
+
+  const porCodigo = codigo
+    ? espelho.itens.filter((sitramItem) => normalizarTexto(sitramItem.codigo) === codigo)
+    : [];
+  if (porCodigo.length === 1) return porCodigo[0];
+
+  const porCodigoEContexto = porCodigo.filter((sitramItem) =>
+    (!ncm || normalizarTexto(sitramItem.ncm) === ncm) &&
+    (!cfop || normalizarTexto(sitramItem.cfop) === cfop)
+  );
+  if (porCodigoEContexto.length === 1) return porCodigoEContexto[0];
+
+  const porNcmEcfop = ncm && cfop
+    ? espelho.itens.filter((sitramItem) =>
+      normalizarTexto(sitramItem.ncm) === ncm && normalizarTexto(sitramItem.cfop) === cfop
     )
-    ?? null;
+    : [];
+  return porNcmEcfop.length === 1 ? porNcmEcfop[0] : null;
 }
 
 function valorFecopXml(item: DanfeItem): number {
@@ -62,6 +78,14 @@ function infoFiscalItem(
   if (itemSitram?.temAntecipacao) {
     return {
       tributo: { label: '1023 - ANTC', classe: 'bg-amber-100 text-amber-800' },
+      temFecop,
+      fecop,
+    };
+  }
+
+  if (itemSitram?.temCalculadoraSitram) {
+    return {
+      tributo: { label: 'Sem ST/ANT', classe: 'bg-gray-100 text-gray-600' },
       temFecop,
       fecop,
     };

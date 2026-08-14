@@ -7193,6 +7193,7 @@ function DetalheNota({
       {aba === 'sitram' && (
         <div className="space-y-4">
           {nota.sitramConsultadaEm || temDaeDetalhe ? <ResumoDaeVisual nota={nota} /> : <PainelAtualizarSitramNota />}
+          {nota.sitramConsultadaEm && !espelhoSitram && <PainelAtualizarSitramNota />}
           <PainelSelagemTramita />
           <PainelPagamentoIcms />
           <section className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
@@ -7274,6 +7275,7 @@ function DetalheNota({
           {!danfe && !espelhoSitram && !carregando && aba === 'danfe' && <PainelAtualizarSitramNota />}
           {danfe && aba === 'itens' && (
             <div className="space-y-4">
+              {!espelhoSitram && <PainelAtualizarSitramNota />}
               <ItensView danfe={danfe} espelho={espelhoSitram} />
               {espelhoSitram && <SitramItensView espelho={espelhoSitram} />}
             </div>

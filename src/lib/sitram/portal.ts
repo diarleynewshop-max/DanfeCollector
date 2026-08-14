@@ -49,8 +49,14 @@ export interface SitramPortalLancamento {
   identificadorUnico?: string | number;
 }
 
+export interface SitramPortalCalculadoraItem {
+  trilha?: string;
+}
+
 export interface SitramPortalItemNotaFiscal {
-  id?: number;
+  // O portal retorna este identificador como texto. Nao converta para number:
+  // ele ultrapassa o limite seguro de inteiros do JavaScript.
+  id?: string | number;
   numero?: string | number;
   codigoProduto?: string | number;
   ncm?: string;
@@ -75,6 +81,7 @@ export interface SitramPortalItemNotaFiscal {
   tipoCobranca?: string | number;
   nomeConfiguracao?: string;
   tipoAlteracaoNotaItem?: string;
+  calculadoraSitram?: SitramPortalCalculadoraItem;
 }
 
 function portalUrl(pathname: string, query?: Record<string, string | number | undefined>): string {
@@ -155,4 +162,66 @@ export async function consultarTodosItensNotaFiscalSitram(
   } while (paginaAtual < totalPaginas);
 
   return itens;
+}
+
+export interface SitramPortalItensComCalculadora {
+  itens: SitramPortalItemNotaFiscal[];
+  consultados: number;
+  falhas: number;
+}
+
+function temTrilhaDaCalculadora(item: SitramPortalItemNotaFiscal): boolean {
+  return typeof item.calculadoraSitram?.trilha === 'string' && item.calculadoraSitram.trilha.trim().length > 0;
+}
+
+export async function consultarCalculadoraItemSitram(
+  idItem: string | number
+): Promise<SitramPortalCalculadoraItem> {
+  const id = String(idItem).trim();
+  if (!id) throw new Error('Item SITRAM sem identificador para calcular o ICMS.');
+
+  return portalGet<SitramPortalCalculadoraItem>(`/api-calculadora/${encodeURIComponent(id)}`);
+}
+
+export async function consultarCalculadorasItensSitram(
+  itens: SitramPortalItemNotaFiscal[],
+  concorrencia = 4
+): Promise<SitramPortalItensComCalculadora> {
+  const resultado = itens.map((item) => ({ ...item }));
+  const pendentes = resultado
+    .map((item, indice) => ({ item, indice }))
+    .filter(({ item }) => {
+      const id = item.id === undefined || item.id === null ? '' : String(item.id).trim();
+      return Boolean(id) && !temTrilhaDaCalculadora(item);
+    });
+
+  let proximo = 0;
+  let consultados = 0;
+  let falhas = 0;
+  const totalWorkers = Math.min(Math.max(1, Math.trunc(concorrencia) || 4), pendentes.length);
+
+  async function worker(): Promise<void> {
+    while (proximo < pendentes.length) {
+      const atual = pendentes[proximo++];
+      const id = String(atual.item.id).trim();
+      consultados += 1;
+
+      try {
+        const calculadoraSitram = await consultarCalculadoraItemSitram(id);
+        if (typeof calculadoraSitram.trilha !== 'string' || !calculadoraSitram.trilha.trim()) {
+          falhas += 1;
+          continue;
+        }
+        resultado[atual.indice] = { ...atual.item, calculadoraSitram };
+      } catch {
+        // A listagem do item continua valida; a classificacao por lancamentos
+        // cobre apenas o caso em que a calculadora individual nao respondeu.
+        falhas += 1;
+      }
+    }
+  }
+
+  await Promise.all(Array.from({ length: totalWorkers }, () => worker()));
+
+  return { itens: resultado, consultados, falhas };
 }

@@ -31,9 +31,11 @@ import {
   type SitramNotaFiscal,
 } from './sitram/client';
 import {
+  consultarCalculadorasItensSitram,
   consultarLancamentosNotaFiscalSitram,
   consultarNotaFiscalSitramPorChave,
   consultarTodosItensNotaFiscalSitram,
+  type SitramPortalCalculadoraItem,
   type SitramPortalLancamento,
   type SitramPortalNotaFiscal,
 } from './sitram/portal';
@@ -2306,6 +2308,45 @@ function compararPortalMaisRecente(a: SitramPortalNotaFiscal, b: SitramPortalNot
   return timestampPortalNota(b) - timestampPortalNota(a);
 }
 
+function extensoesSitramAnteriores(detalhe: Record<string, unknown>): Record<string, unknown> {
+  const {
+    origem: _origem,
+    notaFiscal: _notaFiscal,
+    lancamentos: _lancamentos,
+    itens: _itens,
+    itensErro: _itensErro,
+    calculadoraItensSitram: _calculadoraItensSitram,
+    calculadorasErro: _calculadorasErro,
+    registrosSitram: _registrosSitram,
+    ...extensoes
+  } = detalhe;
+  return extensoes;
+}
+
+function mensagemErroSitram(error: unknown): string {
+  const mensagem = error instanceof Error ? error.message : String(error || 'Falha ao consultar o SITRAM.');
+  return mensagem.slice(0, 300);
+}
+
+function calculadorasAnterioresPorItem(itens: unknown[] | undefined): Map<string, SitramPortalCalculadoraItem> {
+  const calculadoras = new Map<string, SitramPortalCalculadoraItem>();
+
+  for (const item of itens ?? []) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+    const bruto = item as Record<string, unknown>;
+    const id = bruto.id === undefined || bruto.id === null ? '' : String(bruto.id).trim();
+    const calculadora = bruto.calculadoraSitram;
+    if (!id || !calculadora || typeof calculadora !== 'object' || Array.isArray(calculadora)) continue;
+
+    const trilha = (calculadora as Record<string, unknown>).trilha;
+    if (typeof trilha === 'string' && trilha.trim()) {
+      calculadoras.set(id, { trilha });
+    }
+  }
+
+  return calculadoras;
+}
+
 async function salvarRetornoSitramPorNfe(chaveNfe: string): Promise<ResultadoSitramManifesto> {
   let pagina: Awaited<ReturnType<typeof consultarNotaFiscalSitramPorChave>>;
   try {
@@ -2324,12 +2365,61 @@ async function salvarRetornoSitramPorNfe(chaveNfe: string): Promise<ResultadoSit
   // e o desperdício do limite do lote com a mesma nota.
   const notaSitram = [...notas].sort(compararPortalMaisRecente)[0];
 
-  const [lancamentos, itens] = notaSitram.id
-    ? await Promise.all([
-        consultarLancamentosNotaFiscalSitram(notaSitram.id).catch(() => []),
-        consultarTodosItensNotaFiscalSitram(notaSitram.id).catch(() => []),
+  const notaAnterior = await prisma.notaFiscal.findUnique({
+    where: { chave: chaveNfe },
+    select: { sitramDetalhe: true },
+  });
+  const detalheAnterior = detalheJsonSeguro(notaAnterior?.sitramDetalhe ?? null);
+  const lancamentosAnteriores = Array.isArray(detalheAnterior.lancamentos)
+    ? detalheAnterior.lancamentos as SitramPortalLancamento[]
+    : [];
+  const itensAnteriores = Array.isArray(detalheAnterior.itens) ? detalheAnterior.itens : undefined;
+
+  const [consultaLancamentos, consultaItens] = notaSitram.id
+    ? await Promise.allSettled([
+        consultarLancamentosNotaFiscalSitram(notaSitram.id),
+        consultarTodosItensNotaFiscalSitram(notaSitram.id),
       ])
-    : [[], []];
+    : [
+        { status: 'fulfilled', value: lancamentosAnteriores } as const,
+        { status: 'fulfilled', value: itensAnteriores ?? [] } as const,
+      ];
+  const lancamentos = consultaLancamentos.status === 'fulfilled'
+    ? consultaLancamentos.value
+    : lancamentosAnteriores;
+  const itens = consultaItens.status === 'fulfilled'
+    ? consultaItens.value
+    : itensAnteriores;
+  const erroItens = consultaItens.status === 'rejected' ? mensagemErroSitram(consultaItens.reason) : null;
+  let itensComCalculadora = itens;
+  const metadadosCalculadoraAnteriores = detalheAnterior.calculadoraItensSitram;
+  let calculadoraItensSitram: Record<string, unknown> | null =
+    metadadosCalculadoraAnteriores && typeof metadadosCalculadoraAnteriores === 'object' && !Array.isArray(metadadosCalculadoraAnteriores)
+      ? metadadosCalculadoraAnteriores as Record<string, unknown>
+      : null;
+  let erroCalculadoras: string | null =
+    typeof detalheAnterior.calculadorasErro === 'string' ? detalheAnterior.calculadorasErro : null;
+
+  if (notaSitram.id && consultaItens.status === 'fulfilled') {
+    const calculadorasAnteriores = calculadorasAnterioresPorItem(itensAnteriores);
+    const itensComCache = consultaItens.value.map((item) => {
+      const id = item.id === undefined || item.id === null ? '' : String(item.id).trim();
+      const calculadoraSitram = id ? calculadorasAnteriores.get(id) : undefined;
+      return calculadoraSitram ? { ...item, calculadoraSitram } : item;
+    });
+    const resultadoCalculadoras = await consultarCalculadorasItensSitram(itensComCache);
+    itensComCalculadora = resultadoCalculadoras.itens;
+    calculadoraItensSitram = {
+      fonte: 'api-calculadora',
+      consultados: resultadoCalculadoras.consultados,
+      falhas: resultadoCalculadoras.falhas,
+      totalItens: resultadoCalculadoras.itens.length,
+      atualizadaEm: new Date().toISOString(),
+    };
+    if (resultadoCalculadoras.falhas > 0) {
+      erroCalculadoras = `${resultadoCalculadoras.falhas} calculadora(s) de item nao responderam.`;
+    }
+  }
 
   const ret = await prisma.notaFiscal.updateMany({
     where: { chave: chaveNfe },
@@ -2343,10 +2433,14 @@ async function salvarRetornoSitramPorNfe(chaveNfe: string): Promise<ResultadoSit
       sitramDaeResumo: resumoDaePortal(notaSitram, lancamentos),
       sitramDaeUrl: null,
       sitramDetalhe: JSON.stringify({
+        ...extensoesSitramAnteriores(detalheAnterior),
         origem: 'portal-nfe',
         notaFiscal: notaSitram,
         lancamentos,
-        itens,
+        ...(itensComCalculadora !== undefined ? { itens: itensComCalculadora } : {}),
+        ...(erroItens ? { itensErro: erroItens } : {}),
+        ...(calculadoraItensSitram ? { calculadoraItensSitram } : {}),
+        ...(erroCalculadoras ? { calculadorasErro: erroCalculadoras } : {}),
         registrosSitram: notas.length,
       }),
       numero: numeroNotaSitram(notaSitram, chaveNfe),
@@ -2360,7 +2454,11 @@ async function salvarRetornoSitramPorNfe(chaveNfe: string): Promise<ResultadoSit
     notasNoManifesto: notas.length,
     notasAtualizadas: ret.count,
     notasNaoEncontradas: ret.count > 0 ? 0 : 1,
-    detalhe: notas.length > 1 ? `${notas.length} registros no SITRAM; usado o mais recente` : undefined,
+    detalhe: [
+      notas.length > 1 ? `${notas.length} registros no SITRAM; usado o mais recente` : null,
+      erroItens ? `Itens SITRAM nao atualizados: ${erroItens}` : null,
+      erroCalculadoras,
+    ].filter(Boolean).join(' | ') || undefined,
   };
 }
 
@@ -2383,6 +2481,10 @@ export async function listarChavesSitramParaAtualizacao(
       OR: [
         { sitramConsultadaEm: null },
         { sitramConsultadaEm: { lt: inicioDoDiaLocal() } },
+        { sitramDetalhe: null },
+        { NOT: { sitramDetalhe: { contains: '"itens"' } } },
+        { NOT: { sitramDetalhe: { contains: '"calculadoraSitram"' } } },
+        { sitramDetalhe: { contains: '"calculadorasErro"' } },
       ],
       ...(cnpjId ? { cnpjId } : {}),
       emitidaEm: {

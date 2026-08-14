@@ -20,7 +20,8 @@ function percentual(v: number | null | undefined): string {
 function tipoTributo(item: SitramEspelhoData['itens'][number]): string {
   if (item.temSt) return '1031 - SUBT';
   if (item.temAntecipacao) return '1023 - ANTC';
-  return 'Sem ST/ANT';
+  if (item.temCalculadoraSitram) return 'Sem ST/ANT';
+  return 'Nao identificado por item';
 }
 
 function textoFecop(item: SitramEspelhoData['itens'][number]): string {

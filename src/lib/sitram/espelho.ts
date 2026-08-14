@@ -28,6 +28,8 @@ export interface NotaComEspelhoSitram {
   };
 }
 
+export type OrigemTributoSitram = 'ITEM' | 'LANCAMENTOS' | 'NAO_INFORMADO';
+
 export interface SitramEspelhoItem {
   nItem: string;
   codigo: string | null;
@@ -52,6 +54,8 @@ export interface SitramEspelhoItem {
   tipoTributo: TipoTributoDae;
   temSt: boolean;
   temAntecipacao: boolean;
+  temCalculadoraSitram: boolean;
+  origemTributo: OrigemTributoSitram;
   tipoRegime: string | null;
   regimeDescricao: string | null;
 }
@@ -182,6 +186,165 @@ function somaLancamentos(lancamentos: SitramEspelhoLancamento[], codigo: string)
   return encontrou ? total : null;
 }
 
+const TOLERANCIA_CENTAVOS = 1;
+const MAX_ESTADOS_SUBCONJUNTO = 20_000;
+
+function centavos(valor: number | null | undefined): number {
+  return Math.round((valor ?? 0) * 100);
+}
+
+function valorTributoItem(item: SitramEspelhoItem): number {
+  return item.icms ?? item.icmsDestacado ?? 0;
+}
+
+function ehTipoItem(item: SitramEspelhoItem, tipo: TipoTributoDae): boolean {
+  return tipo === 'ST' ? item.temSt : tipo === 'ANTECIPACAO' ? item.temAntecipacao : false;
+}
+
+function normalizarCodigoAgrupamento(codigo: string | null): string | null {
+  const normalizado = codigo?.trim();
+  return normalizado || null;
+}
+
+interface GrupoTributoInferido {
+  indices: number[];
+  valorCentavos: number;
+}
+
+function gruposTributoDesconhecido(itens: SitramEspelhoItem[]): GrupoTributoInferido[] {
+  const grupos = new Map<string, GrupoTributoInferido>();
+
+  itens.forEach((item, indice) => {
+    if (item.temSt || item.temAntecipacao) return;
+
+    const valorCentavos = centavos(valorTributoItem(item));
+    const codigo = normalizarCodigoAgrupamento(item.codigo);
+    if (!codigo || valorCentavos <= 0) return;
+
+    const grupo = grupos.get(codigo) ?? { indices: [], valorCentavos: 0 };
+    grupo.indices.push(indice);
+    grupo.valorCentavos += valorCentavos;
+    grupos.set(codigo, grupo);
+  });
+
+  return [...grupos.values()];
+}
+
+function subconjuntoUnicoPorValor(
+  grupos: GrupoTributoInferido[],
+  alvoCentavos: number
+): number[] | null {
+  if (alvoCentavos === 0) return [];
+  if (alvoCentavos < 0) return null;
+
+  type Estado = { grupos: number[]; ambiguo: boolean };
+  const estados = new Map<number, Estado>([[0, { grupos: [], ambiguo: false }]]);
+
+  for (let indice = 0; indice < grupos.length; indice += 1) {
+    const grupo = grupos[indice];
+    if (grupo.valorCentavos <= 0 || grupo.valorCentavos > alvoCentavos + TOLERANCIA_CENTAVOS) continue;
+
+    for (const [subtotal, estado] of [...estados.entries()]) {
+      const proximo = subtotal + grupo.valorCentavos;
+      if (proximo > alvoCentavos + TOLERANCIA_CENTAVOS) continue;
+
+      const existente = estados.get(proximo);
+      if (!existente) {
+        estados.set(proximo, {
+          grupos: [...estado.grupos, indice],
+          ambiguo: estado.ambiguo,
+        });
+      } else {
+        existente.ambiguo = true;
+      }
+    }
+
+    if (estados.size > MAX_ESTADOS_SUBCONJUNTO) return null;
+  }
+
+  const exato = estados.get(alvoCentavos);
+  if (exato && !exato.ambiguo) return exato.grupos;
+
+  for (const diferenca of [-TOLERANCIA_CENTAVOS, TOLERANCIA_CENTAVOS]) {
+    const aproximado = estados.get(alvoCentavos + diferenca);
+    if (aproximado && !aproximado.ambiguo) return aproximado.grupos;
+  }
+
+  return null;
+}
+
+function comTributoInferido(item: SitramEspelhoItem, tipo: TipoTributoDae): SitramEspelhoItem {
+  const icms = valorTributoItem(item) || null;
+  if (tipo === 'ST') {
+    return {
+      ...item,
+      tipoTributo: 'ST',
+      temSt: true,
+      temAntecipacao: false,
+      icmsSt: item.icmsSt ?? icms,
+      origemTributo: 'LANCAMENTOS',
+    };
+  }
+
+  return {
+    ...item,
+    tipoTributo: 'ANTECIPACAO',
+    temSt: false,
+    temAntecipacao: true,
+    icmsAntecipacao: item.icmsAntecipacao ?? icms,
+    origemTributo: 'LANCAMENTOS',
+  };
+}
+
+function classificarRestantePorLancamento(
+  itens: SitramEspelhoItem[],
+  tipo: Extract<TipoTributoDae, 'ST' | 'ANTECIPACAO'>,
+  totalLancamento: number | null
+): SitramEspelhoItem[] {
+  if (totalLancamento === null || totalLancamento <= 0) return itens;
+
+  const totalConhecido = itens.reduce(
+    (total, item) => total + (ehTipoItem(item, tipo) ? centavos(valorTributoItem(item)) : 0),
+    0
+  );
+  const alvoCentavos = centavos(totalLancamento) - totalConhecido;
+  if (alvoCentavos <= 0) return itens;
+
+  const desconhecidos = itens
+    .map((item, indice) => ({ item, indice }))
+    .filter(({ item }) => !item.temSt && !item.temAntecipacao && centavos(valorTributoItem(item)) > 0);
+  const totalDesconhecido = desconhecidos.reduce(
+    (total, { item }) => total + centavos(valorTributoItem(item)),
+    0
+  );
+
+  if (Math.abs(totalDesconhecido - alvoCentavos) <= TOLERANCIA_CENTAVOS) {
+    const indices = new Set(desconhecidos.map(({ indice }) => indice));
+    return itens.map((item, indice) => indices.has(indice) ? comTributoInferido(item, tipo) : item);
+  }
+
+  const grupos = gruposTributoDesconhecido(itens);
+  const selecionados = subconjuntoUnicoPorValor(grupos, alvoCentavos);
+  if (!selecionados) return itens;
+
+  const indices = new Set(selecionados.flatMap((indice) => grupos[indice].indices));
+  return itens.map((item, indice) => indices.has(indice) ? comTributoInferido(item, tipo) : item);
+}
+
+function classificarItensPorLancamentos(
+  itens: SitramEspelhoItem[],
+  lancamentos: SitramEspelhoLancamento[]
+): SitramEspelhoItem[] {
+  // O portal nem sempre informa a receita no item; so classificamos grupos cujo
+  // ICMS fecha exatamente com os lancamentos 1023/1031 da mesma NF-e.
+  const totalAntecipacao = somaLancamentos(lancamentos, '1023');
+  const totalSt = somaLancamentos(lancamentos, '1031');
+
+  let classificados = classificarRestantePorLancamento(itens, 'ANTECIPACAO', totalAntecipacao);
+  classificados = classificarRestantePorLancamento(classificados, 'ST', totalSt);
+  return classificarRestantePorLancamento(classificados, 'ANTECIPACAO', totalAntecipacao);
+}
+
 function semAcentos(valor: string): string {
   return valor
     .normalize('NFD')
@@ -310,7 +473,86 @@ function textoTributoItem(raw: Registro): string {
   ].filter(Boolean).join(' ').toLowerCase();
 }
 
-function classificarTributoItem(raw: Registro, tiposNota: TipoTributoDae[]): TipoTributoDae {
+interface ReceitaCalculadoraSitram {
+  codigo: string;
+  descricao: string;
+  valor: number;
+}
+
+interface DadosCalculadoraSitram {
+  trilha: string;
+  baseCalculo: number | null;
+  regra: string | null;
+  receitas: ReceitaCalculadoraSitram[];
+}
+
+function trilhaDaCalculadoraSitram(raw: Registro): string | null {
+  const calculadora = registro(raw.calculadoraSitram ?? raw.calculadora);
+  return primeiroTexto(calculadora.trilha);
+}
+
+function valorDaLinhaDaCalculadora(trilha: string, padrao: RegExp): number | null {
+  const encontrado = trilha.match(padrao);
+  return encontrado ? numero(encontrado[1]) : null;
+}
+
+function dadosDaCalculadoraSitram(raw: Registro): DadosCalculadoraSitram | null {
+  const trilha = trilhaDaCalculadoraSitram(raw);
+  if (!trilha) return null;
+
+  const receitas: ReceitaCalculadoraSitram[] = [];
+  const tabelaReceitas = /\|\s*(\d{4})\s*-\s*([^|]+?)\s*\|\s*R\$\s*([0-9.,]+)\s*\|/g;
+  for (const resultado of trilha.matchAll(tabelaReceitas)) {
+    const valor = numero(resultado[3]);
+    if (valor === null) continue;
+    receitas.push({
+      codigo: resultado[1],
+      descricao: resultado[2].trim(),
+      valor,
+    });
+  }
+
+  const regra = trilha.match(/^\s*Regra escolhida:\s*(.+?)\s*$/im)?.[1]?.trim() ?? null;
+  return {
+    trilha,
+    baseCalculo: valorDaLinhaDaCalculadora(
+      trilha,
+      /^\s*Base de c(?:a|\u00e1)lculo\s*:\s*R\$\s*([0-9.,]+)\s*$/im
+    ),
+    regra,
+    receitas,
+  };
+}
+
+function possuiReceitaDaCalculadora(dados: DadosCalculadoraSitram | null, codigo: string): boolean {
+  return dados?.receitas.some((receita) => receita.codigo === codigo) ?? false;
+}
+
+function totalReceitasDaCalculadora(
+  dados: DadosCalculadoraSitram | null,
+  seletor: (receita: ReceitaCalculadoraSitram) => boolean
+): number | null {
+  let total = 0;
+  let encontrou = false;
+  for (const receita of dados?.receitas ?? []) {
+    if (!seletor(receita)) continue;
+    total += receita.valor;
+    encontrou = true;
+  }
+  return encontrou ? total : null;
+}
+
+function valorFecopDaCalculadora(dados: DadosCalculadoraSitram | null): number | null {
+  return totalReceitasDaCalculadora(dados, (receita) =>
+    receita.codigo === '2020' || /fecop|fcp/i.test(receita.descricao)
+  );
+}
+
+function classificarTributoItem(raw: Registro): TipoTributoDae {
+  const calculadora = dadosDaCalculadoraSitram(raw);
+  if (possuiReceitaDaCalculadora(calculadora, '1031')) return 'ST';
+  if (possuiReceitaDaCalculadora(calculadora, '1023')) return 'ANTECIPACAO';
+
   const alvo = textoTributoItem(raw)
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '');
@@ -321,29 +563,38 @@ function classificarTributoItem(raw: Registro, tiposNota: TipoTributoDae[]): Tip
     return 'ST';
   }
   if (/\b1023\b|antec|antecip/.test(alvo)) return 'ANTECIPACAO';
-  if (tiposNota.length === 1) return tiposNota[0];
   return 'OUTRO';
 }
 
-function normalizarItem(valorBruto: unknown, indice: number, tiposNota: TipoTributoDae[] = []): SitramEspelhoItem {
+function normalizarItem(valorBruto: unknown, indice: number): SitramEspelhoItem {
   const raw = registro(valorBruto);
   const cstPartes = [primeiroTexto(raw.codigoCSTA), primeiroTexto(raw.codigoCSTB)].filter(Boolean);
-  const tipoTributo = classificarTributoItem(raw, tiposNota);
-  const baseCalculo = numero(raw.valorBc);
-  const icms = numero(raw.icms);
+  const calculadora = dadosDaCalculadoraSitram(raw);
+  const tipoTributo = classificarTributoItem(raw);
+  const receitaSt = totalReceitasDaCalculadora(calculadora, (receita) => receita.codigo === '1031');
+  const receitaAntecipacao = totalReceitasDaCalculadora(calculadora, (receita) => receita.codigo === '1023');
+  const baseCalculo = calculadora?.baseCalculo ?? numero(raw.valorBc);
+  const icmsCalculado = tipoTributo === 'ST'
+    ? receitaSt
+    : tipoTributo === 'ANTECIPACAO'
+      ? receitaAntecipacao
+      : null;
+  const icms = icmsCalculado ?? numero(raw.icms);
   const baseCalculoStDireta = numero(raw.valorBcICMSSt);
   const icmsStDireto = numero(raw.valorICMSSt);
-  const baseCalculoSt = baseCalculoStDireta ?? (tipoTributo === 'ST' ? baseCalculo : null);
-  const icmsSt = icmsStDireto ?? (tipoTributo === 'ST' ? icms : null);
+  const baseCalculoSt = tipoTributo === 'ST'
+    ? calculadora?.baseCalculo ?? baseCalculoStDireta ?? baseCalculo
+    : null;
+  const icmsSt = receitaSt ?? icmsStDireto ?? (tipoTributo === 'ST' ? icms : null);
   const baseCalculoAntecipacao = tipoTributo === 'ANTECIPACAO' ? baseCalculo : null;
-  const icmsAntecipacao = tipoTributo === 'ANTECIPACAO' ? icms : null;
-  const fecop = primeiroNumeroPorChaves(raw, CHAVES_VALOR_FECOP);
+  const icmsAntecipacao = receitaAntecipacao ?? (tipoTributo === 'ANTECIPACAO' ? icms : null);
+  const fecop = valorFecopDaCalculadora(calculadora) ?? primeiroNumeroPorChaves(raw, CHAVES_VALOR_FECOP);
   const textoFecop = coletarValoresCampos(raw, (chave) => /fecop|fcp|receita|tribut|calculadora|calculoicms/.test(chave))
     .join(' ');
   const temFecop =
     (fecop !== null && fecop > 0) ||
     temNumeroPositivoPorChave(raw, /fecop|fcp/) ||
-    /\bfecop\b|\bfcp\b|\b2020\b/i.test(textoFecop);
+    (!calculadora && /\bfecop\b|\bfcp\b|\b2020\b/i.test(textoFecop));
 
   return {
     nItem: primeiroTexto(raw.numero, raw.nItem, raw.item) ?? String(indice + 1),
@@ -369,8 +620,10 @@ function normalizarItem(valorBruto: unknown, indice: number, tiposNota: TipoTrib
     tipoTributo,
     temSt: tipoTributo === 'ST',
     temAntecipacao: tipoTributo === 'ANTECIPACAO',
-    tipoRegime: primeiroTexto(raw.tipoRegime),
-    regimeDescricao: primeiroTexto(raw.nomeConfiguracao, raw.tipoCobranca, raw.tipoAlteracaoNotaItem),
+    temCalculadoraSitram: calculadora !== null,
+    origemTributo: calculadora || tipoTributo !== 'OUTRO' ? 'ITEM' : 'NAO_INFORMADO',
+    tipoRegime: primeiroTexto(raw.tipoRegime, calculadora?.regra),
+    regimeDescricao: primeiroTexto(raw.nomeConfiguracao, raw.tipoCobranca, raw.tipoAlteracaoNotaItem, calculadora?.regra),
   };
 }
 
@@ -392,13 +645,10 @@ export function extrairEspelhoSitram(nota: NotaComEspelhoSitram): SitramEspelhoD
     vencimento: lancamento.vencimento,
     pago: lancamento.pago,
   }));
-  const tiposNota = [...new Set(lancamentos.map((lancamento) => {
-    const codigo = (lancamento.codigo ?? '').replace(/\D/g, '');
-    if (codigo === '1031') return 'ST' as TipoTributoDae;
-    if (codigo === '1023') return 'ANTECIPACAO' as TipoTributoDae;
-    return null;
-  }).filter((tipo): tipo is TipoTributoDae => !!tipo))];
-  const itens = itensBrutosDoDetalhe(detalhe).map((item, indice) => normalizarItem(item, indice, tiposNota));
+  const itens = classificarItensPorLancamentos(
+    itensBrutosDoDetalhe(detalhe).map((item, indice) => normalizarItem(item, indice)),
+    lancamentos
+  );
 
   if (itens.length === 0) return null;
 

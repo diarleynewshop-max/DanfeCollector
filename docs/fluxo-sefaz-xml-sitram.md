@@ -383,6 +383,7 @@ Rotas externas:
 GET /api-nota/notafiscal/por-chave-de-acesso/{chave}?page=0&size=25
 GET /api-nota/notafiscal/lancamentos-nota-fiscal/{idNotaFiscal}
 GET /api-nota/notafiscal/itens-nota-fiscal/{idNotaFiscal}?page=0&size=100
+GET /api-calculadora/{idItemSitram}
 ```
 
 Fluxo:
@@ -392,7 +393,8 @@ Fluxo:
 3. Se nao encontrar, marca a nota como `NAO_ENCONTRADA`.
 4. Se retornar mais de um registro, usa o mais recente por `dataInclusao`, `dataFatoGerador`, `dataEmissao` ou `id`.
 5. Se existir `id` da nota no SITRAM, consulta lancamentos e itens da nota.
-6. Atualiza a nota no banco com status de selagem, situacao, DAE, itens e detalhe JSON.
+6. Para cada item, consulta a Calculadora de ICMS e grava a trilha retornada pelo SITRAM. O identificador do item deve ser mantido como texto, pois excede o inteiro seguro do JavaScript.
+7. Atualiza a nota no banco com status de selagem, situacao, DAE, itens e detalhe JSON.
 
 Campos atualizados:
 
@@ -404,13 +406,14 @@ Campos atualizados:
 - `sitramDaeStatus`;
 - `sitramDaeResumo`;
 - `sitramDaeUrl`;
-- `sitramDetalhe`, com `notaFiscal`, `lancamentos` e `itens`.
+- `sitramDetalhe`, com `notaFiscal`, `lancamentos`, `itens` e a trilha `calculadoraSitram` de cada item.
 
 Uso do espelho SITRAM:
 
 - O sistema pode montar `/danfe-sitram/{chave}` com dados do SITRAM para impressao via `Ctrl+P`.
 - Esse documento e um espelho operacional, nao substitui o DANFE oficial do XML `procNFe`.
-- Para notas antigas ja consultadas antes desta melhoria, e preciso reconsultar o SITRAM para preencher `itens`.
+- Para notas antigas ja consultadas antes desta melhoria, e preciso reconsultar o SITRAM para preencher `itens` e `calculadoraSitram`.
+- O espelho classifica cada item diretamente pela receita da calculadora: `1031 - SUBT`, `1023 - ANTC`, ou `Sem ST/ANT`; FECOP usa a receita `2020`/valor individual quando informado.
 
 Status DAE normalizados:
 
@@ -427,7 +430,7 @@ Cuidados:
 - `NAO_ENCONTRADA` nao significa erro da NF-e; pode significar que a nota nao passou pelo fluxo SITRAM.
 - O status manual de pagamento (`pagamentoManualEm`) tem prioridade sobre o status retornado pelo SITRAM.
 - Lancamento FECOP codigo `2020` e ocultado na visualizacao normal de DAE.
-- A memoria completa da calculadora ICMS do portal ainda nao esta integrada; hoje o espelho usa os campos do grid de itens e os lancamentos/DAE retornados pela API.
+- A trilha da Calculadora de ICMS e a fonte primaria para ST, ANTC, FECOP, base e ICMS por item. Os lancamentos da nota sao somente contingencia quando a calculadora individual nao responder.
 
 ## 10.1. SITRAM - pagamento ICMS / DAE por NF-e
 
