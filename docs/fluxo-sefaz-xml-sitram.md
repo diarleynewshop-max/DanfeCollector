@@ -514,9 +514,16 @@ Cuidados:
 
 ## 12. Atualizacao diaria NF + SITRAM
 
-Arquivo principal: `app/dashboard.tsx`.
+Arquivos principais:
 
-A rotina automatica roda no navegador quando o dashboard e aberto entre 06:00 e 12:00.
+- `app/dashboard.tsx`;
+- `app/api/internal/sync-nf/route.ts`;
+- `src/lib/actions.ts`.
+
+A rotina automatica roda em dois pontos:
+
+- no navegador, quando o dashboard e aberto;
+- na rota interna `/api/internal/sync-nf`, chamada pelo worker/cron.
 
 Controle local:
 
@@ -533,6 +540,15 @@ Fluxo:
 5. Pausa 200 ms entre lotes.
 6. Atualiza a tela ao final.
 
+Backfill automatico de XML/SITRAM:
+
+- `executarBackfillFiscalAutomatico` roda pelo dashboard com usuario logado.
+- `executarBackfillFiscalAutomaticoInterno` roda na rota interna apos `sincronizarCnpjsAtivosInterno`.
+- Busca NF-e recentes, fora do CE, completas, nao canceladas/denegadas, sem itens SITRAM, sem calculadora SITRAM ou com erro anterior.
+- Tambem reconsulta quando o JSON tem `itens: []`, pois a nota parece consultada mas a aba continua sem Espelho SITRAM.
+- Por padrao usa ate `40` NF-e por ciclo e janela de `60` dias.
+- Para nao repetir a mesma nota em todo ciclo do worker, o backfill so reconsulta se `sitramConsultadaEm` estiver nulo ou tiver mais de 1 hora.
+
 Selecao de notas para SITRAM diario:
 
 - `status = COMPLETA`;
@@ -545,9 +561,9 @@ Selecao de notas para SITRAM diario:
 
 Cuidados:
 
-- A rotina automatica depende de alguem abrir o dashboard no periodo da manha.
+- A rotina do dashboard depende de alguem abrir a tela, mas a rota interna tambem cobre o ciclo do worker/cron.
 - O bloqueio SEFAZ por CNPJ continua sendo respeitado.
-- SITRAM e atualizado no maximo uma vez por dia por nota elegivel, salvo consulta manual.
+- A rotina diaria normal evita repetir SITRAM no mesmo dia; o backfill de lacunas usa trava de 1 hora para notas que continuam sem itens.
 - Se o navegador limpou `localStorage`, a rotina pode tentar rodar de novo, mas a SEFAZ ainda sera protegida por `bloqueadoAte`.
 
 ## 13. Rotas internas da aplicacao

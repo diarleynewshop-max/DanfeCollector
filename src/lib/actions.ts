@@ -20,7 +20,7 @@ import {
   extrairTransporteXml,
 } from './sefaz/documentos';
 import { parseDanfe, type DanfeData } from './sefaz/detalhe';
-import { resolverXmlPath } from './xmlpath';
+import { lerXmlComFallback, resolverXmlPath } from './xmlpath';
 import { manifestar } from './sefaz/manifestacao';
 import { listarCertificadosWindows, type CertificadoWindows } from './sefaz/certstore';
 import { exigirAdmin, exigirUsuario, usuarioPodeAcessarCnpj, whereCnpjPermitido, whereNotaPermitida } from './usuarios/auth';
@@ -1055,12 +1055,12 @@ export async function obterDetalheNota(
       message: 'Esta nota ainda é um RESUMO. Faça a manifestação (Ciência da Operação) para liberar o XML completo com itens e DANFE.',
     };
   }
-  const xmlFisico = resolverXmlPath(nota.xmlPath);
-  if (!xmlFisico) {
-    return { ok: false, message: 'Arquivo XML da nota não encontrado no disco.' };
+  const xml = await lerXmlComFallback(nota.xmlStorageKey, nota.xmlPath);
+  if (!xml) {
+    return { ok: false, message: 'Arquivo XML da nota nao encontrado no Storage nem no disco.' };
   }
 
-  const danfe = parseDanfe(fs.readFileSync(xmlFisico, 'utf8'));
+  const danfe = parseDanfe(xml);
   if (!danfe) return { ok: false, message: 'Não foi possível interpretar o XML desta nota.' };
   return { ok: true, danfe };
 }
@@ -2083,6 +2083,13 @@ export interface ChavesSitramPendentes extends ActionResult {
   chaves: string[];
 }
 
+export interface ResultadoBackfillFiscal extends ActionResult {
+  sincronizacaoNotas: boolean;
+  chavesSitram: number;
+  sitramAtualizadas: number;
+  sitramErros: number;
+}
+
 function inicioDoDiaLocal(): Date {
   const data = new Date();
   data.setHours(0, 0, 0, 0);
@@ -2514,6 +2521,8 @@ export async function listarChavesSitramParaAtualizacao(
         { sitramConsultadaEm: { lt: inicioDoDiaLocal() } },
         { sitramDetalhe: null },
         { NOT: { sitramDetalhe: { contains: '"itens"' } } },
+        { sitramDetalhe: { contains: '"itens":[]' } },
+        { sitramDetalhe: { contains: '"itens": []' } },
         { NOT: { sitramDetalhe: { contains: '"calculadoraSitram"' } } },
         { sitramDetalhe: { contains: '"calculadorasErro"' } },
       ],
@@ -2549,6 +2558,158 @@ export async function listarChavesSitramSemConsulta(
   cnpjId?: number
 ): Promise<ChavesSitramPendentes> {
   return listarChavesSitramParaAtualizacao(ano, cnpjId);
+}
+
+async function listarChavesSitramBackfillAutomatico(
+  usuario: Awaited<ReturnType<typeof exigirUsuario>> | null,
+  limite: number,
+  dias: number
+): Promise<string[]> {
+  const corte = new Date();
+  corte.setDate(corte.getDate() - dias);
+  corte.setHours(0, 0, 0, 0);
+  const reconsultarApos = new Date(Date.now() - 60 * 60 * 1000);
+
+  const notas = await prisma.notaFiscal.findMany({
+    where: {
+      ...(usuario ? whereNotaPermitida(usuario) : {}),
+      status: 'COMPLETA',
+      situacaoSefaz: { notIn: ['CANCELADA', 'DENEGADA'] },
+      emitidaEm: { gte: corte },
+      AND: [
+        {
+          OR: [
+            { sitramConsultadaEm: null },
+            { sitramConsultadaEm: { lt: reconsultarApos } },
+          ],
+        },
+        {
+          OR: [
+            { sitramDetalhe: null },
+            { NOT: { sitramDetalhe: { contains: '"itens"' } } },
+            { sitramDetalhe: { contains: '"itens":[]' } },
+            { sitramDetalhe: { contains: '"itens": []' } },
+            { NOT: { sitramDetalhe: { contains: '"calculadoraSitram"' } } },
+            { sitramDetalhe: { contains: '"itensErro"' } },
+            { sitramDetalhe: { contains: '"calculadorasErro"' } },
+          ],
+        },
+      ],
+      NOT: [{ emitenteUf: 'CE' }, { emitenteUf: null }],
+    },
+    select: { chave: true },
+    orderBy: [
+      { sitramConsultadaEm: 'asc' },
+      { emitidaEm: 'desc' },
+    ],
+    take: limite,
+  });
+
+  return notas
+    .map((nota) => nota.chave.replace(/\D/g, ''))
+    .filter((chave) => chave.length === 44 && chave.slice(20, 22) === '55');
+}
+
+type AtualizadorSitramBackfill = (
+  chaves: string[],
+  revalidarPagina: boolean
+) => Promise<ResultadoSitramLote>;
+
+async function executarBackfillFiscalBase(
+  usuario: Awaited<ReturnType<typeof exigirUsuario>> | null,
+  limiteSitram = 40,
+  diasRecentes = 60,
+  sincronizacaoNotas: boolean,
+  mensagemSync: string,
+  atualizarSitram: AtualizadorSitramBackfill
+): Promise<ResultadoBackfillFiscal> {
+  const limiteSeguro = Math.max(1, Math.min(80, Math.trunc(Number(limiteSitram) || 40)));
+  const diasSeguros = Math.max(1, Math.min(180, Math.trunc(Number(diasRecentes) || 60)));
+
+  const chaves = await listarChavesSitramBackfillAutomatico(usuario, limiteSeguro, diasSeguros);
+  let sitramAtualizadas = 0;
+  let sitramErros = 0;
+  let mensagemSitram = 'nenhuma NF-e recente pendente de itens SITRAM';
+
+  if (chaves.length > 0) {
+    try {
+      const sitram = await atualizarSitram(chaves, false);
+      sitramAtualizadas = sitram.resultados.reduce((total, item) => total + item.notasAtualizadas, 0);
+      sitramErros = sitram.resultados.filter((item) => item.status === 'erro').length;
+      mensagemSitram = `${chaves.length} NF-e reconsultada(s), ${sitramAtualizadas} atualizada(s), ${sitramErros} erro(s)`;
+    } catch (error: unknown) {
+      sitramErros = chaves.length;
+      mensagemSitram = `${chaves.length} NF-e pendente(s), erro ao reconsultar: ${(error as Error).message || 'falha desconhecida'}`;
+    }
+  }
+
+  if (sincronizacaoNotas || sitramAtualizadas > 0) revalidatePath('/');
+
+  const mensagemNf = mensagemSync
+    ? `NF-e ${sincronizacaoNotas ? 'sincronizadas' : 'nao sincronizadas'}`
+    : 'NF-e nao rodada nesta etapa';
+
+  return {
+    success: (sincronizacaoNotas || !mensagemSync) && sitramErros === 0,
+    message: `Backfill automatico: ${mensagemNf}; SITRAM ${mensagemSitram}.${mensagemSync && !sincronizacaoNotas ? ` Sync: ${mensagemSync}` : ''}`,
+    sincronizacaoNotas,
+    chavesSitram: chaves.length,
+    sitramAtualizadas,
+    sitramErros,
+  };
+}
+
+export async function executarBackfillFiscalAutomatico(
+  limiteSitram = 40,
+  diasRecentes = 60
+): Promise<ResultadoBackfillFiscal> {
+  let usuario: Awaited<ReturnType<typeof exigirUsuario>>;
+  try {
+    usuario = await exigirUsuario();
+  } catch (error: unknown) {
+    return {
+      success: false,
+      message: (error as Error).message,
+      sincronizacaoNotas: false,
+      chavesSitram: 0,
+      sitramAtualizadas: 0,
+      sitramErros: 0,
+    };
+  }
+
+  let sincronizacaoNotas = false;
+  let mensagemSync = '';
+  try {
+    const sync = await sincronizarCnpjsAtivos();
+    sincronizacaoNotas = sync.success;
+    mensagemSync = sync.message;
+  } catch (error: unknown) {
+    mensagemSync = (error as Error).message || 'Erro ao sincronizar NF-e.';
+  }
+
+  return executarBackfillFiscalBase(
+    usuario,
+    limiteSitram,
+    diasRecentes,
+    sincronizacaoNotas,
+    mensagemSync,
+    atualizarSitramPorChaves
+  );
+}
+
+export async function executarBackfillFiscalAutomaticoInterno(
+  limiteSitram = 40,
+  diasRecentes = 60,
+  resultadoSincronizacao?: ActionResult
+): Promise<ResultadoBackfillFiscal> {
+  return executarBackfillFiscalBase(
+    null,
+    limiteSitram,
+    diasRecentes,
+    resultadoSincronizacao?.success ?? false,
+    resultadoSincronizacao?.message ?? '',
+    atualizarSitramPorChavesInterno
+  );
 }
 
 export async function consultarSitramNotasForaDoCe(
@@ -2694,8 +2855,7 @@ export async function atualizarSitramPorChaves(
     return { success: false, message: 'Informe ao menos uma chave NF-e ou MDF-e com 44 digitos.', resultados: [] };
   }
 
-  const contemMdfe = chaves.some((chave) => chave.length === 44 && chave.slice(20, 22) === '58');
-  if (contemMdfe && usarProxyFiscal()) {
+  if (usarProxyFiscal()) {
     try {
       const resultado = await chamarFiscalWorker<ResultadoSitramLote>('atualizarSitramPorChaves', {
         chavesEntrada: chaves,

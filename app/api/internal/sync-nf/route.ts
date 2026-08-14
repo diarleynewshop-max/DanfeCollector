@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import {
+  executarBackfillFiscalAutomaticoInterno,
   registrarFimWorker,
   registrarInicioWorker,
   sincronizarCnpjsAtivosInterno,
@@ -23,7 +24,14 @@ export async function POST(req: Request) {
 
   await registrarInicioWorker();
   try {
-    const resultado = await sincronizarCnpjsAtivosInterno();
+    const sincronizacao = await sincronizarCnpjsAtivosInterno();
+    const backfillFiscal = await executarBackfillFiscalAutomaticoInterno(40, 60, sincronizacao);
+    const resultado = {
+      ...sincronizacao,
+      success: sincronizacao.success && backfillFiscal.success,
+      message: `${sincronizacao.message} SITRAM: ${backfillFiscal.chavesSitram} NF-e verificada(s), ${backfillFiscal.sitramAtualizadas} atualizada(s), ${backfillFiscal.sitramErros} erro(s).`,
+      backfillFiscal,
+    };
     await registrarFimWorker(resultado);
     // A falha de um CNPJ fica isolada no resumo. A rota permanece 200 para
     // que o worker continue vivo e tente os demais no próximo ciclo.

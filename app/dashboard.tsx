@@ -37,6 +37,7 @@ import {
   consultarPagamentoIcmsNota,
   consultarPagamentoIcmsLote,
   listarChavesSitramParaAtualizacao,
+  executarBackfillFiscalAutomatico,
   atualizarTransporteNotasExistentes,
   conferirNotasRecentes,
   listarApiKeys,
@@ -70,11 +71,13 @@ import {
 } from '@/lib/sitram/dae';
 import {
   extrairEspelhoSitram,
+  extrairItensSitram,
   resumirTributosItensSitram,
   type ResumoTributosItensSitram,
   type TipoTributoItemSitram,
 } from '@/lib/sitram/espelho';
 import {
+  RAIZ_CNPJ_NEWSHOP,
   notaNewshopParaNewshop,
   notaPassaFiltroTransferenciaNewshop,
   type FiltroTransferenciaNewshop,
@@ -173,7 +176,7 @@ type FiltrosRelatorioAplicados = {
 const DAE_A_PAGAR = ['EM_ABERTO', 'LIBERADA_PARA_GERAR'];
 const SITUACAO_SITRAM_TRAMITA = 'A Pagar - Processo TRAMITA/SANFIT';
 const TAMANHO_PAGINA_RELATORIO = 200;
-const RAIZES_RELATORIO_PADRAO = ['50767035', '62803717'];
+const RAIZES_RELATORIO_PADRAO = [RAIZ_CNPJ_NEWSHOP, '50767035', '62803717'];
 const SITUACOES_RELATORIO_OPCOES = [
   { valor: 'AUTORIZADA', label: 'Autorizada' },
   { valor: 'CANCELADA', label: 'Cancelada' },
@@ -290,6 +293,8 @@ interface DashboardProps {
 const CACHE_DANFE_PREFIX = 'danfe-cache:v2:';
 const CACHE_DANFE_INDEX = 'danfe-cache:v2:index';
 const CACHE_DANFE_MAX = 12;
+const BACKFILL_FISCAL_STORAGE_KEY = 'danfe-backfill-fiscal:last-run-v2';
+const BACKFILL_FISCAL_INTERVALO_MS = 60 * 60 * 1000;
 const cacheDanfeMemoria = new Map<number, DanfeData>();
 
 function formatarCnpj(cnpj: string | null): string {
@@ -522,6 +527,24 @@ function notaForaCeMais15DiasSemDaeOuPagamento(nota: NotaComCnpj, referencia = n
   return statusDae !== 'PAGO' && statusDae !== 'EM_ABERTO';
 }
 
+function notaPrecisaBackfillSitram(nota: NotaComCnpj): boolean {
+  const ufEmitente = (nota.emitenteUf ?? '').trim().toUpperCase();
+  if (!ufEmitente || ufEmitente === 'CE') return false;
+  if (nota.status !== 'COMPLETA') return false;
+  if (nota.situacaoSefaz === 'CANCELADA' || nota.situacaoSefaz === 'DENEGADA') return false;
+  const detalhe = nota.sitramDetalhe ?? '';
+  const itens = extrairItensSitram(nota);
+  return (
+    !nota.sitramConsultadaEm ||
+    !detalhe ||
+    itens.length === 0 ||
+    !detalhe.includes('"itens"') ||
+    !detalhe.includes('"calculadoraSitram"') ||
+    detalhe.includes('"itensErro"') ||
+    detalhe.includes('"calculadorasErro"')
+  );
+}
+
 const DIAS_RECONSULTA_DAE_NOVO = 30;
 
 function dentroJanelaReconsultaDaeNovo(
@@ -621,6 +644,7 @@ export default function Dashboard({
   // pagamento de ICMS etc.) faz a página trazer de volta só a 1ª página
   // padrão e a lista filtrada "some" na tela do usuário.
   const notasEstendidasRef = useRef(false);
+  const backfillFiscalDisparadoRef = useRef(false);
 
   // Quando o servidor re-renderiza (ex: após anexar arquivo, consultar pagamento,
   // sync etc. chamando revalidatePath), o Next.js manda de novo `notasIniciais`
@@ -681,6 +705,7 @@ export default function Dashboard({
   const [sitramAno, setSitramAno] = useState(String(anosDisponiveis[0] ?? new Date().getFullYear()));
   const [sitramConsultandoTudo, setSitramConsultandoTudo] = useState(false);
   const [rotinaMatinalRodando, setRotinaMatinalRodando] = useState(false);
+  const [backfillFiscalRodando, setBackfillFiscalRodando] = useState(false);
   const [sitramProgresso, setSitramProgresso] = useState<{
     feito: number;
     total: number;
@@ -933,6 +958,53 @@ export default function Dashboard({
     () => notas.filter((nota) => notaForaCeMais15DiasSemDaeOuPagamento(nota)).length,
     [notas]
   );
+
+  const qtdNotasSemItensSitram = useMemo(
+    () => notas.filter((nota) => notaPrecisaBackfillSitram(nota)).length,
+    [notas]
+  );
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (backfillFiscalRodando || backfillFiscalDisparadoRef.current) return;
+
+    const temLacunaVisivel = qtdNotasSemItensSitram > 0;
+    const ultimoRaw = Number(window.localStorage.getItem(BACKFILL_FISCAL_STORAGE_KEY) || '0');
+    const ultimo = Number.isFinite(ultimoRaw) ? ultimoRaw : 0;
+    const dentroDoCooldown = Date.now() - ultimo < BACKFILL_FISCAL_INTERVALO_MS;
+    if (!temLacunaVisivel && dentroDoCooldown) return;
+
+    let cancelado = false;
+    const timer = window.setTimeout(async () => {
+      if (cancelado) return;
+      backfillFiscalDisparadoRef.current = true;
+      setBackfillFiscalRodando(true);
+      if (temLacunaVisivel) {
+        setStatus({ success: true, message: `Completando XML/SITRAM em segundo plano para ${qtdNotasSemItensSitram} nota(s).` });
+      }
+
+      try {
+        const resultado = await executarBackfillFiscalAutomatico(40, 60);
+        window.localStorage.setItem(BACKFILL_FISCAL_STORAGE_KEY, String(Date.now()));
+        if (resultado.chavesSitram > 0 || resultado.sincronizacaoNotas) {
+          setStatus({ success: resultado.success, message: resultado.message });
+          router.refresh();
+        }
+      } catch (error: unknown) {
+        window.localStorage.setItem(BACKFILL_FISCAL_STORAGE_KEY, String(Date.now()));
+        if (temLacunaVisivel) {
+          setStatus({ success: false, message: (error as Error).message || 'Backfill fiscal automatico falhou.' });
+        }
+      } finally {
+        setBackfillFiscalRodando(false);
+      }
+    }, temLacunaVisivel ? 1200 : 4000);
+
+    return () => {
+      cancelado = true;
+      window.clearTimeout(timer);
+    };
+  }, [backfillFiscalRodando, qtdNotasSemItensSitram, router]);
 
   const situacoesSitramParaFiltro = useMemo(() => {
     const situacoes = new Set<string>([SITUACAO_SITRAM_TRAMITA]);
@@ -4303,6 +4375,12 @@ function alternarValorFiltro(atuais: string[], valor: string): string[] {
   return atuais.includes(valor) ? atuais.filter((item) => item !== valor) : [...atuais, valor];
 }
 
+function mesmosValoresFiltro(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false;
+  const set = new Set(a);
+  return b.every((valor) => set.has(valor));
+}
+
 function ChecklistFiltro({
   titulo,
   opcoes,
@@ -4560,6 +4638,10 @@ function RelatoriosDashboard({
     }
     return [...mapa.values()].sort((a, b) => a.ordem - b.ordem || a.nome.localeCompare(b.nome));
   }, [notasIndexadas]);
+  const raizesTodasEmpresasRelatorio = useMemo(
+    () => empresasRelatorio.map((empresa) => empresa.raiz),
+    [empresasRelatorio]
+  );
 
   const fornecedoresRelatorio = useMemo(() => {
     const mapa = new Map<string, { valor: string; label: string; sub: string; qtd: number }>();
@@ -4912,6 +4994,36 @@ function RelatoriosDashboard({
       tributoItem: 'todos',
       transferenciaNewshop: 'ocultar',
     });
+    setUfSelecionada(null);
+    setLimiteTabela(20);
+  }
+
+  const valorEmpresaRelatoriosProntos = (() => {
+    const raizes = filtrosRelatorioAplicados.raizesEmpresa;
+    if (raizes.length === 0) return 'nenhuma';
+    if (mesmosValoresFiltro(raizes, raizesTodasEmpresasRelatorio)) return 'todas';
+    if (raizes.length === 1) return raizes[0];
+    return 'personalizado';
+  })();
+
+  function aplicarEmpresaRelatoriosProntos(valor: string) {
+    if (valor === 'personalizado') return;
+    const raizes = valor === 'todas'
+      ? raizesTodasEmpresasRelatorio
+      : valor === 'nenhuma'
+        ? []
+        : [valor];
+
+    setFiltroRaizesEmpresaRelatorio([...raizes]);
+    setFornecedorFiltroAtivo(false);
+    setFiltroFornecedoresRelatorio([]);
+    setBuscaFornecedorRelatorio('');
+    setFiltrosRelatorioAplicados((atuais) => ({
+      ...atuais,
+      raizesEmpresa: [...raizes],
+      fornecedores: [],
+      fornecedorAtivo: false,
+    }));
     setUfSelecionada(null);
     setLimiteTabela(20);
   }
@@ -5326,9 +5438,26 @@ function RelatoriosDashboard({
         <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
           <div>
             <h2 className="text-base font-bold text-[var(--ink)]">Relatórios prontos</h2>
-            <p className="mt-1 text-xs text-[var(--ink-mut)]">Os arquivos usam o filtro aplicado acima.</p>
+            <p className="mt-1 text-xs text-[var(--ink-mut)]">Os arquivos usam os filtros aplicados. A empresa abaixo troca a base na hora.</p>
           </div>
-          <span className="text-xs text-[var(--ink-mut)]">{notasPeriodo.length} nota(s) selecionada(s)</span>
+          <div className="flex flex-wrap items-end gap-2">
+            <div className="min-w-[190px]">
+              <label className="block text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-mut)]">Empresa</label>
+              <select
+                value={valorEmpresaRelatoriosProntos}
+                onChange={(e) => aplicarEmpresaRelatoriosProntos(e.target.value)}
+                className="mt-1 w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-1.5 text-sm font-semibold text-[var(--ink)]"
+              >
+                <option value="todas">Todas empresas</option>
+                {valorEmpresaRelatoriosProntos === 'personalizado' && <option value="personalizado">Filtro atual</option>}
+                {valorEmpresaRelatoriosProntos === 'nenhuma' && <option value="nenhuma">Nenhuma empresa</option>}
+                {empresasRelatorio.map((empresa) => (
+                  <option key={empresa.raiz} value={empresa.raiz}>{empresa.nome.toUpperCase()}</option>
+                ))}
+              </select>
+            </div>
+            <span className="pb-2 text-xs text-[var(--ink-mut)]">{notasPeriodo.length} nota(s) selecionada(s)</span>
+          </div>
         </div>
         <div className="flex flex-wrap gap-2">
           <button type="button" onClick={baixarRelatorioNotasCsv} className="rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm font-semibold text-[var(--ink)] hover:bg-[var(--surface-2)]">
