@@ -209,6 +209,8 @@ const DAE_RELATORIO_OPCOES = [
   { valor: 'sem-dae', label: 'Sem DAE' },
   { valor: 'consultado', label: 'Consultado' },
 ];
+const RELATORIO_CAMPO_CONTROLE = 'mt-1 h-9 rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 text-sm text-[var(--ink)] outline-none';
+const RELATORIO_BOTAO_ACAO = 'inline-flex h-9 items-center justify-center rounded-lg px-4 text-sm transition';
 const SITUACOES_NOTA_OPCOES: Array<{ valor: FiltroSituacaoNota; label: string }> = [
   { valor: 'inconsistente', label: 'Inconsistente' },
   { valor: 'efetivada', label: 'Efetivada' },
@@ -4346,11 +4348,11 @@ function ChecklistFiltro({
   }, [aberto]);
 
   return (
-    <div ref={ref} className={`relative min-w-[150px] ${aberto ? 'z-40' : 'z-0'} ${className}`}>
+    <div ref={ref} className={`relative ${className || 'min-w-[150px]'} ${aberto ? 'z-40' : 'z-0'}`}>
       <button
         type="button"
         onClick={() => setAberto((atual) => !atual)}
-        className={`flex w-full items-center justify-between gap-3 rounded-lg border px-3 py-1.5 text-left text-sm transition ${
+        className={`flex h-[54px] w-full items-center justify-between gap-3 rounded-lg border px-3 py-2 text-left text-sm transition ${
           aberto
             ? 'border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)] shadow-sm'
             : 'border-[var(--border-strong)] bg-[var(--surface)] text-[var(--ink)] hover:bg-[var(--surface-2)]'
@@ -5161,7 +5163,7 @@ function RelatoriosDashboard({
             type="date"
             value={dataInicio}
             onChange={(e) => setDataInicio(e.target.value)}
-            className="mt-1 rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-1.5 text-sm text-[var(--ink)]"
+            className={`${RELATORIO_CAMPO_CONTROLE} w-[130px]`}
           />
         </div>
         <div>
@@ -5170,7 +5172,7 @@ function RelatoriosDashboard({
             type="date"
             value={dataFim}
             onChange={(e) => setDataFim(e.target.value)}
-            className="mt-1 rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-1.5 text-sm text-[var(--ink)]"
+            className={`${RELATORIO_CAMPO_CONTROLE} w-[130px]`}
           />
         </div>
         <ChecklistFiltro
@@ -5180,13 +5182,14 @@ function RelatoriosDashboard({
           onToggle={(valor) => setFiltroRaizesEmpresaRelatorio((atuais) => alternarValorFiltro(atuais, valor))}
           onMarcarTodos={() => setFiltroRaizesEmpresaRelatorio(empresasRelatorio.map((empresa) => empresa.raiz))}
           onLimpar={() => setFiltroRaizesEmpresaRelatorio([])}
+          className="w-[120px]"
         />
         <div>
           <label className="block text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-mut)]">{rt('Tipo', '类型')}</label>
           <select
             value={filtroTipoRelatorio}
             onChange={(e) => setFiltroTipoRelatorio(e.target.value)}
-            className="mt-1 rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-1.5 text-sm text-[var(--ink)]"
+            className={`${RELATORIO_CAMPO_CONTROLE} w-[92px]`}
           >
             <option value="todos">{rt('Todos', '全部')}</option>
             {tiposRelatorio.map((tipo) => (
@@ -5201,6 +5204,7 @@ function RelatoriosDashboard({
           onToggle={(valor) => setFiltroSituacoesRelatorio((atuais) => alternarValorFiltro(atuais, valor))}
           onMarcarTodos={() => setFiltroSituacoesRelatorio(SITUACOES_RELATORIO_OPCOES.map((opcao) => opcao.valor))}
           onLimpar={() => setFiltroSituacoesRelatorio([])}
+          className="w-[120px]"
         />
         <ChecklistFiltro
           titulo="DAE"
@@ -5209,6 +5213,7 @@ function RelatoriosDashboard({
           onToggle={(valor) => setFiltroDaesRelatorio((atuais) => alternarValorFiltro(atuais, valor))}
           onMarcarTodos={() => setFiltroDaesRelatorio(DAE_RELATORIO_OPCOES.map((opcao) => opcao.valor))}
           onLimpar={() => setFiltroDaesRelatorio([])}
+          className="w-[120px]"
           maxHeight="max-h-44"
         />
         <div>
@@ -5216,7 +5221,7 @@ function RelatoriosDashboard({
           <select
             value={filtroTributoItemRelatorio}
             onChange={(e) => setFiltroTributoItemRelatorio(e.target.value as FiltroTributoItem)}
-            className="mt-1 rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-1.5 text-sm text-[var(--ink)]"
+            className={`${RELATORIO_CAMPO_CONTROLE} w-[124px]`}
           >
             <option value="todos">Todos</option>
             {TRIBUTO_ITEM_OPCOES.map((opcao) => (
@@ -5229,7 +5234,7 @@ function RelatoriosDashboard({
           <select
             value={filtroTransferenciaNewshopRelatorio}
             onChange={(e) => setFiltroTransferenciaNewshopRelatorio(e.target.value as FiltroTransferenciaNewshop)}
-            className="mt-1 rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-1.5 text-sm text-[var(--ink)]"
+            className={`${RELATORIO_CAMPO_CONTROLE} w-[230px]`}
           >
             {TRANSFERENCIA_NEWSHOP_OPCOES.map((opcao) => (
               <option key={opcao.valor} value={opcao.valor}>{opcao.label}</option>
@@ -5271,7 +5276,7 @@ function RelatoriosDashboard({
           <select
             value={filtroRiscoRelatorio}
             onChange={(e) => setFiltroRiscoRelatorio(e.target.value)}
-            className="mt-1 rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-1.5 text-sm text-[var(--ink)]"
+            className={`${RELATORIO_CAMPO_CONTROLE} w-[92px]`}
           >
             <option value="todos">{rt('Todos', '全部')}</option>
             <option value="baixo">{rt('Baixo', '低')}</option>
@@ -5280,7 +5285,7 @@ function RelatoriosDashboard({
             <option value="critico">{rt('Crítico', '严重')}</option>
           </select>
         </div>
-        <div className="min-w-[220px] flex-1">
+        <div className="min-w-[260px] flex-1">
           <label className="block text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-mut)]">{rt('Buscar', '搜索')}</label>
           <input
             value={buscaRelatorio}
@@ -5292,27 +5297,27 @@ function RelatoriosDashboard({
               }
             }}
             placeholder={rt('Nota, chave, fornecedor ou CNPJ', '发票、密钥、供应商或 CNPJ')}
-            className="mt-1 w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-1.5 text-sm text-[var(--ink)]"
+            className={`${RELATORIO_CAMPO_CONTROLE} w-full`}
           />
         </div>
         <button
           type="button"
           onClick={aplicarFiltrosRelatorio}
-          className="rounded-lg bg-[var(--accent)] px-4 py-2 text-sm font-bold text-white transition hover:-translate-y-0.5 hover:shadow-md"
+          className={`${RELATORIO_BOTAO_ACAO} bg-[var(--accent)] font-bold text-white hover:-translate-y-0.5 hover:shadow-md`}
         >
           {filtrosRelatorioPendentes ? rt('Aplicar filtros', 'åº”ç”¨ç­›é€‰') : rt('Confirmar busca', 'ç¡®è®¤æœç´¢')}
         </button>
         <button
           type="button"
           onClick={limparFiltrosRelatorio}
-          className="rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-1.5 text-sm font-medium text-[var(--ink-mut)] hover:bg-[var(--surface-2)]"
+          className={`${RELATORIO_BOTAO_ACAO} border border-[var(--border-strong)] bg-[var(--surface)] font-medium text-[var(--ink-mut)] hover:bg-[var(--surface-2)]`}
         >
           {rt('Limpar filtros', 'æ¸…é™¤ç­›é€‰')}
         </button>
         {(dataInicio || dataFim) && (
           <button
             onClick={() => { setDataInicio(''); setDataFim(''); }}
-            className="rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-1.5 text-sm font-medium text-[var(--ink-mut)] hover:bg-[var(--surface-2)]"
+            className={`${RELATORIO_BOTAO_ACAO} border border-[var(--border-strong)] bg-[var(--surface)] font-medium text-[var(--ink-mut)] hover:bg-[var(--surface-2)]`}
           >
             {rt('Limpar datas', '清除日期')}
           </button>
@@ -5320,7 +5325,7 @@ function RelatoriosDashboard({
         {ufSelecionada && (
           <button
             onClick={() => setUfSelecionada(null)}
-            className="rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-emerald-700"
+            className={`${RELATORIO_BOTAO_ACAO} bg-emerald-600 font-semibold text-white hover:bg-emerald-700`}
           >
             ← {rt('Ver todo o Brasil', '查看整个巴西')}
           </button>
@@ -5329,7 +5334,7 @@ function RelatoriosDashboard({
           type="button"
           onClick={baixarExcelTransporte}
           disabled={baixandoExcelTransporte}
-          className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold text-white transition hover:-translate-y-0.5 hover:bg-emerald-700 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-60"
+          className={`${RELATORIO_BOTAO_ACAO} bg-emerald-600 font-bold text-white hover:-translate-y-0.5 hover:bg-emerald-700 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-60`}
         >
           {baixandoExcelTransporte ? rt('Gerando Excel...', 'Excel...') : rt('Baixar Excel', 'Excel')}
         </button>
