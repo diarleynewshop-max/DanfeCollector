@@ -192,6 +192,25 @@ type FiltrosRelatorioAplicados = {
 
 // DAE "a pagar" = DAE em aberto ou ainda a gerar (imposto pendente de pagamento)
 const DAE_A_PAGAR = ['EM_ABERTO', 'LIBERADA_PARA_GERAR'];
+type NotaDaeRelatorioResumo = {
+  daeStatus: string;
+  daeCodigo?: string | null;
+  daeValor?: number | null;
+  daeValorAberto?: number | null;
+  daeValorPago?: number | null;
+  impostoPago: number;
+  impostoPendente: number;
+  icms: number;
+};
+function temDaeRelatorio(nota: NotaDaeRelatorioResumo): boolean {
+  if (['PAGO', 'EM_ABERTO', 'LIBERADA_PARA_GERAR'].includes(nota.daeStatus)) return true;
+  if (nota.daeCodigo) return true;
+  return [nota.daeValor, nota.daeValorAberto, nota.daeValorPago].some((valor) => typeof valor === 'number' && valor > 0);
+}
+function valorDaeRelatorio(nota: NotaDaeRelatorioResumo): number {
+  if (nota.daeStatus === 'PAGO') return nota.impostoPago || nota.daeValorPago || nota.daeValor || nota.icms || 0;
+  return nota.impostoPendente || nota.daeValorAberto || nota.daeValor || nota.icms || 0;
+}
 const SITUACAO_SITRAM_TRAMITA = 'A Pagar - Processo TRAMITA/SANFIT';
 const TAMANHO_PAGINA_RELATORIO = 200;
 const RAIZES_RELATORIO_PADRAO = [RAIZ_CNPJ_NEWSHOP, '50767035', '62803717'];
@@ -326,6 +345,22 @@ function moeda(v: number | null): string {
 }
 function data(d: Date | string): string {
   return new Date(d).toLocaleDateString('pt-BR');
+}
+
+function dataCurta(d: Date | string | null | undefined): string {
+  if (!d) return '-';
+  const valor = new Date(d);
+  if (Number.isNaN(valor.getTime())) return String(d);
+  return valor.toLocaleDateString('pt-BR');
+}
+
+function chaveDataRelatorio(d: Date | string | null | undefined): string | null {
+  if (!d) return null;
+  if (d instanceof Date) return chaveDataLocal(d.toISOString());
+  const texto = String(d).trim();
+  const br = texto.match(/^(\d{2})\/(\d{2})\/(\d{4})/);
+  if (br) return `${br[3]}-${br[2]}-${br[1]}`;
+  return chaveDataLocal(texto);
 }
 
 function dataHora(d: Date | string | null | undefined): string {
@@ -4440,6 +4475,8 @@ function RelatoriosDashboard({
   const [buscaRelatorio, setBuscaRelatorio] = useState('');
   const [filtroTributoItemRelatorio, setFiltroTributoItemRelatorio] = useState<FiltroTributoItem>('todos');
   const [filtroTransferenciaNewshopRelatorio, setFiltroTransferenciaNewshopRelatorio] = useState<FiltroTransferenciaNewshop>('ocultar');
+  const [filtroMesDaePagamentos, setFiltroMesDaePagamentos] = useState('');
+  const [filtroEmpresaDaePagamentos, setFiltroEmpresaDaePagamentos] = useState('');
   const [limiteTabela, setLimiteTabela] = useState(20);
   const [baixandoExcelTransporte, setBaixandoExcelTransporte] = useState(false);
   const [erroExcelTransporte, setErroExcelTransporte] = useState<string | null>(null);
@@ -4468,6 +4505,11 @@ function RelatoriosDashboard({
     const emitidaEmIso = nota.emitidaEm instanceof Date ? nota.emitidaEm.toISOString() : String(nota.emitidaEm);
     const dataChave = chaveDataLocal(emitidaEmIso) ?? '';
     const daeStatus = statusDaeEfetivo(nota);
+    const dataReferenciaDaeBruta = daeStatus === 'PAGO'
+      ? (nota.daePagamentoEm ?? nota.pagamentoManualEm ?? nota.daeVencimento ?? emitidaEmIso)
+      : (nota.daeVencimento ?? emitidaEmIso);
+    const dataReferenciaDae = dataReferenciaDaeBruta instanceof Date ? dataReferenciaDaeBruta.toISOString() : String(dataReferenciaDaeBruta);
+    const daeMesChave = (chaveDataRelatorio(dataReferenciaDae) ?? dataChave).slice(0, 7);
     const diasDae = diasAteVencimento(nota.daeVencimento);
     const daePendente = DAE_A_PAGAR.includes(daeStatus);
     const itensAntc = itensTributadosPorTipoRelatorio(nota.itensTributados, 'ANTECIPACAO');
@@ -4499,6 +4541,8 @@ function RelatoriosDashboard({
       ...nota,
       dataChave,
       mesChave: dataChave.slice(0, 7),
+      daeMesChave,
+      daeDataReferencia: dataReferenciaDae,
       uf: (nota.emitenteUf || '').trim().toUpperCase(),
       daeStatus,
       diasDae,
@@ -4507,7 +4551,7 @@ function RelatoriosDashboard({
       risco,
       valor,
       icms,
-      impostoPago: daeStatus === 'PAGO' ? (nota.daeValorPago ?? nota.pagamentoManualValor ?? icms) : 0,
+      impostoPago: daeStatus === 'PAGO' ? (nota.daeValorPago ?? nota.pagamentoManualValor ?? nota.daeValor ?? icms) : 0,
       impostoPendente: daePendente ? (nota.daeValorAberto ?? nota.daeValor ?? icms) : 0,
       empresaRaiz: raizCnpj(nota.cnpj.cnpj),
       empresaLabel: nota.cnpj.razaoSocial || formatarCnpj(nota.cnpj.cnpj),
@@ -4787,6 +4831,38 @@ function RelatoriosDashboard({
       variacao,
     };
   }, [resumoFiscal.meses]);
+  const mesesDaePagamentos = useMemo(() => {
+    const mapa = new Map<string, number>();
+    for (const nota of notasIndexadas) {
+      if (!temDaeRelatorio(nota) || !nota.daeMesChave) continue;
+      mapa.set(nota.daeMesChave, (mapa.get(nota.daeMesChave) ?? 0) + 1);
+    }
+    return [...mapa.entries()]
+      .map(([chave, qtd]) => ({ chave, qtd }))
+      .sort((a, b) => b.chave.localeCompare(a.chave));
+  }, [notasIndexadas]);
+  const daesPagamentoMensal = useMemo(() => {
+    const todos = notasIndexadas
+      .filter((nota) => temDaeRelatorio(nota))
+      .filter((nota) => !filtroMesDaePagamentos || nota.daeMesChave === filtroMesDaePagamentos)
+      .filter((nota) => !filtroEmpresaDaePagamentos || nota.empresaRaiz === filtroEmpresaDaePagamentos)
+      .sort((a, b) => b.dataChave.localeCompare(a.dataChave) || (numeroNotaSistema(b) || '').localeCompare(numeroNotaSistema(a) || ''));
+    const pagos = todos.filter((nota) => nota.daeStatus === 'PAGO');
+    const naoPagos = todos.filter((nota) => nota.daeStatus !== 'PAGO');
+    const valorPago = pagos.reduce((total, nota) => total + valorDaeRelatorio(nota), 0);
+    const valorNaoPago = naoPagos.reduce((total, nota) => total + valorDaeRelatorio(nota), 0);
+    return {
+      todos,
+      pagos,
+      naoPagos,
+      valorPago,
+      valorNaoPago,
+      valorTotal: valorPago + valorNaoPago,
+    };
+  }, [notasIndexadas, filtroMesDaePagamentos, filtroEmpresaDaePagamentos]);
+  const percentualDaesPagos = daesPagamentoMensal.todos.length
+    ? (daesPagamentoMensal.pagos.length / daesPagamentoMensal.todos.length) * 100
+    : 0;
   const daesPrioritarios = useMemo(() => {
     return notasPeriodo
       .filter((nota) => nota.daePendente && nota.diasDae !== null && nota.diasDae <= 7)
@@ -5128,6 +5204,46 @@ function RelatoriosDashboard({
     ]));
   }
 
+  function baixarRelatorioDaesPagamentoCsv() {
+    const mesArquivo = filtroMesDaePagamentos || 'todos-os-meses';
+    const empresaArquivo = filtroEmpresaDaePagamentos || 'todas-empresas';
+    baixarCsv(`relatorio-daes-pagamento-${mesArquivo}-${empresaArquivo}.csv`, [
+      'Grupo pagamento',
+      'Mes DAE',
+      'NF',
+      'Serie',
+      'Empresa',
+      'Fornecedor',
+      'CNPJ fornecedor',
+      'Emissao',
+      'Referencia DAE',
+      'Vencimento',
+      'Codigo DAE',
+      'Tipo DAE',
+      'Classificacao',
+      'Valor DAE',
+      'Status SITRAM',
+      'Chave',
+    ], daesPagamentoMensal.todos.map((nota) => [
+      nota.daeStatus === 'PAGO' ? 'Pago' : 'Nao pago',
+      nota.daeMesChave ? mesLabel(nota.daeMesChave) : '',
+      numeroNotaSistema(nota),
+      serieNotaSistema(nota),
+      nota.empresaLabel,
+      nota.emitenteNomeRelatorio,
+      nota.emitenteCnpj ? formatarCnpj(nota.emitenteCnpj) : '',
+      dataCurta(nota.emitidaEm),
+      dataCurta(nota.daeDataReferencia),
+      dataCurta(nota.daeVencimento),
+      nota.daeCodigo ?? '',
+      nota.daeTipo ?? '',
+      nota.daeClassificacao ?? '',
+      valorDaeRelatorio(nota),
+      textoDaeSitram(nota.daeStatus),
+      nota.chave,
+    ]));
+  }
+
   function escaparHtmlRelatorio(valor: unknown): string {
     return String(valor ?? '')
       .replace(/&/g, '&amp;')
@@ -5151,6 +5267,58 @@ function RelatoriosDashboard({
     }).join('');
     janela.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Relatório fiscal DanfeCollector</title><style>body{font:12px Arial,sans-serif;color:#1f2937;padding:28px}h1{font-size:22px;margin:0 0 5px}p{color:#6b7280;margin:4px 0 18px}table{border-collapse:collapse;width:100%;margin-top:20px}th,td{border:1px solid #d1d5db;padding:7px;text-align:left}th{background:#f3f4f6;font-size:11px}td:nth-child(5),td:nth-child(6),td:nth-child(7){text-align:right}@media print{button{display:none}}</style></head><body><h1>Relatório fiscal</h1><p>DanfeCollector · ${escaparHtmlRelatorio(new Date().toLocaleString('pt-BR'))} · ${notasPeriodo.length} nota(s) · Total ${escaparHtmlRelatorio(moeda(totalValorPeriodo))}</p><table><thead><tr><th>Emissão</th><th>NF</th><th>Empresa</th><th>Fornecedor</th><th>Total NF</th><th>ANTC</th><th>ST</th><th>DAE</th><th>Risco</th></tr></thead><tbody>${linhas || '<tr><td colspan="9">Nenhuma nota no filtro atual.</td></tr>'}</tbody></table><script>window.onload=function(){window.print()}</script></body></html>`);
     janela.document.close();
+  }
+
+  function renderTabelaDaesPagamento(
+    titulo: string,
+    linhas: typeof daesPagamentoMensal.todos,
+    tone: 'green' | 'orange',
+    vazio: string
+  ) {
+    return (
+      <div className="min-w-0">
+        <div className="mb-2 flex items-center justify-between gap-3">
+          <h3 className="text-sm font-bold text-[var(--ink)]">{titulo}</h3>
+          <Badge tone={tone}>{linhas.length} DAE(s)</Badge>
+        </div>
+        <div className="max-h-[380px] overflow-auto rounded-lg border border-[var(--border)]">
+          <table className="min-w-[760px] text-left text-xs">
+            <thead className="sticky top-0 bg-[var(--surface-2)] text-[var(--ink-mut)]">
+              <tr>
+                <th className="px-2 py-2 font-semibold">NF</th>
+                <th className="px-2 py-2 font-semibold">Empresa</th>
+                <th className="px-2 py-2 font-semibold">Fornecedor</th>
+                <th className="px-2 py-2 font-semibold">Ref.</th>
+                <th className="px-2 py-2 font-semibold">Venc.</th>
+                <th className="px-2 py-2 text-right font-semibold">Valor</th>
+                <th className="px-2 py-2 font-semibold">SITRAM</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-[var(--border)]">
+              {linhas.map((nota) => (
+                <tr
+                  key={`dae-pag-${titulo}-${nota.id}`}
+                  className="cursor-pointer hover:bg-[var(--surface-2)]"
+                  onClick={() => onAbrirNota(nota.id, filtrosRelatorioAplicados.tributoItem)}
+                  title="Abrir nota"
+                >
+                  <td className="px-2 py-2 font-semibold text-[var(--ink)]">{numeroNotaSistema(nota) || '-'}</td>
+                  <td className="max-w-[160px] truncate px-2 py-2 text-[var(--ink)]" title={nota.empresaLabel}>{nota.empresaLabel}</td>
+                  <td className="max-w-[230px] truncate px-2 py-2 text-[var(--ink)]" title={nota.emitenteNomeRelatorio}>{nota.emitenteNomeRelatorio}</td>
+                  <td className="px-2 py-2 text-[var(--ink)]">{dataCurta(nota.daeDataReferencia)}</td>
+                  <td className="px-2 py-2 text-[var(--ink)]">{dataCurta(nota.daeVencimento)}</td>
+                  <td className="px-2 py-2 text-right font-semibold text-[var(--ink)]">{moeda(valorDaeRelatorio(nota))}</td>
+                  <td className="px-2 py-2"><Badge tone={nota.daeStatus === 'PAGO' ? 'green' : 'orange'}>{textoDaeSitram(nota.daeStatus)}</Badge></td>
+                </tr>
+              ))}
+              {linhas.length === 0 && (
+                <tr><td colSpan={7} className="px-2 py-4 text-center text-[var(--ink-mut)]">{vazio}</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -5428,6 +5596,80 @@ function RelatoriosDashboard({
         <KpiCard label="DAE vencido" value={moeda(resumoFiscal.daeVencidoValor)} sub={`${resumoFiscal.daeVencidoQtd} nota(s)`} tone="crit" />
         <KpiCard label={rt('Risco crítico/alto', '严重/高风险')} value={String(resumoFiscal.riscos.critico + resumoFiscal.riscos.alto)} sub={rt(`${resumoFiscal.riscos.medio} risco médio`, `${resumoFiscal.riscos.medio} 项中等风险`)} tone="crit" />
       </div>
+
+      <section className="report-card rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4 shadow-sm sm:p-5">
+        <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h2 className="text-base font-bold text-[var(--ink)]">DAEs por mes e empresa</h2>
+            <p className="mt-1 text-xs text-[var(--ink-mut)]">Base por pagamento/vencimento do DAE.</p>
+          </div>
+          <div className="flex flex-wrap items-end gap-2">
+            <div className="min-w-[160px]">
+              <label className="block text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-mut)]">Mes DAE</label>
+              <select
+                value={filtroMesDaePagamentos}
+                onChange={(e) => setFiltroMesDaePagamentos(e.target.value)}
+                className="mt-1 w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-1.5 text-sm font-semibold text-[var(--ink)]"
+              >
+                <option value="">Todos os meses</option>
+                {mesesDaePagamentos.map((mes) => (
+                  <option key={mes.chave} value={mes.chave}>{mesLabel(mes.chave)} ({mes.qtd})</option>
+                ))}
+              </select>
+            </div>
+            <div className="min-w-[210px]">
+              <label className="block text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-mut)]">Empresa</label>
+              <select
+                value={filtroEmpresaDaePagamentos}
+                onChange={(e) => setFiltroEmpresaDaePagamentos(e.target.value)}
+                className="mt-1 w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-1.5 text-sm font-semibold text-[var(--ink)]"
+              >
+                <option value="">Todas empresas</option>
+                {empresasRelatorio.map((empresa) => (
+                  <option key={empresa.raiz} value={empresa.raiz}>{empresa.nome.toUpperCase()}</option>
+                ))}
+              </select>
+            </div>
+            <button
+              type="button"
+              onClick={baixarRelatorioDaesPagamentoCsv}
+              disabled={daesPagamentoMensal.todos.length === 0}
+              className="rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm font-semibold text-[var(--ink)] hover:bg-[var(--surface-2)] disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              CSV DAEs
+            </button>
+            {temMais && <Badge tone="amber">carregando base</Badge>}
+          </div>
+        </div>
+
+        <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="border-l-2 border-[var(--accent)] pl-3">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-mut)]">Total DAEs</p>
+            <p className="mt-1 text-xl font-bold text-[var(--ink)]">{daesPagamentoMensal.todos.length}</p>
+            <p className="text-xs text-[var(--ink-mut)]">{moeda(daesPagamentoMensal.valorTotal)}</p>
+          </div>
+          <div className="border-l-2 border-emerald-500 pl-3">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-mut)]">Pago</p>
+            <p className="mt-1 text-xl font-bold text-[var(--ink)]">{daesPagamentoMensal.pagos.length}</p>
+            <p className="text-xs text-[var(--ink-mut)]">{moeda(daesPagamentoMensal.valorPago)}</p>
+          </div>
+          <div className="border-l-2 border-orange-500 pl-3">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-mut)]">Nao pago</p>
+            <p className="mt-1 text-xl font-bold text-[var(--ink)]">{daesPagamentoMensal.naoPagos.length}</p>
+            <p className="text-xs text-[var(--ink-mut)]">{moeda(daesPagamentoMensal.valorNaoPago)}</p>
+          </div>
+          <div className="border-l-2 border-[var(--border-strong)] pl-3">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-mut)]">% pago</p>
+            <p className="mt-1 text-xl font-bold text-[var(--ink)]">{percentualDaesPagos.toFixed(1)}%</p>
+            <p className="text-xs text-[var(--ink-mut)]">{daesPagamentoMensal.todos.length} boleto(s) DAE</p>
+          </div>
+        </div>
+
+        <div className="grid gap-4 xl:grid-cols-2">
+          {renderTabelaDaesPagamento('Pago', daesPagamentoMensal.pagos, 'green', 'Nenhum DAE pago neste filtro.')}
+          {renderTabelaDaesPagamento('Nao pago', daesPagamentoMensal.naoPagos, 'orange', 'Nenhum DAE nao pago neste filtro.')}
+        </div>
+      </section>
 
       {(carregando || temMais) && (
         <div className="report-card flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-3 text-sm text-[var(--ink-mut)]">

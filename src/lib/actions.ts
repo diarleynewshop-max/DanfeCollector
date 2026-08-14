@@ -42,6 +42,7 @@ import {
 import {
   classificarStatusDaePortal,
   detectarSuspeitasPagamentoDuplicadoIcms,
+  extrairPagamentoIcmsSitram,
   extrairResumoDae,
   lancamentosVisiveisDae,
   statusDaeEfetivo,
@@ -287,6 +288,7 @@ export type NotaRelatorio = {
   daeValor: number | null;
   daeValorAberto: number | null;
   daeValorPago: number | null;
+  daePagamentoEm: string | null;
   daeCodigo: string | null;
   daeDescricao: string | null;
   daeTipo: string | null;
@@ -1794,10 +1796,12 @@ export async function listarNotasRelatorio(pagina = 1, porPagina = 120): Promise
 
   const resultado = notas.map((nota) => {
     const resumo = extrairResumoDae(nota);
+    const pagamentoIcms = extrairPagamentoIcmsSitram(nota);
     const resumoItens = resumirTributosItensSitram(nota);
     const lancamento = lancamentosVisiveisDae(resumo.lancamentos).find((item) => !item.pago)
       ?? lancamentosVisiveisDae(resumo.lancamentos)[0]
       ?? null;
+    const documentoPago = pagamentoIcms.documentos.find((documento) => documento.pago && documento.dataPagamento) ?? null;
     const { sitramDetalhe: _sitramDetalhe, ...base } = nota;
 
     return {
@@ -1806,6 +1810,7 @@ export async function listarNotasRelatorio(pagina = 1, porPagina = 120): Promise
       daeValor: lancamento?.valor ?? null,
       daeValorAberto: lancamento?.valorAberto ?? null,
       daeValorPago: nota.pagamentoManualValor ?? lancamento?.valorPago ?? null,
+      daePagamentoEm: nota.pagamentoManualEm ? nota.pagamentoManualEm.toISOString() : documentoPago?.dataPagamento ?? null,
       daeCodigo: lancamento?.codigo ?? null,
       daeDescricao: lancamento?.descricao ?? null,
       daeTipo: lancamento?.tipo ?? null,
