@@ -69,19 +69,37 @@ import {
   statusDaeEfetivo,
   type LancamentoDaeNormalizado,
 } from '@/lib/sitram/dae';
+import { dentroJanelaReconsultaDaeNovo } from '@/lib/sitram/reconsulta';
 import {
   extrairEspelhoSitram,
-  extrairItensSitram,
   resumirTributosItensSitram,
   type ResumoTributosItensSitram,
   type TipoTributoItemSitram,
 } from '@/lib/sitram/espelho';
+import { SITRAM_BACKFILL_COOLDOWN_MS, notaPrecisaBackfillSitram } from '@/lib/sitram/backfill';
 import {
   RAIZ_CNPJ_NEWSHOP,
   notaNewshopParaNewshop,
   notaPassaFiltroTransferenciaNewshop,
   type FiltroTransferenciaNewshop,
 } from '@/lib/notasNewshop';
+import {
+  nomeEmpresaCurta,
+  nomeEmpresaRelatorioPorRaiz,
+  nomeGrupoEmpresa,
+  numeroNotaBusca,
+  numeroNotaSistema,
+  raizCnpj,
+  serieNotaSistema,
+} from '@/lib/notasIdentificacao';
+import {
+  EMPRESA_RELATORIO_NENHUMA,
+  EMPRESA_RELATORIO_PERSONALIZADO,
+  EMPRESA_RELATORIO_TODAS,
+  alternarValorFiltro,
+  resolverRaizesEmpresaRelatoriosProntos,
+  resolverValorEmpresaRelatoriosProntos,
+} from '@/lib/dashboardFiltros';
 import type { UsuarioLogado } from '@/lib/usuarios/auth';
 import {
   listarUsuariosAdmin,
@@ -294,7 +312,6 @@ const CACHE_DANFE_PREFIX = 'danfe-cache:v2:';
 const CACHE_DANFE_INDEX = 'danfe-cache:v2:index';
 const CACHE_DANFE_MAX = 12;
 const BACKFILL_FISCAL_STORAGE_KEY = 'danfe-backfill-fiscal:last-run-v2';
-const BACKFILL_FISCAL_INTERVALO_MS = 60 * 60 * 1000;
 const cacheDanfeMemoria = new Map<number, DanfeData>();
 
 function formatarCnpj(cnpj: string | null): string {
@@ -322,17 +339,6 @@ function dataHora(d: Date | string | null | undefined): string {
   });
 }
 
-function raizCnpj(valor: string | null | undefined): string {
-  return (valor ?? '').replace(/\D/g, '').slice(0, 8);
-}
-
-function nomeEmpresaRelatorioPorRaiz(raiz: string, fallback?: string | null): string {
-  if (raiz === '45998339') return 'Newshop';
-  if (raiz === '50767035') return 'Facil';
-  if (raiz === '62803717') return 'Soye';
-  return fallback || raiz || 'Empresa';
-}
-
 const LARGURA_MIN_COLUNA: Record<ColunaRedimensionavel, number> = {
   nf: 90,
   emitente: 140,
@@ -342,49 +348,6 @@ const LARGURA_MIN_COLUNA: Record<ColunaRedimensionavel, number> = {
   sitram: 130,
   status: 130,
 };
-
-function nomeGrupoEmpresa(cnpj: string | null | undefined): string {
-  const raiz = (cnpj ?? '').replace(/\D/g, '').slice(0, 8);
-  if (raiz === '50767035' || raiz === '62803717') return 'GRUPO SF';
-  if (raiz === '45998339') return 'GRUPO NEWSHOP';
-  return 'OUTROS';
-}
-
-function nomeEmpresaCurta(nota: NotaComCnpj): string {
-  const cnpj = nota.cnpj.cnpj.replace(/\D/g, '');
-  if (cnpj === '50767035000129') return 'Facil';
-  if (cnpj === '50767035000200') return 'Facil Filial';
-  if (cnpj === '62803717000129') return 'Soye';
-  if (cnpj.startsWith('45998339')) return nota.cnpj.razaoSocial || 'Newshop';
-  return nota.cnpj.razaoSocial || formatarCnpj(nota.cnpj.cnpj);
-}
-
-function numeroNotaDaChave(chave: string | null | undefined): string | null {
-  const normalizada = String(chave ?? '').replace(/\D/g, '');
-  if (normalizada.length !== 44) return null;
-  const numero = normalizada.slice(25, 34);
-  return numero.replace(/^0+/, '') || numero;
-}
-
-function serieNotaDaChave(chave: string | null | undefined): string | null {
-  const normalizada = String(chave ?? '').replace(/\D/g, '');
-  if (normalizada.length !== 44) return null;
-  const serie = normalizada.slice(22, 25);
-  return serie.replace(/^0+/, '') || serie;
-}
-
-function numeroNotaSistema(nota: Pick<NotaComCnpj, 'numero' | 'chave'>): string {
-  return nota.numero || numeroNotaDaChave(nota.chave) || '';
-}
-
-function serieNotaSistema(nota: Pick<NotaComCnpj, 'serie' | 'chave'>): string {
-  return nota.serie || serieNotaDaChave(nota.chave) || '';
-}
-
-function numeroNotaBusca(nota: Pick<NotaComCnpj, 'numero' | 'chave'>): string {
-  const numero = numeroNotaSistema(nota);
-  return String(Number(numero) || numero.replace(/^0+/, '') || '');
-}
 
 function lerDanfeCacheLocal(notaId: number): DanfeData | null {
   const memoria = cacheDanfeMemoria.get(notaId);
@@ -525,45 +488,6 @@ function notaForaCeMais15DiasSemDaeOuPagamento(nota: NotaComCnpj, referencia = n
 
   const statusDae = statusDaeEfetivo(nota);
   return statusDae !== 'PAGO' && statusDae !== 'EM_ABERTO';
-}
-
-function notaPrecisaBackfillSitram(nota: NotaComCnpj): boolean {
-  const ufEmitente = (nota.emitenteUf ?? '').trim().toUpperCase();
-  if (!ufEmitente || ufEmitente === 'CE') return false;
-  if (nota.status !== 'COMPLETA') return false;
-  if (nota.situacaoSefaz === 'CANCELADA' || nota.situacaoSefaz === 'DENEGADA') return false;
-  const detalhe = nota.sitramDetalhe ?? '';
-  const itens = extrairItensSitram(nota);
-  return (
-    !nota.sitramConsultadaEm ||
-    !detalhe ||
-    itens.length === 0 ||
-    !detalhe.includes('"itens"') ||
-    !detalhe.includes('"calculadoraSitram"') ||
-    detalhe.includes('"itensErro"') ||
-    detalhe.includes('"calculadorasErro"')
-  );
-}
-
-const DIAS_RECONSULTA_DAE_NOVO = 30;
-
-function dentroJanelaReconsultaDaeNovo(
-  emitidaEm: Date | string,
-  lancamentos: Array<Pick<LancamentoDaeNormalizado, 'vencimento'>>
-): boolean {
-  const corte = new Date();
-  corte.setHours(0, 0, 0, 0);
-  corte.setDate(corte.getDate() - DIAS_RECONSULTA_DAE_NOVO);
-
-  const datas = lancamentos
-    .map((lancamento) => lancamento.vencimento ? new Date(lancamento.vencimento) : null)
-    .filter((data): data is Date => !!data && !Number.isNaN(data.getTime()));
-
-  const referencia = datas.length > 0
-    ? new Date(Math.max(...datas.map((data) => data.getTime())))
-    : new Date(emitidaEm);
-
-  return !Number.isNaN(referencia.getTime()) && referencia.getTime() >= corte.getTime();
 }
 
 function notaElegivelConsultaPagamentoIcms(nota: NotaComCnpj): boolean {
@@ -971,7 +895,7 @@ export default function Dashboard({
     const temLacunaVisivel = qtdNotasSemItensSitram > 0;
     const ultimoRaw = Number(window.localStorage.getItem(BACKFILL_FISCAL_STORAGE_KEY) || '0');
     const ultimo = Number.isFinite(ultimoRaw) ? ultimoRaw : 0;
-    const dentroDoCooldown = Date.now() - ultimo < BACKFILL_FISCAL_INTERVALO_MS;
+    const dentroDoCooldown = Date.now() - ultimo < SITRAM_BACKFILL_COOLDOWN_MS;
     if (!temLacunaVisivel && dentroDoCooldown) return;
 
     let cancelado = false;
@@ -4371,16 +4295,6 @@ function HomeAtalho({ sigla, titulo, detalhe, onClick }: { sigla: string; titulo
   );
 }
 
-function alternarValorFiltro(atuais: string[], valor: string): string[] {
-  return atuais.includes(valor) ? atuais.filter((item) => item !== valor) : [...atuais, valor];
-}
-
-function mesmosValoresFiltro(a: string[], b: string[]): boolean {
-  if (a.length !== b.length) return false;
-  const set = new Set(a);
-  return b.every((valor) => set.has(valor));
-}
-
 function ChecklistFiltro({
   titulo,
   opcoes,
@@ -4998,21 +4912,14 @@ function RelatoriosDashboard({
     setLimiteTabela(20);
   }
 
-  const valorEmpresaRelatoriosProntos = (() => {
-    const raizes = filtrosRelatorioAplicados.raizesEmpresa;
-    if (raizes.length === 0) return 'nenhuma';
-    if (mesmosValoresFiltro(raizes, raizesTodasEmpresasRelatorio)) return 'todas';
-    if (raizes.length === 1) return raizes[0];
-    return 'personalizado';
-  })();
+  const valorEmpresaRelatoriosProntos = resolverValorEmpresaRelatoriosProntos(
+    filtrosRelatorioAplicados.raizesEmpresa,
+    raizesTodasEmpresasRelatorio
+  );
 
   function aplicarEmpresaRelatoriosProntos(valor: string) {
-    if (valor === 'personalizado') return;
-    const raizes = valor === 'todas'
-      ? raizesTodasEmpresasRelatorio
-      : valor === 'nenhuma'
-        ? []
-        : [valor];
+    const raizes = resolverRaizesEmpresaRelatoriosProntos(valor, raizesTodasEmpresasRelatorio);
+    if (!raizes) return;
 
     setFiltroRaizesEmpresaRelatorio([...raizes]);
     setFornecedorFiltroAtivo(false);
@@ -5448,9 +5355,9 @@ function RelatoriosDashboard({
                 onChange={(e) => aplicarEmpresaRelatoriosProntos(e.target.value)}
                 className="mt-1 w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-1.5 text-sm font-semibold text-[var(--ink)]"
               >
-                <option value="todas">Todas empresas</option>
-                {valorEmpresaRelatoriosProntos === 'personalizado' && <option value="personalizado">Filtro atual</option>}
-                {valorEmpresaRelatoriosProntos === 'nenhuma' && <option value="nenhuma">Nenhuma empresa</option>}
+                <option value={EMPRESA_RELATORIO_TODAS}>Todas empresas</option>
+                {valorEmpresaRelatoriosProntos === EMPRESA_RELATORIO_PERSONALIZADO && <option value={EMPRESA_RELATORIO_PERSONALIZADO}>Filtro atual</option>}
+                {valorEmpresaRelatoriosProntos === EMPRESA_RELATORIO_NENHUMA && <option value={EMPRESA_RELATORIO_NENHUMA}>Nenhuma empresa</option>}
                 {empresasRelatorio.map((empresa) => (
                   <option key={empresa.raiz} value={empresa.raiz}>{empresa.nome.toUpperCase()}</option>
                 ))}

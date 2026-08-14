@@ -5,6 +5,7 @@ import type { UsuarioLogado } from '@/lib/usuarios/auth';
 import { whereNotaPermitida } from '@/lib/usuarios/auth';
 import { diasAteVencimento, extrairResumoDae, statusDaeEfetivo } from '@/lib/sitram/dae';
 import { extrairEspelhoSitram } from '@/lib/sitram/espelho';
+import { numeroNotaDaChave } from '@/lib/notasIdentificacao';
 
 type Registro = Record<string, unknown>;
 
@@ -142,13 +143,6 @@ function escolherDataVencimento(lancamentos: Array<{ vencimento: string | null }
   return datas[0];
 }
 
-function numeroNotaDaChave(chave: string | null | undefined): string {
-  const normalizada = String(chave ?? '').replace(/\D/g, '');
-  if (normalizada.length !== 44) return '';
-  const numero = normalizada.slice(25, 34);
-  return numero.replace(/^0+/, '') || numero;
-}
-
 function dataParametro(valor: string | undefined, fimDoDia: boolean): Date | undefined {
   if (!valor) return undefined;
   if (!/^\d{4}-\d{2}-\d{2}$/.test(valor)) {
@@ -272,7 +266,7 @@ function normalizarLancamentosParaLinha(nota: NotaDaeVencida): LinhaDaeVencida |
   ].filter(Boolean);
 
   return {
-    numeroNota: nota.numero || numeroNotaDaChave(nota.chave),
+    numeroNota: nota.numero || numeroNotaDaChave(nota.chave) || '',
     chaveAcesso: nota.chave,
     nomeFornecedor: nota.emitenteNome || '',
     nomeLojaRecebeu: nota.cnpj.razaoSocial || '',
@@ -302,7 +296,7 @@ function notaPassaFiltrosDerivados(nota: NotaDaeVencida, filtros: FiltrosRelator
 
   const textoBusca = normalizarBusca([
     nota.numero,
-    numeroNotaDaChave(nota.chave),
+    numeroNotaDaChave(nota.chave) || '',
     nota.chave,
     nota.emitenteNome,
     nota.emitenteCnpj,

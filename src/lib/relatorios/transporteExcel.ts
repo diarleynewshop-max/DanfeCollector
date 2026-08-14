@@ -13,6 +13,7 @@ import {
   notaPassaFiltroTransferenciaNewshop,
   type FiltroTransferenciaNewshop,
 } from '@/lib/notasNewshop';
+import { numeroNotaDaChave, serieNotaDaChave } from '@/lib/notasIdentificacao';
 
 export interface FiltrosRelatorioTransporte {
   usuario: UsuarioLogado;
@@ -120,20 +121,6 @@ function dataParametro(valor: string | undefined, fimDoDia: boolean): Date | und
   return new Date(`${valor}T${fimDoDia ? '23:59:59.999' : '00:00:00.000'}-03:00`);
 }
 
-function numeroNotaDaChave(chave: string | null | undefined): string {
-  const normalizada = String(chave ?? '').replace(/\D/g, '');
-  if (normalizada.length !== 44) return '';
-  const numero = normalizada.slice(25, 34);
-  return numero.replace(/^0+/, '') || numero;
-}
-
-function serieNotaDaChave(chave: string | null | undefined): string {
-  const normalizada = String(chave ?? '').replace(/\D/g, '');
-  if (normalizada.length !== 44) return '';
-  const serie = normalizada.slice(22, 25);
-  return serie.replace(/^0+/, '') || serie;
-}
-
 function formatarCpfCnpj(valor: string | null | undefined): string {
   const digitos = String(valor ?? '').replace(/\D/g, '');
   if (digitos.length === 14) {
@@ -187,11 +174,11 @@ function textoProdutosRelatorio(resumo: ResumoTributosItensSitram, tipo: TipoTri
 function montarLinha(nota: NotaTransporte, resumoTributos: ResumoTributosItensSitram, filtroTributoItem?: TipoTributoItemSitram): LinhaRelatorio {
   return {
     chaveAcesso: nota.chave,
-    numeroNota: nota.numero || numeroNotaDaChave(nota.chave),
+    numeroNota: nota.numero || numeroNotaDaChave(nota.chave) || '',
     dataEmissao: nota.emitidaEm,
     cnpjFornecedor: formatarCpfCnpj(nota.emitenteCnpj),
     nomeFornecedor: nota.emitenteNome || '',
-    serie: nota.serie || serieNotaDaChave(nota.chave),
+    serie: nota.serie || serieNotaDaChave(nota.chave) || '',
     uf: nota.emitenteUf || '',
     valorNfe: nota.valorTotal ?? null,
     icmsDestacado: nota.valorIcms ?? null,

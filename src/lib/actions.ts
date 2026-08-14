@@ -46,11 +46,13 @@ import {
   lancamentosVisiveisDae,
   statusDaeEfetivo,
 } from './sitram/dae';
+import { dentroJanelaReconsultaDaeNovo } from './sitram/reconsulta';
 import {
   resumirTributosItensSitram,
   type ItemTributadoSitramResumo,
 } from './sitram/espelho';
 import { RAIZ_CNPJ_NEWSHOP } from './notasNewshop';
+import { numeroNotaDaChave, serieNotaDaChave } from './notasIdentificacao';
 import { parseRelacaoPagamentoSitram, chaveCruzamento, extrairDaChave } from './sitram/pagamento';
 import {
   consultarDaePorCodigo,
@@ -2110,20 +2112,6 @@ function textoCampoSitram(objeto: unknown, ...campos: string[]): string | null {
   return null;
 }
 
-function numeroNotaDaChave(chave: string | null | undefined): string | null {
-  const normalizada = String(chave ?? '').replace(/\D/g, '');
-  if (normalizada.length !== 44) return null;
-  const numero = normalizada.slice(25, 34);
-  return numero.replace(/^0+/, '') || numero;
-}
-
-function serieNotaDaChave(chave: string | null | undefined): string | null {
-  const normalizada = String(chave ?? '').replace(/\D/g, '');
-  if (normalizada.length !== 44) return null;
-  const serie = normalizada.slice(22, 25);
-  return serie.replace(/^0+/, '') || serie;
-}
-
 function numeroNotaSitram(nota: SitramNotaFiscal | SitramPortalNotaFiscal, chave: string): string | null {
   return textoCampoSitram(nota, 'numero', 'numeroNotaFiscal', 'numeroNota', 'nNF')
     ?? numeroNotaDaChave(chave);
@@ -3084,29 +3072,8 @@ function idsDaSimulacaoPagamento(simulacao: unknown): string[] {
   return [...ids];
 }
 
-const DIAS_RECONSULTA_DAE_NOVO = 30;
-
 function pagamentoIcmsJaConsultado(detalhe: RegistroJson): boolean {
   return !!textoJson(registroJson(detalhe.pagamentoIcms).consultadoEm);
-}
-
-function dentroJanelaReconsultaDaeNovo(
-  emitidaEm: Date,
-  lancamentos: Array<{ vencimento: string | null }>
-): boolean {
-  const corte = new Date();
-  corte.setHours(0, 0, 0, 0);
-  corte.setDate(corte.getDate() - DIAS_RECONSULTA_DAE_NOVO);
-
-  const datas = lancamentos
-    .map((lancamento) => lancamento.vencimento ? new Date(lancamento.vencimento) : null)
-    .filter((data): data is Date => !!data && !Number.isNaN(data.getTime()));
-
-  const referencia = datas.length > 0
-    ? new Date(Math.max(...datas.map((data) => data.getTime())))
-    : new Date(emitidaEm);
-
-  return !Number.isNaN(referencia.getTime()) && referencia.getTime() >= corte.getTime();
 }
 
 function lotesDe<T>(itens: T[], tamanho: number): T[][] {
