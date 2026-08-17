@@ -142,6 +142,7 @@ type FiltroModalidadeNota = 'simplificada' | 'estorno' | 'devolucao' | 'transfer
 type FiltroTributoItem = 'todos' | TipoTributoItemSitram;
 type SecaoApp = 'home' | 'notas' | 'relatorios' | 'ie-fornecedor' | 'empresas' | 'usuarios' | 'configuracao';
 type ColunaRedimensionavel = 'nf' | 'emitente' | 'destinatario' | 'valores' | 'transporte' | 'sitram' | 'status';
+type ModalRelatorioTipo = 'ranking-uf' | 'detalhe-uf' | 'evolucao-mensal' | 'emitentes' | 'daes-pagos' | 'daes-nao-pagos' | 'daes-prioritarios' | 'pendencias';
 type FiltrosNotasAplicados = {
   numero: string;
   chave: string;
@@ -213,6 +214,7 @@ function valorDaeRelatorio(nota: NotaDaeRelatorioResumo): number {
 }
 const SITUACAO_SITRAM_TRAMITA = 'A Pagar - Processo TRAMITA/SANFIT';
 const TAMANHO_PAGINA_RELATORIO = 200;
+const LIMITE_PREVIA_RELATORIO = 5;
 const RAIZES_RELATORIO_PADRAO = [RAIZ_CNPJ_NEWSHOP, '50767035', '62803717'];
 const SITUACOES_RELATORIO_OPCOES = [
   { valor: 'AUTORIZADA', label: 'Autorizada' },
@@ -4477,6 +4479,7 @@ function RelatoriosDashboard({
   const [filtroTransferenciaNewshopRelatorio, setFiltroTransferenciaNewshopRelatorio] = useState<FiltroTransferenciaNewshop>('ocultar');
   const [filtroMesDaePagamentos, setFiltroMesDaePagamentos] = useState('');
   const [filtroEmpresaDaePagamentos, setFiltroEmpresaDaePagamentos] = useState('');
+  const [modalRelatorio, setModalRelatorio] = useState<ModalRelatorioTipo | null>(null);
   const [limiteTabela, setLimiteTabela] = useState(20);
   const [baixandoExcelTransporte, setBaixandoExcelTransporte] = useState(false);
   const [erroExcelTransporte, setErroExcelTransporte] = useState<string | null>(null);
@@ -4724,7 +4727,7 @@ function RelatoriosDashboard({
       porMes.set(mesChave, mes);
     }
 
-    const topEmitentes = [...porEmitente.values()].sort((a, b) => b.valor - a.valor).slice(0, 8);
+    const topEmitentes = [...porEmitente.values()].sort((a, b) => b.valor - a.valor);
     const meses = [...porMes.entries()].sort((a, b) => a[0].localeCompare(b[0]));
     const maxMes = Math.max(...meses.map(([, v]) => v.valor), 0);
     return { qtd: doEstado.length, valor, icms, topEmitentes, meses, maxMes };
@@ -4863,12 +4866,12 @@ function RelatoriosDashboard({
   const percentualDaesPagos = daesPagamentoMensal.todos.length
     ? (daesPagamentoMensal.pagos.length / daesPagamentoMensal.todos.length) * 100
     : 0;
-  const daesPrioritarios = useMemo(() => {
+  const daesPrioritariosTodos = useMemo(() => {
     return notasPeriodo
       .filter((nota) => nota.daePendente && nota.diasDae !== null && nota.diasDae <= 7)
-      .sort((a, b) => (a.diasDae ?? 999) - (b.diasDae ?? 999))
-      .slice(0, 12);
+      .sort((a, b) => (a.diasDae ?? 999) - (b.diasDae ?? 999));
   }, [notasPeriodo]);
+  const daesPrioritarios = daesPrioritariosTodos.slice(0, LIMITE_PREVIA_RELATORIO);
   const pendenciasPrioritarias = useMemo(() => {
     const peso = { critico: 0, alto: 1, medio: 2, baixo: 3 };
     return notasPeriodo
@@ -4878,7 +4881,7 @@ function RelatoriosDashboard({
         if (risco !== 0) return risco;
         return b.valor - a.valor;
       })
-      .slice(0, 12);
+      .slice(0, LIMITE_PREVIA_RELATORIO);
   }, [notasPeriodo]);
   const todasPendencias = useMemo(
     () => notasPeriodo
@@ -5273,17 +5276,19 @@ function RelatoriosDashboard({
     titulo: string,
     linhas: typeof daesPagamentoMensal.todos,
     tone: 'green' | 'orange',
-    vazio: string
+    vazio: string,
+    modalTipo: ModalRelatorioTipo
   ) {
+    const linhasCompactas = linhas.slice(0, LIMITE_PREVIA_RELATORIO);
     return (
       <div className="min-w-0">
         <div className="mb-2 flex items-center justify-between gap-3">
           <h3 className="text-sm font-bold text-[var(--ink)]">{titulo}</h3>
           <Badge tone={tone}>{linhas.length} DAE(s)</Badge>
         </div>
-        <div className="max-h-[380px] overflow-auto rounded-lg border border-[var(--border)]">
+        <div className="overflow-hidden rounded-lg border border-[var(--border)]">
           <table className="min-w-[760px] text-left text-xs">
-            <thead className="sticky top-0 bg-[var(--surface-2)] text-[var(--ink-mut)]">
+            <thead className="bg-[var(--surface-2)] text-[var(--ink-mut)]">
               <tr>
                 <th className="px-2 py-2 font-semibold">NF</th>
                 <th className="px-2 py-2 font-semibold">Empresa</th>
@@ -5295,7 +5300,7 @@ function RelatoriosDashboard({
               </tr>
             </thead>
             <tbody className="divide-y divide-[var(--border)]">
-              {linhas.map((nota) => (
+              {linhasCompactas.map((nota) => (
                 <tr
                   key={`dae-pag-${titulo}-${nota.id}`}
                   className="cursor-pointer hover:bg-[var(--surface-2)]"
@@ -5311,14 +5316,220 @@ function RelatoriosDashboard({
                   <td className="px-2 py-2"><Badge tone={nota.daeStatus === 'PAGO' ? 'green' : 'orange'}>{textoDaeSitram(nota.daeStatus)}</Badge></td>
                 </tr>
               ))}
-              {linhas.length === 0 && (
+              {linhasCompactas.length === 0 && (
                 <tr><td colSpan={7} className="px-2 py-4 text-center text-[var(--ink-mut)]">{vazio}</td></tr>
               )}
             </tbody>
           </table>
         </div>
+        {linhas.length > LIMITE_PREVIA_RELATORIO && (
+          <button
+            type="button"
+            onClick={() => setModalRelatorio(modalTipo)}
+            className="mt-2 rounded-lg border border-[var(--border-strong)] px-3 py-1.5 text-xs font-semibold text-[var(--ink)] hover:bg-[var(--surface-2)]"
+          >
+            Ver completo
+          </button>
+        )}
       </div>
     );
+  }
+
+  function botaoVerCompleto(tipo: ModalRelatorioTipo, total: number) {
+    if (total <= LIMITE_PREVIA_RELATORIO) return null;
+    return (
+      <button
+        type="button"
+        onClick={() => setModalRelatorio(tipo)}
+        className="rounded-lg border border-[var(--border-strong)] px-3 py-1.5 text-xs font-semibold text-[var(--ink)] hover:bg-[var(--surface-2)]"
+      >
+        Ver completo
+      </button>
+    );
+  }
+
+  function tituloModalRelatorio(tipo: ModalRelatorioTipo): string {
+    const titulos: Record<ModalRelatorioTipo, string> = {
+      'ranking-uf': 'Ranking por estado',
+      'detalhe-uf': ufSelecionada ? `${nomeUf(ufSelecionada)} (${ufSelecionada})` : 'Detalhe do estado',
+      'evolucao-mensal': 'Evolucao mensal',
+      emitentes: 'Principais emitentes',
+      'daes-pagos': 'DAEs pagos',
+      'daes-nao-pagos': 'DAEs nao pagos',
+      'daes-prioritarios': 'DAEs vencidos e proximos',
+      pendencias: 'Pendencias e risco fiscal',
+    };
+    return titulos[tipo];
+  }
+
+  function renderTabelaDaesModal(linhas: typeof daesPagamentoMensal.todos) {
+    return (
+      <table className="min-w-[900px] text-left text-xs">
+        <thead className="sticky top-0 bg-[var(--surface-2)] text-[var(--ink-mut)]">
+          <tr>
+            <th className="px-3 py-2 font-semibold">NF</th>
+            <th className="px-3 py-2 font-semibold">Empresa</th>
+            <th className="px-3 py-2 font-semibold">Fornecedor</th>
+            <th className="px-3 py-2 font-semibold">Ref.</th>
+            <th className="px-3 py-2 font-semibold">Venc.</th>
+            <th className="px-3 py-2 text-right font-semibold">Valor</th>
+            <th className="px-3 py-2 font-semibold">SITRAM</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-[var(--border)]">
+          {linhas.map((nota) => (
+            <tr
+              key={`modal-dae-${nota.id}`}
+              className="cursor-pointer hover:bg-[var(--surface-2)]"
+              onClick={() => {
+                setModalRelatorio(null);
+                onAbrirNota(nota.id, filtrosRelatorioAplicados.tributoItem);
+              }}
+            >
+              <td className="px-3 py-2 font-semibold text-[var(--ink)]">{numeroNotaSistema(nota) || '-'}</td>
+              <td className="max-w-[180px] truncate px-3 py-2 text-[var(--ink)]" title={nota.empresaLabel}>{nota.empresaLabel}</td>
+              <td className="max-w-[260px] truncate px-3 py-2 text-[var(--ink)]" title={nota.emitenteNomeRelatorio}>{nota.emitenteNomeRelatorio}</td>
+              <td className="px-3 py-2 text-[var(--ink)]">{dataCurta(nota.daeDataReferencia)}</td>
+              <td className="px-3 py-2 text-[var(--ink)]">{dataCurta(nota.daeVencimento)}</td>
+              <td className="px-3 py-2 text-right font-semibold text-[var(--ink)]">{moeda(valorDaeRelatorio(nota))}</td>
+              <td className="px-3 py-2"><Badge tone={nota.daeStatus === 'PAGO' ? 'green' : 'orange'}>{textoDaeSitram(nota.daeStatus)}</Badge></td>
+            </tr>
+          ))}
+          {linhas.length === 0 && (
+            <tr><td colSpan={7} className="px-3 py-6 text-center text-[var(--ink-mut)]">Sem dados neste filtro.</td></tr>
+          )}
+        </tbody>
+      </table>
+    );
+  }
+
+  function renderConteudoModalRelatorio() {
+    if (!modalRelatorio) return null;
+
+    if (modalRelatorio === 'daes-pagos') return renderTabelaDaesModal(daesPagamentoMensal.pagos);
+    if (modalRelatorio === 'daes-nao-pagos') return renderTabelaDaesModal(daesPagamentoMensal.naoPagos);
+    if (modalRelatorio === 'daes-prioritarios') return renderTabelaDaesModal(daesPrioritariosTodos);
+
+    if (modalRelatorio === 'ranking-uf') {
+      return (
+        <div className="space-y-2">
+          {ranking.map((item) => (
+            <button
+              key={`modal-rank-${item.uf}`}
+              type="button"
+              onClick={() => {
+                selecionar(item.uf);
+                setModalRelatorio(null);
+              }}
+              className="w-full rounded-lg border border-[var(--border)] px-3 py-2 text-left hover:bg-[var(--surface-2)]"
+            >
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-sm font-bold text-[var(--ink)]">{item.uf} <span className="font-normal text-[var(--ink-mut)]">{nomeUf(item.uf)}</span></span>
+                <span className="text-sm font-semibold text-[var(--ink)]">{moeda(item.valor)}</span>
+              </div>
+              <div className="mt-1 text-xs text-[var(--ink-mut)]">{item.qtd} nota(s)</div>
+            </button>
+          ))}
+          {ranking.length === 0 && <p className="text-sm text-[var(--ink-mut)]">Sem dados neste filtro.</p>}
+        </div>
+      );
+    }
+
+    if (modalRelatorio === 'detalhe-uf' && detalheUf) {
+      return (
+        <div className="grid gap-4 lg:grid-cols-2">
+          <div>
+            <h3 className="mb-2 text-sm font-bold text-[var(--ink)]">Por mes</h3>
+            <div className="space-y-2">
+              {detalheUf.meses.map(([chave, v]) => (
+                <div key={`modal-uf-mes-${chave}`} className="rounded-lg border border-[var(--border)] px-3 py-2">
+                  <div className="flex justify-between gap-3 text-sm">
+                    <span className="font-semibold text-[var(--ink)]">{mesLabel(chave)}</span>
+                    <span className="font-bold text-[var(--ink)]">{moeda(v.valor)}</span>
+                  </div>
+                  <p className="text-xs text-[var(--ink-mut)]">{v.qtd} nota(s)</p>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div>
+            <h3 className="mb-2 text-sm font-bold text-[var(--ink)]">Emitentes</h3>
+            <div className="space-y-2">
+              {detalheUf.topEmitentes.map((emitente, i) => (
+                <div key={`modal-uf-emit-${emitente.nome}-${i}`} className="rounded-lg border border-[var(--border)] px-3 py-2">
+                  <div className="flex justify-between gap-3">
+                    <span className="truncate text-sm font-semibold text-[var(--ink)]" title={emitente.nome}>{emitente.nome}</span>
+                    <span className="shrink-0 text-sm font-bold text-[var(--ink)]">{moeda(emitente.valor)}</span>
+                  </div>
+                  <p className="text-xs text-[var(--ink-mut)]">{emitente.qtd} nota(s)</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    if (modalRelatorio === 'evolucao-mensal') {
+      return (
+        <div className="space-y-2">
+          {resumoFiscal.meses.map(([chave, v]) => (
+            <div key={`modal-mes-${chave}`} className="rounded-lg border border-[var(--border)] px-3 py-2">
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-sm font-bold text-[var(--ink)]">{mesLabel(chave)}</span>
+                <span className="text-sm font-semibold text-[var(--ink)]">{moeda(v.valor)}</span>
+              </div>
+              <p className="mt-1 text-xs text-[var(--ink-mut)]">{v.qtd} nota(s) - ICMS {moeda(v.icms)} - pago {moeda(v.pago)} - pendente {moeda(v.pendente)}</p>
+            </div>
+          ))}
+        </div>
+      );
+    }
+
+    if (modalRelatorio === 'emitentes') {
+      return (
+        <div className="space-y-2">
+          {fornecedoresResumo.map((fornecedor) => (
+            <div key={`modal-forn-${fornecedor.cnpj || fornecedor.fornecedor}`} className="rounded-lg border border-[var(--border)] px-3 py-2">
+              <div className="flex justify-between gap-3">
+                <span className="truncate text-sm font-semibold text-[var(--ink)]" title={fornecedor.fornecedor}>{fornecedor.fornecedor}</span>
+                <span className="shrink-0 text-sm font-bold text-[var(--ink)]">{moeda(fornecedor.valor)}</span>
+              </div>
+              <p className="text-xs text-[var(--ink-mut)]">{fornecedor.notas} nota(s) - ICMS {moeda(fornecedor.icms)} {fornecedor.cnpj ? `- ${fornecedor.cnpj}` : ''}</p>
+            </div>
+          ))}
+        </div>
+      );
+    }
+
+    if (modalRelatorio === 'pendencias') {
+      return (
+        <div className="space-y-2">
+          {todasPendencias.map((nota) => (
+            <button
+              key={`modal-pend-${nota.id}`}
+              type="button"
+              onClick={() => {
+                setModalRelatorio(null);
+                onAbrirNota(nota.id, filtrosRelatorioAplicados.tributoItem);
+              }}
+              className="w-full rounded-lg border border-[var(--border)] px-3 py-2 text-left hover:bg-[var(--surface-2)]"
+            >
+              <div className="flex items-center justify-between gap-3">
+                <span className="truncate text-sm font-semibold text-[var(--ink)]" title={nota.emitenteNomeRelatorio}>
+                  NF {numeroNotaSistema(nota) || '-'} - {nota.emitenteNomeRelatorio}
+                </span>
+                <Badge tone={nota.risco === 'critico' ? 'red' : nota.risco === 'alto' ? 'orange' : 'amber'}>{nota.risco}</Badge>
+              </div>
+              <p className="mt-1 text-xs text-[var(--ink-mut)]">{nota.pendencias.join(' | ')}</p>
+            </button>
+          ))}
+          {todasPendencias.length === 0 && <p className="text-sm text-[var(--ink-mut)]">Sem dados neste filtro.</p>}
+        </div>
+      );
+    }
+
+    return <p className="text-sm text-[var(--ink-mut)]">Sem dados neste filtro.</p>;
   }
 
   return (
@@ -5666,8 +5877,8 @@ function RelatoriosDashboard({
         </div>
 
         <div className="grid gap-4 xl:grid-cols-2">
-          {renderTabelaDaesPagamento('Pago', daesPagamentoMensal.pagos, 'green', 'Nenhum DAE pago neste filtro.')}
-          {renderTabelaDaesPagamento('Nao pago', daesPagamentoMensal.naoPagos, 'orange', 'Nenhum DAE nao pago neste filtro.')}
+          {renderTabelaDaesPagamento('Pago', daesPagamentoMensal.pagos, 'green', 'Nenhum DAE pago neste filtro.', 'daes-pagos')}
+          {renderTabelaDaesPagamento('Nao pago', daesPagamentoMensal.naoPagos, 'orange', 'Nenhum DAE nao pago neste filtro.', 'daes-nao-pagos')}
         </div>
       </section>
 
@@ -5686,9 +5897,9 @@ function RelatoriosDashboard({
         </div>
       )}
 
-      <div className="grid items-start gap-4 xl:grid-cols-[minmax(320px,0.82fr)_minmax(360px,1.18fr)]">
+      <div className="grid gap-4 xl:grid-cols-2">
         {/* Mapa interativo */}
-        <section className="report-card rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4 shadow-sm">
+        <section className="report-card flex h-[430px] flex-col rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4 shadow-sm">
           <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
             <div>
               <h2 className="text-base font-bold text-[var(--ink)]">{rt('Mapa do Brasil por UF', '巴西各州地图')}</h2>
@@ -5706,7 +5917,7 @@ function RelatoriosDashboard({
             )}
           </div>
 
-          <div className="rounded-xl bg-[var(--surface-2)] p-2 sm:p-3">
+          <div className="min-h-0 flex-1 rounded-xl bg-[var(--surface-2)] p-2 sm:p-3">
             <MapaBrasil
               valores={valores}
               maxValor={maxValor}
@@ -5717,9 +5928,9 @@ function RelatoriosDashboard({
         </section>
 
         {/* Painel de relatório: estado selecionado OU ranking geral */}
-        <section className="report-card rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-5 shadow-sm">
+        <section className="report-card flex h-[430px] flex-col overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-5 shadow-sm">
           {ufSelecionada && detalheUf ? (
-            <div className="space-y-4">
+            <div className="flex min-h-0 flex-1 flex-col">
               <div>
                 <h2 className="text-base font-bold text-[var(--ink)]">
                   {nomeUf(ufSelecionada)} <span className="text-[var(--ink-mut)]">({ufSelecionada})</span>
@@ -5727,7 +5938,11 @@ function RelatoriosDashboard({
                 <p className="text-xs text-[var(--ink-mut)]">{rt('Resumo do estado no período selecionado.', '当前期间的州别摘要。')}</p>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="mt-2 flex justify-end">
+                {botaoVerCompleto('detalhe-uf', detalheUf.meses.length + detalheUf.topEmitentes.length)}
+              </div>
+
+              <div className="mt-3 grid grid-cols-2 gap-3">
                 <div className="rounded-lg border border-[var(--border)] p-3">
                   <p className="text-[11px] uppercase tracking-wider text-[var(--ink-mut)]">Notas</p>
                   <p className="text-xl font-bold text-[var(--ink)]">{detalheUf.qtd}</p>
@@ -5742,7 +5957,7 @@ function RelatoriosDashboard({
                 <div>
                   <h3 className="mb-2 text-sm font-bold text-[var(--ink)]">Por mês</h3>
                   <div className="space-y-1.5">
-                    {detalheUf.meses.map(([chave, v]) => (
+                    {detalheUf.meses.slice(-4).map(([chave, v]) => (
                       <div key={chave} className="flex items-center gap-2">
                         <span className="w-16 shrink-0 text-xs text-[var(--ink-mut)]">{mesLabel(chave)}</span>
                         <div className="h-2.5 flex-1 overflow-hidden rounded-full bg-[var(--surface-2)]">
@@ -5758,7 +5973,7 @@ function RelatoriosDashboard({
               <div>
                 <h3 className="mb-2 text-sm font-bold text-[var(--ink)]">Maiores emitentes</h3>
                 <div className="space-y-2">
-                  {detalheUf.topEmitentes.map((e, i) => (
+                  {detalheUf.topEmitentes.slice(0, 3).map((e, i) => (
                     <div key={i} className="rounded-lg border border-[var(--border)] p-2.5">
                       <div className="flex items-center justify-between gap-3">
                         <span className="truncate text-sm font-medium text-[var(--ink)]" title={e.nome}>{e.nome}</span>
@@ -5777,7 +5992,7 @@ function RelatoriosDashboard({
             <>
               <h2 className="mb-3 text-base font-bold text-[var(--ink)]">{rt('Ranking por estado', '各州排名')}</h2>
               <div className="space-y-2">
-                {ranking.slice(0, 14).map((item) => (
+                {ranking.slice(0, LIMITE_PREVIA_RELATORIO).map((item) => (
                   <button
                     key={item.uf}
                     onClick={() => selecionar(item.uf)}
@@ -5797,16 +6012,22 @@ function RelatoriosDashboard({
                   <p className="text-sm text-[var(--ink-mut)]">Sem notas para montar o relatório no período.</p>
                 )}
               </div>
+              <div className="mt-3">
+                {botaoVerCompleto('ranking-uf', ranking.length)}
+              </div>
             </>
           )}
         </section>
       </div>
 
       <div className="grid gap-4 xl:grid-cols-2">
-        <section className="report-card rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-5 shadow-sm">
-          <h2 className="mb-3 text-base font-bold text-[var(--ink)]">{rt('Evolução mensal', '月度趋势')}</h2>
-          <div className="space-y-2">
-            {resumoFiscal.meses.slice(-12).map(([chave, v]) => (
+        <section className="report-card flex h-[430px] flex-col overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-5 shadow-sm">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <h2 className="text-base font-bold text-[var(--ink)]">{rt('Evolução mensal', '月度趋势')}</h2>
+            {botaoVerCompleto('evolucao-mensal', resumoFiscal.meses.length)}
+          </div>
+          <div className="min-h-0 flex-1 space-y-2 overflow-hidden">
+            {resumoFiscal.meses.slice(-LIMITE_PREVIA_RELATORIO).map(([chave, v]) => (
               <div key={chave} className="rounded-lg border border-[var(--border)] p-3">
                 <div className="mb-2 flex items-center justify-between gap-3">
                   <span className="text-sm font-bold text-[var(--ink)]">{mesLabel(chave)}</span>
@@ -5826,10 +6047,13 @@ function RelatoriosDashboard({
           </div>
         </section>
 
-        <section className="report-card rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-5 shadow-sm">
-          <h2 className="mb-3 text-base font-bold text-[var(--ink)]">{rt('Principais emitentes', '主要开票方')}</h2>
-          <div className="space-y-2">
-            {resumoFiscal.topEmitentes.map((emitente, i) => (
+        <section className="report-card flex h-[430px] flex-col overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-5 shadow-sm">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <h2 className="text-base font-bold text-[var(--ink)]">{rt('Principais emitentes', '主要开票方')}</h2>
+            {botaoVerCompleto('emitentes', fornecedoresResumo.length)}
+          </div>
+          <div className="min-h-0 flex-1 space-y-2 overflow-hidden">
+            {resumoFiscal.topEmitentes.slice(0, LIMITE_PREVIA_RELATORIO).map((emitente, i) => (
               <div key={`${emitente.nome}-${i}`} className="rounded-lg border border-[var(--border)] p-3">
                 <div className="flex items-center justify-between gap-3">
                   <span className="truncate text-sm font-semibold text-[var(--ink)]" title={emitente.nome}>{emitente.nome}</span>
@@ -5848,7 +6072,7 @@ function RelatoriosDashboard({
       </div>
 
       <div className="grid gap-4 xl:grid-cols-2">
-        <section className="report-card rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-5 shadow-sm">
+        <section className="report-card flex h-[430px] flex-col overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-5 shadow-sm">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
             <h2 className="text-base font-bold text-[var(--ink)]">{rt('DAEs vencidos e próximos', '逾期及即将到期的 DAE')}</h2>
             <button
@@ -5859,8 +6083,9 @@ function RelatoriosDashboard({
             >
               Baixar planilha das vencidas
             </button>
+            {botaoVerCompleto('daes-prioritarios', daesPrioritariosTodos.length)}
           </div>
-          <div className="overflow-x-auto">
+          <div className="min-h-0 flex-1 overflow-x-auto overflow-y-hidden">
             <table className="min-w-full text-left text-xs">
               <thead className="text-[var(--ink-mut)]">
                 <tr>
@@ -5893,9 +6118,12 @@ function RelatoriosDashboard({
           </div>
         </section>
 
-        <section className="report-card rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-5 shadow-sm">
-          <h2 className="mb-3 text-base font-bold text-[var(--ink)]">{rt('Pendências e risco fiscal', '待处理事项与税务风险')}</h2>
-          <div className="space-y-2">
+        <section className="report-card flex h-[430px] flex-col overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-5 shadow-sm">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <h2 className="text-base font-bold text-[var(--ink)]">{rt('Pendências e risco fiscal', '待处理事项与税务风险')}</h2>
+            {botaoVerCompleto('pendencias', todasPendencias.length)}
+          </div>
+          <div className="min-h-0 flex-1 space-y-2 overflow-hidden">
             {pendenciasPrioritarias.map((nota) => (
               <div key={`pend-${nota.id}`} className="rounded-lg border border-[var(--border)] p-3">
                 <div className="flex items-center justify-between gap-3">
@@ -6008,6 +6236,37 @@ function RelatoriosDashboard({
           </div>
         )}
       </section>
+
+      {modalRelatorio && (
+        <div
+          className="fixed inset-0 z-[80] flex items-center justify-center bg-black/45 p-4"
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setModalRelatorio(null)}
+        >
+          <div
+            className="flex max-h-[86vh] w-full max-w-5xl flex-col rounded-2xl border border-[var(--border)] bg-[var(--surface)] shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-center justify-between gap-3 border-b border-[var(--border)] px-5 py-4">
+              <div>
+                <h2 className="text-base font-bold text-[var(--ink)]">{tituloModalRelatorio(modalRelatorio)}</h2>
+                <p className="text-xs text-[var(--ink-mut)]">{notasPeriodo.length} nota(s) no filtro atual</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setModalRelatorio(null)}
+                className="rounded-lg border border-[var(--border-strong)] px-3 py-1.5 text-sm font-semibold text-[var(--ink)] hover:bg-[var(--surface-2)]"
+              >
+                Fechar
+              </button>
+            </div>
+            <div className="min-h-0 overflow-auto p-5">
+              {renderConteudoModalRelatorio()}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
