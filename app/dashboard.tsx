@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useMemo, useEffect, useTransition, useCallback, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import type { Cnpj, NotaFiscal } from '@prisma/client';
@@ -4480,6 +4481,7 @@ function RelatoriosDashboard({
   const [filtroMesDaePagamentos, setFiltroMesDaePagamentos] = useState('');
   const [filtroEmpresaDaePagamentos, setFiltroEmpresaDaePagamentos] = useState('');
   const [modalRelatorio, setModalRelatorio] = useState<ModalRelatorioTipo | null>(null);
+  const [portalRelatorioPronto, setPortalRelatorioPronto] = useState(false);
   const [limiteTabela, setLimiteTabela] = useState(20);
   const [baixandoExcelTransporte, setBaixandoExcelTransporte] = useState(false);
   const [erroExcelTransporte, setErroExcelTransporte] = useState<string | null>(null);
@@ -4503,6 +4505,19 @@ function RelatoriosDashboard({
   const fimPeriodo = filtrosRelatorioAplicados.dataInicio && filtrosRelatorioAplicados.dataFim && filtrosRelatorioAplicados.dataInicio > filtrosRelatorioAplicados.dataFim
     ? filtrosRelatorioAplicados.dataInicio
     : filtrosRelatorioAplicados.dataFim;
+
+  useEffect(() => {
+    setPortalRelatorioPronto(true);
+  }, []);
+
+  useEffect(() => {
+    if (!modalRelatorio) return;
+    const overflowAnterior = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = overflowAnterior;
+    };
+  }, [modalRelatorio]);
 
   const notasIndexadas = useMemo(() => notas.map((nota) => {
     const emitidaEmIso = nota.emitidaEm instanceof Date ? nota.emitidaEm.toISOString() : String(nota.emitidaEm);
@@ -6237,9 +6252,9 @@ function RelatoriosDashboard({
         )}
       </section>
 
-      {modalRelatorio && (
+      {portalRelatorioPronto && modalRelatorio ? createPortal((
         <div
-          className="fixed inset-0 z-[80] flex items-center justify-center bg-black/45 p-4"
+          className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/45 p-4"
           role="dialog"
           aria-modal="true"
           onClick={() => setModalRelatorio(null)}
@@ -6266,7 +6281,7 @@ function RelatoriosDashboard({
             </div>
           </div>
         </div>
-      )}
+      ), document.body) : null}
     </div>
   );
 }
