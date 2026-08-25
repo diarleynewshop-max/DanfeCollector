@@ -18,6 +18,7 @@ export interface FiltrosRelatorioDaeVencidas {
   tipo?: string;
   situacoes?: string[];
   daeFiltros?: string[];
+  cte?: string;
   fornecedores?: string[];
   risco?: string;
   busca?: string;
@@ -25,6 +26,7 @@ export interface FiltrosRelatorioDaeVencidas {
 
 type NotaDaeVencida = {
   id: number;
+  cnpjId: number;
   chave: string;
   numero: string | null;
   emitidaEm: Date;
@@ -56,7 +58,16 @@ type LinhaDaeVencida = {
   jurosFecop: number | null;
   valorTotalPagar: number | null;
   valorTotalJuros: number | null;
+  cteQtd: number;
+  cteNumeros: string;
+  cteValorTotal: number | null;
   obs: string;
+};
+
+type ResumoCteNota = {
+  qtd: number;
+  numeros: string[];
+  valorTotal: number;
 };
 
 function registro(valor: unknown): Registro {
@@ -175,7 +186,7 @@ function jurosDocumento(documento: Registro): number | null {
   return numero(detalheDae.valorJuros) ?? numero(documento.valorJuros);
 }
 
-function normalizarLancamentosParaLinha(nota: NotaDaeVencida): LinhaDaeVencida | null {
+function normalizarLancamentosParaLinha(nota: NotaDaeVencida, resumoCte: ResumoCteNota): LinhaDaeVencida | null {
   if (!nota.sitramDetalhe) return null;
 
   let detalhe: Registro;
@@ -279,6 +290,9 @@ function normalizarLancamentosParaLinha(nota: NotaDaeVencida): LinhaDaeVencida |
     jurosFecop,
     valorTotalPagar,
     valorTotalJuros: jurosTotal,
+    cteQtd: resumoCte.qtd,
+    cteNumeros: resumoCte.numeros.join(' | '),
+    cteValorTotal: resumoCte.valorTotal > 0 ? resumoCte.valorTotal : null,
     obs: obsPartes.join(' '),
   };
 }
@@ -313,7 +327,7 @@ function aplicarLayout(sheet: ExcelJS.Worksheet) {
   sheet.views = [{ state: 'frozen', ySplit: 1 }];
   sheet.autoFilter = {
     from: { row: 1, column: 1 },
-    to: { row: 1, column: 14 },
+    to: { row: 1, column: 17 },
   };
 
   const header = sheet.getRow(1);
@@ -344,6 +358,9 @@ function aplicarLayout(sheet: ExcelJS.Worksheet) {
     { width: 16, format: '#,##0.00', align: 'right' as const },
     { width: 18, format: '#,##0.00', align: 'right' as const },
     { width: 18, format: '#,##0.00', align: 'right' as const },
+    { width: 10, format: undefined, align: 'center' as const },
+    { width: 28, format: undefined, align: 'left' as const },
+    { width: 14, format: '#,##0.00', align: 'right' as const },
     { width: 34, format: undefined, align: 'left' as const },
   ];
 
@@ -431,6 +448,7 @@ export async function gerarRelatorioDaeVencidasExcel(filtros: FiltrosRelatorioDa
     orderBy: [{ emitidaEm: 'asc' }, { numero: 'asc' }],
     select: {
       id: true,
+      cnpjId: true,
       chave: true,
       numero: true,
       emitidaEm: true,
@@ -449,9 +467,44 @@ export async function gerarRelatorioDaeVencidasExcel(filtros: FiltrosRelatorioDa
     },
   }) as NotaDaeVencida[];
 
+  const chavesNotas = notas.map((nota) => nota.chave);
+  const cnpjIdsNotas = [...new Set(notas.map((nota) => nota.cnpjId))];
+  const vinculosCte = chavesNotas.length > 0
+    ? await prisma.conhecimentoTransporteNfe.findMany({
+        where: {
+          chaveNfe: { in: chavesNotas },
+          cte: { cnpjId: { in: cnpjIdsNotas } },
+        },
+        select: {
+          chaveNfe: true,
+          cte: {
+            select: {
+              numero: true,
+              valorTotal: true,
+              valorPrestacao: true,
+            },
+          },
+        },
+      })
+    : [];
+  const ctesPorChaveNfe = new Map<string, ResumoCteNota>();
+  for (const vinculo of vinculosCte) {
+    const atual = ctesPorChaveNfe.get(vinculo.chaveNfe) ?? { qtd: 0, numeros: [], valorTotal: 0 };
+    atual.qtd += 1;
+    if (vinculo.cte.numero) atual.numeros.push(vinculo.cte.numero);
+    atual.valorTotal += vinculo.cte.valorTotal ?? vinculo.cte.valorPrestacao ?? 0;
+    ctesPorChaveNfe.set(vinculo.chaveNfe, atual);
+  }
+
   const linhas = notas
     .filter((nota) => notaPassaFiltrosDerivados(nota, filtros))
-    .map(normalizarLancamentosParaLinha)
+    .filter((nota) => {
+      const resumoCte = ctesPorChaveNfe.get(nota.chave) ?? { qtd: 0, numeros: [], valorTotal: 0 };
+      if (filtros.cte === 'com-cte') return resumoCte.qtd > 0;
+      if (filtros.cte === 'sem-cte') return resumoCte.qtd === 0;
+      return true;
+    })
+    .map((nota) => normalizarLancamentosParaLinha(nota, ctesPorChaveNfe.get(nota.chave) ?? { qtd: 0, numeros: [], valorTotal: 0 }))
     .filter((linha): linha is LinhaDaeVencida => !!linha)
     .sort((a, b) => {
       const dataA = a.dataVencimento?.getTime() ?? Number.POSITIVE_INFINITY;
@@ -479,6 +532,9 @@ export async function gerarRelatorioDaeVencidasExcel(filtros: FiltrosRelatorioDa
     'Juros Fecop',
     'Valor total a ser pago',
     'Valor total de juros',
+    'CT-e qtd',
+    'CT-e numeros',
+    'CT-e valor',
     'OBS',
   ]);
 
@@ -497,6 +553,9 @@ export async function gerarRelatorioDaeVencidasExcel(filtros: FiltrosRelatorioDa
       linha.jurosFecop,
       linha.valorTotalPagar,
       linha.valorTotalJuros,
+      linha.cteQtd,
+      linha.cteNumeros,
+      linha.cteValorTotal,
       linha.obs,
     ]);
   }

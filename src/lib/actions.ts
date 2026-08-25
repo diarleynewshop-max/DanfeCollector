@@ -13,12 +13,18 @@ import {
 } from './sefaz/certificado';
 import { limparCachePemCertificado, obterPemDePfx } from './sefaz/assinatura';
 import { consultarDistribuicaoDFe, consultarPorChave } from './sefaz/distribuicao';
+import { consultarDistribuicaoCteDFe } from './sefaz/cteDistribuicao';
 import {
   processarDocumento,
   interpretarEventoCiencia,
   interpretarEventoCancelamento,
   extrairTransporteXml,
 } from './sefaz/documentos';
+import {
+  interpretarEventoCancelamentoCte,
+  processarDocumentoCte,
+  type CteExtraido,
+} from './sefaz/cteDocumentos';
 import { parseDanfe, type DanfeData } from './sefaz/detalhe';
 import { lerXmlComFallback, resolverXmlPath } from './xmlpath';
 import { manifestar } from './sefaz/manifestacao';
@@ -293,6 +299,10 @@ export type NotaRelatorio = {
   daeDescricao: string | null;
   daeTipo: string | null;
   daeClassificacao: string | null;
+  cteQtd: number;
+  cteChaves: string[];
+  cteNumeros: string[];
+  cteValorTotal: number;
   qtdItensSt: number;
   qtdItensAntecipacao: number;
   itensTributados: ItemTributadoSitramResumo[];
@@ -575,7 +585,7 @@ export async function listarCnpjs() {
   return prisma.cnpj.findMany({
     where: whereCnpjPermitido(usuario),
     orderBy: { createdAt: 'asc' },
-    include: { _count: { select: { notas: true } } },
+    include: { _count: { select: { notas: true, ctes: true } } },
   });
 }
 
@@ -646,13 +656,13 @@ export async function removerCnpj(id: number): Promise<ActionResult> {
   try {
     const registro = await prisma.cnpj.findUnique({
       where: { id },
-      include: { _count: { select: { notas: true } } },
+      include: { _count: { select: { notas: true, ctes: true } } },
     });
     if (!registro) return { success: false, message: 'CNPJ não encontrado.' };
-    if (registro._count.notas > 0) {
+    if (registro._count.notas > 0 || registro._count.ctes > 0) {
       return {
         success: false,
-        message: `O CNPJ ${formatarCnpj(registro.cnpj)} possui ${registro._count.notas} nota(s) vinculada(s). Desative-o em vez de remover.`,
+        message: `O CNPJ ${formatarCnpj(registro.cnpj)} possui ${registro._count.notas} nota(s) e ${registro._count.ctes} CT-e vinculado(s). Desative-o em vez de remover.`,
       };
     }
 
@@ -713,6 +723,193 @@ export async function sincronizarNotas(cnpjId: number): Promise<ActionResult> {
   }
 
   return sincronizarNotasInterno(cnpjId);
+}
+
+async function salvarCteExtraido(cte: CteExtraido, cnpjId: number): Promise<'novo' | 'atualizado' | 'ignorado'> {
+  const nfeChaves = [...new Set(cte.nfeChaves.filter((chave) => /^\d{44}$/.test(chave)))];
+  const { nfeChaves: _nfeChaves, ...dadosCte } = cte;
+  void _nfeChaves;
+
+  const data = {
+    ...dadosCte,
+    nfeChavePrincipal: nfeChaves[0] ?? null,
+    cnpjId,
+  };
+
+  const existente = await prisma.conhecimentoTransporte.findUnique({
+    where: { chave: cte.chave },
+    select: { id: true, status: true },
+  });
+
+  const registro = existente
+    ? await prisma.conhecimentoTransporte.update({
+        where: { chave: cte.chave },
+        data: cte.status === 'COMPLETO' || existente.status !== 'COMPLETO'
+          ? data
+          : { nsu: cte.nsu || undefined },
+        select: { id: true },
+      })
+    : await prisma.conhecimentoTransporte.create({
+        data,
+        select: { id: true },
+      });
+
+  await prisma.conhecimentoTransporteNfe.deleteMany({ where: { cteId: registro.id } });
+  if (nfeChaves.length > 0) {
+    await prisma.conhecimentoTransporteNfe.createMany({
+      data: nfeChaves.map((chaveNfe) => ({ cteId: registro.id, chaveNfe })),
+      skipDuplicates: true,
+    });
+  }
+
+  if (!existente) return 'novo';
+  return cte.status === 'COMPLETO' || existente.status !== 'COMPLETO' ? 'atualizado' : 'ignorado';
+}
+
+export async function sincronizarCtes(cnpjId: number): Promise<ActionResult> {
+  const usuario = await exigirUsuario().catch(() => null);
+  if (!usuario) return { success: false, message: 'Sessao expirada. Faca login novamente.' };
+  if (!usuarioPodeAcessarCnpj(usuario, cnpjId)) return { success: false, message: 'Acesso negado para esta loja.' };
+
+  if (usarProxyFiscal()) {
+    try {
+      const resultado = await chamarFiscalWorker<ActionResult>('sincronizarCtes', { cnpjId });
+      revalidatePath('/');
+      return resultado;
+    } catch (error: unknown) {
+      return { success: false, message: `VPS fiscal indisponivel: ${erroWorkerFiscal(error)}` };
+    }
+  }
+
+  return sincronizarCtesInterno(cnpjId);
+}
+
+export async function sincronizarCtesInterno(cnpjId: number): Promise<ActionResult> {
+  const registro = await prisma.cnpj.findUnique({ where: { id: cnpjId } });
+  if (!registro) return { success: false, message: 'CNPJ nao encontrado.' };
+  if (!registro.ativo) return { success: false, message: 'CNPJ esta desativado.' };
+
+  if (registro.bloqueadoAteCte && registro.bloqueadoAteCte > new Date()) {
+    return {
+      success: false,
+      message: `${formatarCnpj(registro.cnpj)} CT-e em dia. A SEFAZ libera nova consulta as ${hhmm(registro.bloqueadoAteCte)}.`,
+    };
+  }
+
+  let ultNSU = registro.ultimoNsuCte;
+  let novos = 0;
+  let atualizados = 0;
+  let ignorados = 0;
+  let lotes = 0;
+  let maxNSU = maiorNsu(registro.maxNsuCte, registro.ultimoNsuCte);
+  let sincronizacaoCompleta = false;
+
+  try {
+    while (lotes < MAX_LOTES_POR_SYNC) {
+      lotes++;
+      const ret = await consultarDistribuicaoCteDFe(registro.cnpj, registro.uf, ultNSU);
+      maxNSU = maiorNsu(maxNSU, ret.maxNSU);
+
+      await prisma.cnpj.update({
+        where: { id: cnpjId },
+        data: { maxNsuCte: maxNSU, ultimoNsuCte: ultNSU, ultimaBuscaCte: new Date() },
+      });
+
+      if (ret.cStat === 656) {
+        const bloqueadoAteCte = new Date(Date.now() + 65 * 60 * 1000);
+        const nsuRetornado = /^\d+$/.test(ret.ultNSU) ? ret.ultNSU : ultNSU;
+        const novoNSU = BigInt(nsuRetornado) > BigInt(ultNSU) ? nsuRetornado : ultNSU;
+        const emDia = /existam mais documentos|aguardado 1 hora/i.test(ret.xMotivo);
+        const situacaoCte = emDia
+          ? `Em dia. Proxima consulta as ${hhmm(bloqueadoAteCte)}`
+          : `SEFAZ CT-e: ${ret.xMotivo}`;
+
+        await prisma.cnpj.update({
+          where: { id: cnpjId },
+          data: { situacaoCte, bloqueadoAteCte, ultimaBuscaCte: new Date(), ultimoNsuCte: novoNSU, maxNsuCte: maxNSU },
+        });
+        revalidatePath('/');
+        return {
+          success: emDia,
+          message: emDia
+            ? `${formatarCnpj(registro.cnpj)} CT-e em dia; nova consulta as ${hhmm(bloqueadoAteCte)}.`
+            : `SEFAZ CT-e retornou consumo indevido (656). Novas consultas apos ${hhmm(bloqueadoAteCte)}.`,
+        };
+      }
+
+      if (ret.cStat === 137) {
+        ultNSU = ret.ultNSU;
+        sincronizacaoCompleta = true;
+        break;
+      }
+
+      if (ret.cStat === 138) {
+        for (const doc of ret.documentos) {
+          const cancelamento = interpretarEventoCancelamentoCte(doc.xml);
+          if (cancelamento?.chave) {
+            await prisma.conhecimentoTransporte.updateMany({
+              where: { chave: cancelamento.chave, cnpjId },
+              data: { situacaoSefaz: 'CANCELADO' },
+            });
+          }
+
+          const cte = await processarDocumentoCte(doc, registro.cnpj);
+          if (!cte) continue;
+          const status = await salvarCteExtraido(cte, cnpjId);
+          if (status === 'novo') novos++;
+          else if (status === 'atualizado') atualizados++;
+          else ignorados++;
+        }
+
+        ultNSU = ret.ultNSU;
+        if (nsuNumero(ret.maxNSU) === BigInt(0) || nsuNumero(ret.ultNSU) >= nsuNumero(ret.maxNSU)) {
+          sincronizacaoCompleta = true;
+          break;
+        }
+        continue;
+      }
+
+      await prisma.cnpj.update({
+        where: { id: cnpjId },
+        data: { situacaoCte: `SEFAZ CT-e ${ret.cStat}: ${ret.xMotivo}`, ultimaBuscaCte: new Date(), ultimoNsuCte: ultNSU, maxNsuCte: maxNSU },
+      });
+      revalidatePath('/');
+      return { success: false, message: `SEFAZ CT-e ${ret.cStat}: ${ret.xMotivo}` };
+    }
+
+    const proxima = new Date(Date.now() + INTERVALO_MIN * 60 * 1000);
+    const situacaoCte = sincronizacaoCompleta
+      ? `Em dia - ${novos} novo(s). Proxima consulta as ${hhmm(proxima)}`
+      : `Sincronizacao pendente - NSU ${ultNSU}/${maxNSU}. Proxima tentativa as ${hhmm(proxima)}`;
+    await prisma.cnpj.update({
+      where: { id: cnpjId },
+      data: {
+        ultimoNsuCte: ultNSU,
+        maxNsuCte: maxNSU,
+        situacaoCte,
+        ultimaBuscaCte: new Date(),
+        bloqueadoAteCte: proxima,
+      },
+    });
+    revalidatePath('/');
+
+    return {
+      success: true,
+      message:
+        `${formatarCnpj(registro.cnpj)} CT-e: ${novos} novo(s), ${atualizados} atualizado(s), ${ignorados} ignorado(s). ` +
+        (sincronizacaoCompleta
+          ? `Em dia - proxima consulta as ${hhmm(proxima)}.`
+          : `Ainda pendente no NSU ${ultNSU}/${maxNSU}; nova tentativa apos ${hhmm(proxima)}.`),
+    };
+  } catch (error: unknown) {
+    const msg = (error as Error).message;
+    await prisma.cnpj.update({
+      where: { id: cnpjId },
+      data: { situacaoCte: `Erro: ${msg.slice(0, 200)}`, ultimaBuscaCte: new Date(), ultimoNsuCte: ultNSU, maxNsuCte: maxNSU },
+    });
+    revalidatePath('/');
+    return { success: false, message: msg };
+  }
 }
 
 export async function sincronizarNotasInterno(cnpjId: number): Promise<ActionResult> {
@@ -1794,6 +1991,35 @@ export async function listarNotasRelatorio(pagina = 1, porPagina = 120): Promise
   }),
   ]);
 
+  const chavesNotas = notas.map((nota) => nota.chave);
+  const cnpjIdsNotas = [...new Set(notas.map((nota) => nota.cnpjId))];
+  const vinculosCte = chavesNotas.length > 0
+    ? await prisma.conhecimentoTransporteNfe.findMany({
+        where: {
+          chaveNfe: { in: chavesNotas },
+          cte: { cnpjId: { in: cnpjIdsNotas } },
+        },
+        select: {
+          chaveNfe: true,
+          cte: {
+            select: {
+              chave: true,
+              numero: true,
+              valorTotal: true,
+              valorPrestacao: true,
+              situacaoSefaz: true,
+            },
+          },
+        },
+      })
+    : [];
+  const ctesPorChaveNfe = new Map<string, typeof vinculosCte>();
+  for (const vinculo of vinculosCte) {
+    const atual = ctesPorChaveNfe.get(vinculo.chaveNfe) ?? [];
+    atual.push(vinculo);
+    ctesPorChaveNfe.set(vinculo.chaveNfe, atual);
+  }
+
   const resultado = notas.map((nota) => {
     const resumo = extrairResumoDae(nota);
     const pagamentoIcms = extrairPagamentoIcmsSitram(nota);
@@ -1803,6 +2029,7 @@ export async function listarNotasRelatorio(pagina = 1, porPagina = 120): Promise
       ?? null;
     const documentoPago = pagamentoIcms.documentos.find((documento) => documento.pago && documento.dataPagamento) ?? null;
     const { sitramDetalhe: _sitramDetalhe, ...base } = nota;
+    const ctes = ctesPorChaveNfe.get(nota.chave) ?? [];
 
     return {
       ...base,
@@ -1815,6 +2042,10 @@ export async function listarNotasRelatorio(pagina = 1, porPagina = 120): Promise
       daeDescricao: lancamento?.descricao ?? null,
       daeTipo: lancamento?.tipo ?? null,
       daeClassificacao: resumo.classificacao ?? null,
+      cteQtd: ctes.length,
+      cteChaves: ctes.map((vinculo) => vinculo.cte.chave),
+      cteNumeros: ctes.map((vinculo) => vinculo.cte.numero).filter((numero): numero is string => !!numero),
+      cteValorTotal: ctes.reduce((totalCte, vinculo) => totalCte + (vinculo.cte.valorTotal ?? vinculo.cte.valorPrestacao ?? 0), 0),
       qtdItensSt: resumoItens.st,
       qtdItensAntecipacao: resumoItens.antecipacao,
       itensTributados: resumoItens.itens,
@@ -1974,36 +2205,53 @@ export async function sincronizarCnpjsAtivosInterno(): Promise<ActionResult> {
     return { success: true, message: 'Nenhum CNPJ ativo para sincronizar.' };
   }
 
-  let sucesso = 0;
-  let pulados = 0;
+  let sucessoNf = 0;
+  let sucessoCte = 0;
+  let puladosNf = 0;
+  let puladosCte = 0;
   let erros = 0;
   const detalhes: string[] = [];
 
   for (const cnpj of cnpjs) {
     if (cnpj.bloqueadoAte && cnpj.bloqueadoAte > new Date()) {
-      pulados++;
-      detalhes.push(`${formatarCnpj(cnpj.cnpj)} em dia ate ${hhmm(cnpj.bloqueadoAte)}`);
-      continue;
+      puladosNf++;
+      detalhes.push(`${formatarCnpj(cnpj.cnpj)} NF em dia ate ${hhmm(cnpj.bloqueadoAte)}`);
+    } else {
+      let res: ActionResult;
+      try {
+        res = await sincronizarNotasInterno(cnpj.id);
+      } catch (error: unknown) {
+        res = { success: false, message: (error as Error).message || 'Erro inesperado no CNPJ.' };
+      }
+      if (res.success) sucessoNf++;
+      else erros++;
+      detalhes.push(`${formatarCnpj(cnpj.cnpj)} NF: ${res.message}`);
     }
 
-    let res: ActionResult;
-    try {
-      res = await sincronizarNotasInterno(cnpj.id);
-    } catch (error: unknown) {
-      res = { success: false, message: (error as Error).message || 'Erro inesperado no CNPJ.' };
+    const bloqueioCte = cnpj.bloqueadoAteCte;
+    if (bloqueioCte && bloqueioCte > new Date()) {
+      puladosCte++;
+      detalhes.push(`${formatarCnpj(cnpj.cnpj)} CT-e em dia ate ${hhmm(bloqueioCte)}`);
+    } else {
+      let resCte: ActionResult;
+      try {
+        resCte = await sincronizarCtesInterno(cnpj.id);
+      } catch (error: unknown) {
+        resCte = { success: false, message: (error as Error).message || 'Erro inesperado no CT-e.' };
+      }
+      if (resCte.success) sucessoCte++;
+      else erros++;
+      detalhes.push(`${formatarCnpj(cnpj.cnpj)} CT-e: ${resCte.message}`);
     }
-    if (res.success) sucesso++;
-    else erros++;
-    detalhes.push(`${formatarCnpj(cnpj.cnpj)}: ${res.message}`);
   }
 
   revalidatePath('/');
   return {
     // Um CNPJ com erro nao invalida os demais. O detalhe fica registrado no
     // proprio CNPJ e no resumo, mas a rota continua HTTP 200 para o worker.
-    success: erros === 0 || sucesso > 0 || pulados > 0,
+    success: erros === 0 || sucessoNf > 0 || sucessoCte > 0 || puladosNf > 0 || puladosCte > 0,
     message:
-      `NF: ${sucesso} CNPJ(s) sincronizado(s), ${pulados} em intervalo, ${erros} erro(s). ` +
+      `NF: ${sucessoNf} sinc., ${puladosNf} intervalo. CT-e: ${sucessoCte} sinc., ${puladosCte} intervalo. Erros: ${erros}. ` +
       detalhes.slice(0, 7).join(' | '),
   };
 }

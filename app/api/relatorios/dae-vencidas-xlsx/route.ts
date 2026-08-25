@@ -59,6 +59,7 @@ export async function GET(req: Request) {
       tipo: parametroTexto(url, 'tipo'),
       situacoes: parametrosLista(url, 'situacao'),
       daeFiltros: parametrosLista(url, 'dae'),
+      cte: parametroTexto(url, 'cte'),
       fornecedores: parametrosLista(url, 'fornecedor'),
       risco: parametroTexto(url, 'risco'),
       busca: parametroTexto(url, 'busca'),

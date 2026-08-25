@@ -19,6 +19,11 @@ model Cnpj {
   ultimaBusca  DateTime?
   // SEFAZ cStat 656 (consumo indevido): bloqueia novas consultas até este horário
   bloqueadoAte DateTime?
+  ultimoNsuCte    String    @default("0")
+  maxNsuCte       String    @default("0")
+  situacaoCte     String    @default("Nunca sincronizado")
+  ultimaBuscaCte  DateTime?
+  bloqueadoAteCte DateTime?
   // Certificado digital vinculado (lido do repositório do Windows)
   certSerial     String?
   certThumbprint String?
@@ -26,6 +31,7 @@ model Cnpj {
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
   notas        NotaFiscal[]
+  ctes         ConhecimentoTransporte[]
   usuarios     UsuarioCnpj[]
 }
 
@@ -152,6 +158,53 @@ model NotaFiscal {
   @@index([cnpjId, sitramDaeStatus])
   @@index([cnpjId, situacaoSefaz])
   @@index([cnpjId, recebimentoStatus])
+}
+
+model ConhecimentoTransporte {
+  id                  Int      @id @default(autoincrement())
+  chave               String   @unique
+  nsu                 String?
+  numero              String?
+  serie               String?
+  emitidaEm           DateTime
+  naturezaOp          String?
+  cfop                String?
+  status              String   @default("RESUMO")
+  situacaoSefaz       String   @default("AUTORIZADO")
+  emitenteNome        String?
+  emitenteCnpj        String?
+  emitenteIe          String?
+  emitenteUf          String?
+  tomadorNome         String?
+  tomadorCnpj         String?
+  remetenteNome       String?
+  remetenteCnpj       String?
+  destinatarioNome    String?
+  destinatarioCnpj    String?
+  valorTotal          Float?
+  valorPrestacao      Float?
+  valorCarga          Float?
+  nfeChavePrincipal   String?
+  xmlPath             String?
+  xmlStorageKey       String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  cnpjId              Int
+  cnpj                Cnpj     @relation(fields: [cnpjId], references: [id])
+  notasVinculadas     ConhecimentoTransporteNfe[]
+
+  @@index([cnpjId, emitidaEm(sort: Desc)])
+  @@index([cnpjId, nfeChavePrincipal])
+}
+
+model ConhecimentoTransporteNfe {
+  id       Int      @id @default(autoincrement())
+  cteId    Int
+  chaveNfe String
+  cte      ConhecimentoTransporte @relation(fields: [cteId], references: [id], onDelete: Cascade)
+
+  @@unique([cteId, chaveNfe])
+  @@index([chaveNfe])
 }
 
 model DaeCompartilhado {

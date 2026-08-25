@@ -76,6 +76,7 @@ export async function GET(req: Request) {
       raizesCnpj: parametrosRaizesCnpj(url),
       situacoes: parametrosLista(url, 'situacao'),
       daeFiltros: parametrosLista(url, 'dae'),
+      cte: parametroTexto(url, 'cte'),
       fornecedores: parametrosLista(url, 'fornecedor'),
       tributoItem: parametroTributoItem(url),
       newshopInterna: parametroNewshopInterna(url),

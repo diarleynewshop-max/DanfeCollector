@@ -7,6 +7,7 @@ import {
   manifestarNotaInterno,
   manifestarNotasLoteInterno,
   sincronizarCnpjsAtivosInterno,
+  sincronizarCtesInterno,
   sincronizarNotasInterno,
 } from '@/lib/actions';
 import { consultarCadastroContribuinteSefaz } from '@/lib/sefaz/cadastro';
@@ -74,6 +75,9 @@ export async function POST(req: Request) {
 
       case 'sincronizarCnpjsAtivos':
         return NextResponse.json(await sincronizarCnpjsAtivosInterno());
+
+      case 'sincronizarCtes':
+        return NextResponse.json(await sincronizarCtesInterno(numeroObrigatorio(payload, 'cnpjId')));
 
       case 'conferirNotasRecentes':
         return NextResponse.json(

@@ -9,6 +9,7 @@ import {
   verificarCertificado,
   enviarCertificadoVps,
   sincronizarNotas,
+  sincronizarCtes,
   sincronizarCnpjsAtivos,
   adicionarCnpj,
   alternarAtivoCnpj,
@@ -134,7 +135,7 @@ type NotaComCnpj = NotaFiscal & {
   recebimentoConsultadoEm?: Date | string | null;
   recebimentoErro?: string | null;
 };
-type CnpjComContagem = Cnpj & { _count: { notas: number } };
+type CnpjComContagem = Cnpj & { _count: { notas: number; ctes: number } };
 type FiltroDaeSitram = 'todos' | 'consultado' | 'sem-consulta' | 'com-dae' | 'a-pagar' | 'em-aberto' | 'pago' | 'duplicidade' | 'sem-dae' | 'nao-encontrada';
 type FiltroSituacaoNota = 'inconsistente' | 'efetivada' | 'denegada' | 'pendente-conferencia' | 'com-erro' | 'pendente-recepcao' | 'cancelada' | 'pendente';
 type FiltroOrigemNota = 'proprio' | 'terceiro';
@@ -190,6 +191,7 @@ type FiltrosRelatorioAplicados = {
   busca: string;
   tributoItem: FiltroTributoItem;
   transferenciaNewshop: FiltroTransferenciaNewshop;
+  cte: string;
 };
 
 // DAE "a pagar" = DAE em aberto ou ainda a gerar (imposto pendente de pagamento)
@@ -3049,6 +3051,9 @@ export default function Dashboard({
                         <p className="text-[11px] text-[var(--ink-mut)] mt-1 rounded-md bg-[var(--surface-2)] px-2 py-1">
                           {c.uf} · NSU {Number(c.ultimoNSU)} · {c._count.notas} nota(s)
                         </p>
+                        <p className="text-[11px] text-[var(--ink-mut)] mt-1 rounded-md bg-[var(--surface-2)] px-2 py-1">
+                          CT-e: NSU {Number(c.ultimoNsuCte || 0)} - {c._count.ctes} CT-e
+                        </p>
                       </div>
                       <Badge tone={c.ativo ? 'green' : 'gray'}>{c.ativo ? t('active') : t('inactive')}</Badge>
                     </div>
@@ -3063,6 +3068,14 @@ export default function Dashboard({
                         className="rounded-md bg-emerald-600 px-2.5 py-1.5 font-semibold text-white hover:bg-emerald-700 disabled:bg-[var(--surface-2)] disabled:text-[var(--ink-mut)]"
                       >
                         {bloqueado ? t('until', { time: hora }) : t('sync')}
+                      </button>
+                      <button
+                        onClick={() => executar(() => sincronizarCtes(c.id))}
+                        disabled={pending || !c.ativo || (c.bloqueadoAteCte ? new Date(c.bloqueadoAteCte) > new Date() : false)}
+                        title="Sincronizar CT-e na SEFAZ"
+                        className="rounded-md border border-sky-200 bg-sky-50 px-2.5 py-1.5 font-semibold text-sky-700 hover:bg-sky-100 disabled:bg-[var(--surface-2)] disabled:text-[var(--ink-mut)]"
+                      >
+                        CT-e
                       </button>
                       {podeAdministrar && (
                         <>
@@ -4478,6 +4491,7 @@ function RelatoriosDashboard({
   const [buscaRelatorio, setBuscaRelatorio] = useState('');
   const [filtroTributoItemRelatorio, setFiltroTributoItemRelatorio] = useState<FiltroTributoItem>('todos');
   const [filtroTransferenciaNewshopRelatorio, setFiltroTransferenciaNewshopRelatorio] = useState<FiltroTransferenciaNewshop>('ocultar');
+  const [filtroCteRelatorio, setFiltroCteRelatorio] = useState('todos');
   const [filtroMesDaePagamentos, setFiltroMesDaePagamentos] = useState('');
   const [filtroEmpresaDaePagamentos, setFiltroEmpresaDaePagamentos] = useState('');
   const [modalRelatorio, setModalRelatorio] = useState<ModalRelatorioTipo | null>(null);
@@ -4498,6 +4512,7 @@ function RelatoriosDashboard({
     busca: '',
     tributoItem: 'todos',
     transferenciaNewshop: 'ocultar',
+    cte: 'todos',
   });
   const inicioPeriodo = filtrosRelatorioAplicados.dataInicio && filtrosRelatorioAplicados.dataFim && filtrosRelatorioAplicados.dataInicio > filtrosRelatorioAplicados.dataFim
     ? filtrosRelatorioAplicados.dataFim
@@ -4587,6 +4602,8 @@ function RelatoriosDashboard({
         nota.destCnpj,
         nota.cnpj.razaoSocial,
         nota.cnpj.cnpj,
+        nota.cteChaves.join(' '),
+        nota.cteNumeros.join(' '),
         itensTributadosTexto,
       ].filter(Boolean).join(' ')),
       itensTributadosTexto,
@@ -4686,6 +4703,8 @@ function RelatoriosDashboard({
       if (filtrosRelatorioAplicados.raizesEmpresa.length === 0 || !filtrosRelatorioAplicados.raizesEmpresa.includes(n.empresaRaiz)) return false;
       if (fornecedoresAplicadosRelatorio.length === 0 || !fornecedoresAplicadosRelatorio.includes(n.emitenteCnpj || n.emitenteNomeRelatorio)) return false;
       if (filtrosRelatorioAplicados.tipo !== 'todos' && n.tipoLabel !== filtrosRelatorioAplicados.tipo) return false;
+      if (filtrosRelatorioAplicados.cte === 'com-cte' && n.cteQtd <= 0) return false;
+      if (filtrosRelatorioAplicados.cte === 'sem-cte' && n.cteQtd > 0) return false;
       if (filtrosRelatorioAplicados.situacoes.length === 0 || !filtrosRelatorioAplicados.situacoes.includes(n.situacaoSefaz)) return false;
       if (!notaPassaFiltroDaeRelatorio(n)) return false;
       if (!notaTemTributoItem({ st: n.qtdItensSt, antecipacao: n.qtdItensAntecipacao }, filtrosRelatorioAplicados.tributoItem)) return false;
@@ -4953,7 +4972,8 @@ function RelatoriosDashboard({
     filtrosRelatorioAplicados.risco !== filtroRiscoRelatorio ||
     filtrosRelatorioAplicados.busca !== buscaRelatorio ||
     filtrosRelatorioAplicados.tributoItem !== filtroTributoItemRelatorio ||
-    filtrosRelatorioAplicados.transferenciaNewshop !== filtroTransferenciaNewshopRelatorio;
+    filtrosRelatorioAplicados.transferenciaNewshop !== filtroTransferenciaNewshopRelatorio ||
+    filtrosRelatorioAplicados.cte !== filtroCteRelatorio;
 
   function aplicarFiltrosRelatorio() {
     setFiltrosRelatorioAplicados({
@@ -4969,6 +4989,7 @@ function RelatoriosDashboard({
       busca: buscaRelatorio,
       tributoItem: filtroTributoItemRelatorio,
       transferenciaNewshop: filtroTransferenciaNewshopRelatorio,
+      cte: filtroCteRelatorio,
     });
     setUfSelecionada(null);
     setLimiteTabela(20);
@@ -4990,6 +5011,7 @@ function RelatoriosDashboard({
     setBuscaRelatorio('');
     setFiltroTributoItemRelatorio('todos');
     setFiltroTransferenciaNewshopRelatorio('ocultar');
+    setFiltroCteRelatorio('todos');
     setFiltrosRelatorioAplicados({
       dataInicio: '',
       dataFim: '',
@@ -5003,6 +5025,7 @@ function RelatoriosDashboard({
       busca: '',
       tributoItem: 'todos',
       transferenciaNewshop: 'ocultar',
+      cte: 'todos',
     });
     setUfSelecionada(null);
     setLimiteTabela(20);
@@ -5053,6 +5076,7 @@ function RelatoriosDashboard({
       busca: buscaRelatorio,
       tributoItem: filtroTributoItemRelatorio,
       transferenciaNewshop: filtroTransferenciaNewshopRelatorio,
+      cte: filtroCteRelatorio,
     };
   }
 
@@ -5071,6 +5095,7 @@ function RelatoriosDashboard({
     if (filtros.raizesEmpresa.length === 0) params.append('raizCnpj', '__none__');
     else filtros.raizesEmpresa.forEach((raiz) => params.append('raizCnpj', raiz));
     if (filtros.tipo !== 'todos') params.set('tipo', filtros.tipo);
+    if (filtros.cte !== 'todos') params.set('cte', filtros.cte);
     if (filtros.situacoes.length !== SITUACOES_RELATORIO_OPCOES.length) {
       if (filtros.situacoes.length === 0) params.append('situacao', '__none__');
       else filtros.situacoes.forEach((situacao) => params.append('situacao', situacao));
@@ -5153,7 +5178,7 @@ function RelatoriosDashboard({
   }
 
   function baixarRelatorioNotasCsv() {
-    baixarCsv('relatorio-notas-fiscais.csv', ['Emissao', 'NF', 'Serie', 'Empresa', 'Fornecedor', 'CNPJ fornecedor', 'UF', 'XML', 'Total NF', 'ICMS', 'DAE', 'Itens ANTC', 'Itens ST', 'Risco'], notasPeriodo.map((nota) => [
+    baixarCsv('relatorio-notas-fiscais.csv', ['Emissao', 'NF', 'Serie', 'Empresa', 'Fornecedor', 'CNPJ fornecedor', 'UF', 'XML', 'Total NF', 'ICMS', 'DAE', 'CT-e qtd', 'CT-e numeros', 'CT-e valor', 'Itens ANTC', 'Itens ST', 'Risco'], notasPeriodo.map((nota) => [
       data(nota.emitidaEm),
       numeroNotaSistema(nota),
       serieNotaSistema(nota),
@@ -5165,6 +5190,9 @@ function RelatoriosDashboard({
       nota.valor,
       nota.icms,
       textoDaeSitram(nota.daeStatus),
+      nota.cteQtd,
+      nota.cteNumeros.join(' | '),
+      nota.cteValorTotal,
       itensTributadosPorTipoRelatorio(nota.itensTributados, 'ANTECIPACAO', filtrosRelatorioAplicados.tributoItem).length,
       itensTributadosPorTipoRelatorio(nota.itensTributados, 'ST', filtrosRelatorioAplicados.tributoItem).length,
       nota.risco,
@@ -5241,6 +5269,9 @@ function RelatoriosDashboard({
       'Classificacao',
       'Valor DAE',
       'Status SITRAM',
+      'CT-e qtd',
+      'CT-e numeros',
+      'CT-e valor',
       'Chave',
     ], daesPagamentoMensal.todos.map((nota) => [
       nota.daeStatus === 'PAGO' ? 'Pago' : 'Nao pago',
@@ -5258,6 +5289,9 @@ function RelatoriosDashboard({
       nota.daeClassificacao ?? '',
       valorDaeRelatorio(nota),
       textoDaeSitram(nota.daeStatus),
+      nota.cteQtd,
+      nota.cteNumeros.join(' | '),
+      nota.cteValorTotal,
       nota.chave,
     ]));
   }
@@ -5610,6 +5644,18 @@ function RelatoriosDashboard({
           className="w-[120px]"
           maxHeight="max-h-44"
         />
+        <div>
+          <label className="block text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-mut)]">CT-e</label>
+          <select
+            value={filtroCteRelatorio}
+            onChange={(e) => setFiltroCteRelatorio(e.target.value)}
+            className={`${RELATORIO_CAMPO_CONTROLE} w-[104px]`}
+          >
+            <option value="todos">Todos</option>
+            <option value="com-cte">Com CT-e</option>
+            <option value="sem-cte">Sem CT-e</option>
+          </select>
+        </div>
         <div>
           <label className="block text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-mut)]">Tributo item</label>
           <select
@@ -8144,6 +8190,9 @@ function DetalheNota({
           {danfe && aba === 'danfe' && (
             <div>
               <div className="flex justify-end gap-4 mb-2">
+                <a href={`/danfe/${nota.chave}/xml`} className="text-[var(--accent)] text-sm hover:underline">
+                  Baixar XML
+                </a>
                 <a href={`/danfe/${nota.chave}`} target="_blank" rel="noopener noreferrer"
                   className="text-[var(--accent)] text-sm hover:underline">
                   Abrir DANFE / Ctrl+P ↗

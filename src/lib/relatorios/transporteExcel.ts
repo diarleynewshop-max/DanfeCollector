@@ -23,6 +23,7 @@ export interface FiltrosRelatorioTransporte {
   raizesCnpj?: string[];
   situacoes?: string[];
   daeFiltros?: string[];
+  cte?: string;
   fornecedores?: string[];
   tributoItem?: TipoTributoItemSitram;
   newshopInterna?: FiltroTransferenciaNewshop;
@@ -45,6 +46,9 @@ type LinhaRelatorio = {
   situacaoNfe: string;
   tipo: string;
   status: string;
+  cteQtd: number;
+  cteNumeros: string;
+  cteValorTotal: number | null;
 };
 
 const COLUNAS = [
@@ -64,6 +68,9 @@ const COLUNAS = [
   { key: 'situacaoNfe', header: 'Situação NF-e', width: 14.88, hidden: false },
   { key: 'tipo', header: 'TIPO', width: 14.63, hidden: false },
   { key: 'status', header: 'STATUS', width: 34.38, hidden: false },
+  { key: 'cteQtd', header: 'CT-e qtd', width: 10, hidden: false },
+  { key: 'cteNumeros', header: 'CT-e numeros', width: 28, hidden: false },
+  { key: 'cteValorTotal', header: 'CT-e valor', width: 14, hidden: false, numFmt: '#,##0.00' },
 ] satisfies Array<{
   key: keyof LinhaRelatorio;
   header: string;
@@ -112,6 +119,11 @@ const selectNotaTransporte = {
 } satisfies Prisma.NotaFiscalSelect;
 
 type NotaTransporte = Prisma.NotaFiscalGetPayload<{ select: typeof selectNotaTransporte }>;
+type ResumoCteNota = {
+  qtd: number;
+  numeros: string[];
+  valorTotal: number;
+};
 
 function dataParametro(valor: string | undefined, fimDoDia: boolean): Date | undefined {
   if (!valor) return undefined;
@@ -171,7 +183,12 @@ function textoProdutosRelatorio(resumo: ResumoTributosItensSitram, tipo: TipoTri
   return textoProdutosTributados(resumo, tipo);
 }
 
-function montarLinha(nota: NotaTransporte, resumoTributos: ResumoTributosItensSitram, filtroTributoItem?: TipoTributoItemSitram): LinhaRelatorio {
+function montarLinha(
+  nota: NotaTransporte,
+  resumoTributos: ResumoTributosItensSitram,
+  filtroTributoItem?: TipoTributoItemSitram,
+  resumoCte?: ResumoCteNota,
+): LinhaRelatorio {
   return {
     chaveAcesso: nota.chave,
     numeroNota: nota.numero || numeroNotaDaChave(nota.chave) || '',
@@ -189,6 +206,9 @@ function montarLinha(nota: NotaTransporte, resumoTributos: ResumoTributosItensSi
     situacaoNfe: textoSituacao(nota.situacaoSefaz),
     tipo: '',
     status: '',
+    cteQtd: resumoCte?.qtd ?? 0,
+    cteNumeros: resumoCte?.numeros.join(' | ') ?? '',
+    cteValorTotal: resumoCte && resumoCte.valorTotal > 0 ? resumoCte.valorTotal : null,
   };
 }
 
@@ -372,14 +392,46 @@ export async function gerarRelatorioTransporteExcel(filtros: FiltrosRelatorioTra
     select: selectNotaTransporte,
   });
 
+  const chavesNotas = notas.map((nota) => nota.chave);
+  const cnpjIdsNotas = [...new Set(notas.map((nota) => nota.cnpjId))];
+  const vinculosCte = chavesNotas.length > 0
+    ? await prisma.conhecimentoTransporteNfe.findMany({
+        where: {
+          chaveNfe: { in: chavesNotas },
+          cte: { cnpjId: { in: cnpjIdsNotas } },
+        },
+        select: {
+          chaveNfe: true,
+          cte: {
+            select: {
+              numero: true,
+              valorTotal: true,
+              valorPrestacao: true,
+            },
+          },
+        },
+      })
+    : [];
+  const ctesPorChaveNfe = new Map<string, ResumoCteNota>();
+  for (const vinculo of vinculosCte) {
+    const atual = ctesPorChaveNfe.get(vinculo.chaveNfe) ?? { qtd: 0, numeros: [], valorTotal: 0 };
+    atual.qtd += 1;
+    if (vinculo.cte.numero) atual.numeros.push(vinculo.cte.numero);
+    atual.valorTotal += vinculo.cte.valorTotal ?? vinculo.cte.valorPrestacao ?? 0;
+    ctesPorChaveNfe.set(vinculo.chaveNfe, atual);
+  }
+
   const notasComTributos = notas.map((nota) => ({
     nota,
     resumoTributos: resumirTributosItensSitram(nota),
+    resumoCte: ctesPorChaveNfe.get(nota.chave) ?? { qtd: 0, numeros: [], valorTotal: 0 },
   }));
 
-  const notasFiltradas = notasComTributos.filter(({ nota, resumoTributos }) => {
+  const notasFiltradas = notasComTributos.filter(({ nota, resumoTributos, resumoCte }) => {
     if (!notaPassaFiltroTransferenciaNewshop(nota, filtros.newshopInterna ?? 'ocultar')) return false;
     if (filtros.daeFiltros?.length && !notaPassaFiltroDae(nota, filtros.daeFiltros)) return false;
+    if (filtros.cte === 'com-cte' && resumoCte.qtd <= 0) return false;
+    if (filtros.cte === 'sem-cte' && resumoCte.qtd > 0) return false;
     if (filtros.tributoItem) {
       const quantidade = filtros.tributoItem === 'ST' ? resumoTributos.st : resumoTributos.antecipacao;
       if (quantidade <= 0) return false;
@@ -388,10 +440,10 @@ export async function gerarRelatorioTransporteExcel(filtros: FiltrosRelatorioTra
   });
 
   const linhasPorMes = new Map<string, LinhaRelatorio[]>();
-  for (const { nota, resumoTributos } of notasFiltradas) {
+  for (const { nota, resumoTributos, resumoCte } of notasFiltradas) {
     const mes = chaveMes(nota.emitidaEm);
     const linhasMes = linhasPorMes.get(mes) ?? [];
-    linhasMes.push(montarLinha(nota, resumoTributos, filtros.tributoItem));
+    linhasMes.push(montarLinha(nota, resumoTributos, filtros.tributoItem, resumoCte));
     linhasPorMes.set(mes, linhasMes);
   }
 
