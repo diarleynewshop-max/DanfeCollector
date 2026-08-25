@@ -37,7 +37,7 @@ export default async function DanfePage({ params }: { params: Promise<{ chave: s
           <span className="text-xs text-slate-500">Visualizacao pronta para impressao. Use Ctrl+P para salvar em PDF.</span>
           <a
             href={`/danfe/${chave}/xml`}
-            className="bg-slate-700 hover:bg-slate-800 text-white px-4 py-2 rounded-lg text-sm"
+            className="inline-flex items-center rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2"
           >
             Baixar XML
           </a>

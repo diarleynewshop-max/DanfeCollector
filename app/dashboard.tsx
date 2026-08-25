@@ -8189,12 +8189,12 @@ function DetalheNota({
           )}
           {danfe && aba === 'danfe' && (
             <div>
-              <div className="flex justify-end gap-4 mb-2">
-                <a href={`/danfe/${nota.chave}/xml`} className="text-[var(--accent)] text-sm hover:underline">
+              <div className="mb-3 flex justify-end gap-2 border-b border-[var(--border)] pb-3">
+                <a href={`/danfe/${nota.chave}/xml`} className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2">
                   Baixar XML
                 </a>
                 <a href={`/danfe/${nota.chave}`} target="_blank" rel="noopener noreferrer"
-                  className="text-[var(--accent)] text-sm hover:underline">
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm font-semibold text-[var(--ink)] shadow-sm transition hover:border-[var(--accent)] hover:text-[var(--accent)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)] focus:ring-offset-2">
                   Abrir DANFE / Ctrl+P ↗
                 </a>
               </div>
