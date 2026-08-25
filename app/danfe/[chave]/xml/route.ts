@@ -32,7 +32,13 @@ export async function GET(
     return new Response('XML completo ainda nao disponivel para esta nota.', { status: 409 });
   }
 
-  const xml = await lerXmlComFallback(nota.xmlStorageKey, nota.xmlPath);
+  let xml: string | null;
+  try {
+    xml = await lerXmlComFallback(nota.xmlStorageKey, nota.xmlPath);
+  } catch (erro) {
+    console.error(`Falha ao preparar XML para download da NF-e ${nota.chave}:`, erro);
+    return new Response('Nao foi possivel acessar o XML no storage. Tente novamente em instantes.', { status: 503 });
+  }
   if (!xml) return new Response('XML nao encontrado no storage.', { status: 404 });
 
   return new Response(xml, {
