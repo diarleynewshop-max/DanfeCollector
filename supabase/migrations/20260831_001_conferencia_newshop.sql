@@ -1,3 +1,7 @@
+BEGIN;
+
+SET search_path = danfe, public, pg_catalog;
+
 ALTER TABLE "NotaFiscal"
   ADD COLUMN IF NOT EXISTS "conferenciaTipo" TEXT,
   ADD COLUMN IF NOT EXISTS "conferenciaStatus" TEXT,
@@ -43,3 +47,5 @@ CREATE INDEX IF NOT EXISTS "ConferenciaNewshopPendente_status_idx"
 
 CREATE INDEX IF NOT EXISTS "ConferenciaNewshopPendente_tipo_idx"
   ON "ConferenciaNewshopPendente"("tipo");
+
+COMMIT;
