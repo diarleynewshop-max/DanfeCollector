@@ -109,6 +109,12 @@ model NotaFiscal {
   qtdItens      Int?
   // Etiqueta livre definida pelo usuário, para organização e filtro
   etiqueta      String?
+  conferenciaTipo          String?
+  conferenciaStatus        String?
+  conferenciaObservacao    String?
+  conferenciaFonte         String?
+  conferenciaAtualizadaEm  DateTime?
+  conferenciaDivergencia   Boolean  @default(false)
 
   // RESUMO (resNFe — aguardando manifestação) ou COMPLETA (procNFe — XML integral)
   status        String   @default("RESUMO")
@@ -158,6 +164,33 @@ model NotaFiscal {
   @@index([cnpjId, sitramDaeStatus])
   @@index([cnpjId, situacaoSefaz])
   @@index([cnpjId, recebimentoStatus])
+  @@index([cnpjId, conferenciaTipo])
+  @@index([cnpjId, conferenciaStatus])
+  @@index([cnpjId, conferenciaDivergencia])
+}
+
+model ConferenciaNewshopPendente {
+  id           Int       @id @default(autoincrement())
+  chave        String    @unique
+  numero       String?
+  emitidaEm    DateTime?
+  emitenteCnpj String?
+  emitenteNome String?
+  serie        String?
+  uf           String?
+  valorTotal   Float?
+  valorIcms    Float?
+  situacaoNfe  String?
+  tipo         String?
+  status       String?
+  observacao   String?
+  fonte        String?
+  motivo       String?
+  importadaEm  DateTime  @default(now())
+
+  @@index([importadaEm])
+  @@index([status])
+  @@index([tipo])
 }
 
 model ConhecimentoTransporte {

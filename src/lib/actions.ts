@@ -4,6 +4,7 @@ import { revalidatePath } from 'next/cache';
 import * as tls from 'tls';
 import * as fs from 'fs';
 import * as path from 'path';
+import ExcelJS from 'exceljs';
 import { Prisma } from '@prisma/client';
 import { prisma } from './prisma';
 import {
@@ -156,6 +157,55 @@ export type ResultadoConferenciaRecentes = ActionResult & {
   resultados: ResultadoConferenciaChave[];
 };
 
+export type ConferenciaNewshopDivergencia = {
+  chave: string;
+  numeroPlanilha: string | null;
+  numeroSistema: string | null;
+  fornecedorPlanilha: string | null;
+  fornecedorSistema: string | null;
+  valorPlanilha: number | null;
+  valorSistema: number | null;
+  divergencias: string[];
+  fonte: string;
+};
+
+export type ConferenciaNewshopPendenteResumo = {
+  id?: number;
+  chave: string;
+  numero: string | null;
+  emitidaEm: Date | string | null;
+  emitenteCnpj: string | null;
+  emitenteNome: string | null;
+  serie: string | null;
+  uf: string | null;
+  valorTotal: number | null;
+  valorIcms: number | null;
+  situacaoNfe: string | null;
+  tipo: string | null;
+  status: string | null;
+  observacao: string | null;
+  fonte: string | null;
+  motivo: string | null;
+  importadaEm?: Date | string;
+};
+
+export type ResultadoImportConferenciaNewshop = ActionResult & {
+  resumo: {
+    arquivos: number;
+    linhasLidas: number;
+    chavesValidas: number;
+    atualizadas: number;
+    naoEncontradas: number;
+    semAcesso: number;
+    ignoradas: number;
+    divergencias: number;
+    observacoes: number;
+    etiquetasAplicadas: number;
+  };
+  pendentes: ConferenciaNewshopPendenteResumo[];
+  divergencias: ConferenciaNewshopDivergencia[];
+};
+
 async function atualizarStatusWorker(data: {
   status: string;
   iniciadoEm?: Date;
@@ -290,6 +340,12 @@ export type NotaRelatorio = {
   pagamentoManualEm: Date | null;
   pagamentoManualRef: string | null;
   pagamentoManualValor: number | null;
+  conferenciaTipo: string | null;
+  conferenciaStatus: string | null;
+  conferenciaObservacao: string | null;
+  conferenciaFonte: string | null;
+  conferenciaAtualizadaEm: Date | null;
+  conferenciaDivergencia: boolean;
   daeVencimento: string | null;
   daeValor: number | null;
   daeValorAberto: number | null;
@@ -1397,6 +1453,379 @@ export async function conferirNotasRecentesInterno(
   };
 }
 
+type LinhaConferenciaNewshop = {
+  chave: string;
+  numero: string | null;
+  emitidaEm: Date | null;
+  emitenteCnpj: string | null;
+  emitenteNome: string | null;
+  serie: string | null;
+  uf: string | null;
+  valorTotal: number | null;
+  valorIcms: number | null;
+  situacaoNfe: string | null;
+  tipo: string | null;
+  status: string | null;
+  observacao: string | null;
+  fonte: string;
+};
+
+function textoCelulaConferencia(cell: ExcelJS.Cell): string {
+  const valor = cell.value;
+  if (valor === null || valor === undefined) return '';
+  if (valor instanceof Date) return valor.toISOString().slice(0, 10);
+  if (typeof valor === 'object') {
+    if ('text' in valor && valor.text) return String(valor.text);
+    if ('richText' in valor && Array.isArray(valor.richText)) return valor.richText.map((item) => item.text).join('');
+    if ('result' in valor && valor.result !== null && valor.result !== undefined) return String(valor.result);
+    if ('formula' in valor && valor.formula) return String(valor.result ?? '');
+    return cell.text ?? '';
+  }
+  return String(valor);
+}
+
+function textoLimpoConferencia(valor: unknown): string {
+  return String(valor ?? '').replace(/\s+/g, ' ').trim();
+}
+
+function normalizarBuscaConferencia(valor: unknown): string {
+  return textoLimpoConferencia(valor)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toUpperCase();
+}
+
+function numeroPlanilhaConferencia(cell: ExcelJS.Cell): number | null {
+  const valor = cell.value;
+  if (typeof valor === 'number' && Number.isFinite(valor)) return valor;
+  const texto = textoLimpoConferencia(textoCelulaConferencia(cell)).replace(/\s/g, '').replace(/^R\$/i, '');
+  if (!texto) return null;
+  const normalizado = texto.includes(',')
+    ? texto.replace(/\./g, '').replace(',', '.')
+    : texto.replace(/,/g, '');
+  const numero = Number(normalizado);
+  return Number.isFinite(numero) ? numero : null;
+}
+
+function dataPlanilhaConferencia(cell: ExcelJS.Cell): Date | null {
+  const valor = cell.value;
+  if (valor instanceof Date && !Number.isNaN(valor.getTime())) return valor;
+  const texto = textoLimpoConferencia(textoCelulaConferencia(cell));
+  if (!texto) return null;
+  const iso = texto.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return new Date(`${iso[1]}-${iso[2]}-${iso[3]}T12:00:00`);
+  const br = texto.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (br) return new Date(`${br[3]}-${br[2].padStart(2, '0')}-${br[1].padStart(2, '0')}T12:00:00`);
+  return null;
+}
+
+function normalizarTipoConferencia(valor: string): string | null {
+  const texto = normalizarBuscaConferencia(valor);
+  if (!texto) return null;
+  if (texto.includes('USO') && texto.includes('CONSUMO')) return 'Uso e consumo';
+  if (texto.includes('NOTA PROPRIA')) return 'Nota propria';
+  if (texto.includes('COMPRAS DIDAS')) return 'Compras Didas';
+  if (texto.includes('VENDAS')) return 'Vendas';
+  return textoLimpoConferencia(valor);
+}
+
+function normalizarStatusConferencia(valor: string): string | null {
+  const texto = normalizarBuscaConferencia(valor)
+    .replace(/INCONCIST/g, 'INCONSIST')
+    .replace(/TRASNFER/g, 'TRANSFER')
+    .replace(/RECULS/g, 'RECUS')
+    .replace(/RECLASIFICA/g, 'RECLASSIFICA');
+  if (!texto) return null;
+  const rotulos: string[] = [];
+  const adicionar = (rotulo: string) => {
+    if (!rotulos.includes(rotulo)) rotulos.push(rotulo);
+  };
+  if (texto.includes('EFETIVADA')) adicionar('Efetivada');
+  if (texto.includes('CANCELADA') || texto.includes('RECUSADA')) adicionar('Cancelada/Recusada');
+  if (texto.includes('RECLASSIFICA')) adicionar('Reclassificação');
+  if (texto.includes('DEVOLU')) adicionar('Devolução');
+  if (texto.includes('IMPORTADA')) adicionar('Importada');
+  if (texto.includes('INCONSIST')) adicionar('Inconsistência');
+  if (texto.includes('PENDENTE') && texto.includes('ENTREGA')) adicionar('Pendente entrega');
+  if (texto.includes('TRANSFER')) adicionar('Transferência');
+  if (texto.includes('NOTA FILIAL')) adicionar('Nota filial');
+  if (texto.includes('ERRO')) adicionar('Erro');
+  return rotulos.length > 0 ? rotulos.join(', ') : textoLimpoConferencia(valor);
+}
+
+function etiquetasConferencia(status: string | null, observacao: string | null, divergencias: string[]): string[] {
+  const texto = normalizarBuscaConferencia(`${status ?? ''} ${observacao ?? ''}`);
+  const tags = new Set<string>();
+  if (status?.includes('Efetivada')) tags.add('Conferido');
+  if (status?.includes('Cancelada/Recusada')) tags.add('Cancelada/Recusada');
+  if (status?.includes('Reclassificação')) tags.add('Reclassificação');
+  if (status?.includes('Devolução')) tags.add('Devolução');
+  if (status?.includes('Importada')) tags.add('Importada');
+  if (status?.includes('Inconsistência')) tags.add('Inconsistência');
+  if (status?.includes('Pendente entrega')) tags.add('Pendente entrega');
+  if (status?.includes('Transferência')) tags.add('Transferência');
+  if (status?.includes('Nota filial')) tags.add('Nota filial');
+  if (status?.includes('Erro')) tags.add('Erro');
+  if (texto.includes('NPRIME')) tags.add('NPrime');
+  if (texto.includes('ERRO')) tags.add('Erro');
+  if (divergencias.length > 0) tags.add('Divergência');
+  return [...tags];
+}
+
+function montarObservacaoConferencia(linha: LinhaConferenciaNewshop, divergencias: string[]): string | null {
+  const partes = [
+    linha.observacao,
+    divergencias.length > 0 ? `Divergencia importacao: ${divergencias.join('; ')}` : null,
+  ].filter((item): item is string => !!item && item.trim().length > 0);
+  return partes.length > 0 ? partes.join(' | ') : null;
+}
+
+function divergenciasConferencia(
+  linha: LinhaConferenciaNewshop,
+  nota: {
+    chave: string;
+    numero: string | null;
+    emitenteCnpj: string | null;
+    emitenteNome: string | null;
+    valorTotal: number | null;
+    situacaoSefaz: string;
+  }
+): string[] {
+  const divergencias: string[] = [];
+  const numeroSistema = nota.numero ?? numeroNotaDaChave(nota.chave);
+  if (linha.numero && numeroSistema && String(Number(linha.numero) || linha.numero) !== String(Number(numeroSistema) || numeroSistema)) {
+    divergencias.push(`numero planilha ${linha.numero} x sistema ${numeroSistema}`);
+  }
+  const cnpjPlanilha = linha.emitenteCnpj?.replace(/\D/g, '').slice(-14) ?? '';
+  const cnpjSistema = nota.emitenteCnpj?.replace(/\D/g, '').slice(-14) || nota.chave.slice(6, 20);
+  if (cnpjPlanilha && cnpjSistema && cnpjPlanilha !== cnpjSistema) {
+    divergencias.push(`fornecedor CNPJ ${cnpjPlanilha} x sistema ${cnpjSistema}`);
+  }
+  if (linha.valorTotal !== null && nota.valorTotal !== null && Math.abs(linha.valorTotal - nota.valorTotal) > 0.02) {
+    divergencias.push(`valor planilha ${linha.valorTotal.toFixed(2)} x sistema ${nota.valorTotal.toFixed(2)}`);
+  }
+  const situacaoPlanilha = normalizarBuscaConferencia(linha.situacaoNfe);
+  if (situacaoPlanilha.includes('CANCELADA') && nota.situacaoSefaz !== 'CANCELADA') {
+    divergencias.push(`situacao planilha Cancelada x sistema ${nota.situacaoSefaz}`);
+  }
+  if (situacaoPlanilha.includes('AUTORIZADA') && nota.situacaoSefaz === 'CANCELADA') {
+    divergencias.push('situacao planilha Autorizada x sistema CANCELADA');
+  }
+  return divergencias;
+}
+
+async function lerLinhasConferenciaNewshop(arquivo: File): Promise<{ linhas: LinhaConferenciaNewshop[]; ignoradas: number }> {
+  const workbook = new ExcelJS.Workbook();
+  const conteudo = Buffer.from(await arquivo.arrayBuffer());
+  await workbook.xlsx.load(conteudo as any);
+  const linhas: LinhaConferenciaNewshop[] = [];
+  let ignoradas = 0;
+
+  for (const sheet of workbook.worksheets) {
+    sheet.eachRow({ includeEmpty: false }, (row) => {
+      const chave = textoCelulaConferencia(row.getCell(1)).replace(/\D/g, '');
+      if (!chave) return;
+      if (!/^\d{44}$/.test(chave)) {
+        ignoradas++;
+        return;
+      }
+      const observacoes: string[] = [];
+      for (let coluna = 13; coluna <= 25; coluna++) {
+        const texto = textoLimpoConferencia(textoCelulaConferencia(row.getCell(coluna)));
+        if (texto) observacoes.push(texto);
+      }
+      const statusOriginal = textoLimpoConferencia(textoCelulaConferencia(row.getCell(12)));
+      const tipoOriginal = textoLimpoConferencia(textoCelulaConferencia(row.getCell(11)));
+      linhas.push({
+        chave,
+        numero: textoLimpoConferencia(textoCelulaConferencia(row.getCell(2))) || null,
+        emitidaEm: dataPlanilhaConferencia(row.getCell(3)),
+        emitenteCnpj: textoLimpoConferencia(textoCelulaConferencia(row.getCell(4))) || null,
+        emitenteNome: textoLimpoConferencia(textoCelulaConferencia(row.getCell(5))) || null,
+        serie: textoLimpoConferencia(textoCelulaConferencia(row.getCell(6))) || null,
+        uf: textoLimpoConferencia(textoCelulaConferencia(row.getCell(7))) || null,
+        valorTotal: numeroPlanilhaConferencia(row.getCell(8)),
+        valorIcms: numeroPlanilhaConferencia(row.getCell(9)),
+        situacaoNfe: textoLimpoConferencia(textoCelulaConferencia(row.getCell(10))) || null,
+        tipo: normalizarTipoConferencia(tipoOriginal),
+        status: normalizarStatusConferencia(statusOriginal),
+        observacao: observacoes.join(' | ') || null,
+        fonte: `${arquivo.name} > ${sheet.name} R${row.number} | statusOriginal=${statusOriginal || '-'} | tipoOriginal=${tipoOriginal || '-'}`,
+      });
+    });
+  }
+
+  return { linhas, ignoradas };
+}
+
+export async function listarPendenciasConferenciaNewshop(limite = 200): Promise<ConferenciaNewshopPendenteResumo[]> {
+  await exigirUsuario();
+  const limiteSeguro = Math.max(20, Math.min(500, Math.trunc(Number(limite) || 200)));
+  try {
+    return await prisma.conferenciaNewshopPendente.findMany({
+      orderBy: { importadaEm: 'desc' },
+      take: limiteSeguro,
+    });
+  } catch (error: unknown) {
+    console.error(`[conferencia-newshop] ${(error as Error).message}`);
+    return [];
+  }
+}
+
+export async function importarConferenciaNewshopXlsx(formData: FormData): Promise<ResultadoImportConferenciaNewshop> {
+  const usuario = await exigirUsuario().catch(() => null);
+  const resumoBase = {
+    arquivos: 0,
+    linhasLidas: 0,
+    chavesValidas: 0,
+    atualizadas: 0,
+    naoEncontradas: 0,
+    semAcesso: 0,
+    ignoradas: 0,
+    divergencias: 0,
+    observacoes: 0,
+    etiquetasAplicadas: 0,
+  };
+  if (!usuario) {
+    return { success: false, message: 'Sessao expirada. Faca login novamente.', resumo: resumoBase, pendentes: [], divergencias: [] };
+  }
+
+  const arquivos = formData.getAll('arquivos').filter((arquivo): arquivo is File =>
+    arquivo instanceof File && arquivo.size > 0 && /\.xlsx$/i.test(arquivo.name)
+  );
+  if (arquivos.length === 0) {
+    return { success: false, message: 'Selecione ao menos um arquivo .xlsx de conferencia NEWSHOP.', resumo: resumoBase, pendentes: [], divergencias: [] };
+  }
+
+  const linhasPorChave = new Map<string, LinhaConferenciaNewshop>();
+  let ignoradas = 0;
+  for (const arquivo of arquivos) {
+    const lidas = await lerLinhasConferenciaNewshop(arquivo);
+    ignoradas += lidas.ignoradas;
+    for (const linha of lidas.linhas) linhasPorChave.set(linha.chave, linha);
+  }
+
+  const linhas = [...linhasPorChave.values()];
+  const chaves = linhas.map((linha) => linha.chave);
+  const notasPermitidas = await prisma.notaFiscal.findMany({
+    where: { ...whereNotaPermitida(usuario), chave: { in: chaves } },
+    select: {
+      id: true,
+      chave: true,
+      numero: true,
+      emitenteCnpj: true,
+      emitenteNome: true,
+      valorTotal: true,
+      situacaoSefaz: true,
+      etiqueta: true,
+    },
+  });
+  const chavesExistentes = new Set((await prisma.notaFiscal.findMany({
+    where: { chave: { in: chaves } },
+    select: { chave: true },
+  })).map((nota) => nota.chave));
+  const notasPorChave = new Map(notasPermitidas.map((nota) => [nota.chave, nota]));
+  const pendentes: ConferenciaNewshopPendenteResumo[] = [];
+  const divergencias: ConferenciaNewshopDivergencia[] = [];
+  let atualizadas = 0;
+  let semAcesso = 0;
+  let observacoes = 0;
+  let etiquetasAplicadas = 0;
+  const agora = new Date();
+
+  for (const linha of linhas) {
+    const nota = notasPorChave.get(linha.chave);
+    if (!nota) {
+      const motivo = chavesExistentes.has(linha.chave) ? 'Nota existe, mas usuario nao tem acesso ao CNPJ.' : 'Chave nao encontrada no DanfeCollector.';
+      if (chavesExistentes.has(linha.chave)) semAcesso++;
+      const pendente = {
+        chave: linha.chave,
+        numero: linha.numero,
+        emitidaEm: linha.emitidaEm,
+        emitenteCnpj: linha.emitenteCnpj,
+        emitenteNome: linha.emitenteNome,
+        serie: linha.serie,
+        uf: linha.uf,
+        valorTotal: linha.valorTotal,
+        valorIcms: linha.valorIcms,
+        situacaoNfe: linha.situacaoNfe,
+        tipo: linha.tipo,
+        status: linha.status,
+        observacao: linha.observacao,
+        fonte: linha.fonte,
+        motivo,
+        importadaEm: agora,
+      };
+      await prisma.conferenciaNewshopPendente.upsert({
+        where: { chave: linha.chave },
+        create: pendente,
+        update: { ...pendente, importadaEm: agora },
+      });
+      pendentes.push(pendente);
+      continue;
+    }
+
+    const divs = divergenciasConferencia(linha, nota);
+    const observacao = montarObservacaoConferencia(linha, divs);
+    const tagsAtuais = (nota.etiqueta ?? '').split(',').map((tag) => tag.trim()).filter(Boolean);
+    const tagsNovas = etiquetasConferencia(linha.status, observacao, divs);
+    const tagsFinais = [...new Set([...tagsAtuais, ...tagsNovas])];
+    etiquetasAplicadas += tagsFinais.length - tagsAtuais.length;
+    if (observacao) observacoes++;
+    if (divs.length > 0) {
+      divergencias.push({
+        chave: linha.chave,
+        numeroPlanilha: linha.numero,
+        numeroSistema: nota.numero ?? numeroNotaDaChave(nota.chave),
+        fornecedorPlanilha: linha.emitenteNome ?? linha.emitenteCnpj,
+        fornecedorSistema: nota.emitenteNome ?? nota.emitenteCnpj,
+        valorPlanilha: linha.valorTotal,
+        valorSistema: nota.valorTotal,
+        divergencias: divs,
+        fonte: linha.fonte,
+      });
+    }
+
+    await prisma.notaFiscal.update({
+      where: { id: nota.id },
+      data: {
+        conferenciaTipo: linha.tipo,
+        conferenciaStatus: linha.status,
+        conferenciaObservacao: observacao,
+        conferenciaFonte: linha.fonte,
+        conferenciaAtualizadaEm: agora,
+        conferenciaDivergencia: divs.length > 0,
+        etiqueta: tagsFinais.length > 0 ? tagsFinais.join(',') : null,
+      },
+    });
+    await prisma.conferenciaNewshopPendente.delete({ where: { chave: linha.chave } }).catch(() => null);
+    atualizadas++;
+  }
+
+  const naoEncontradas = pendentes.length - semAcesso;
+  revalidatePath('/');
+  return {
+    success: true,
+    message: `Conferencia NEWSHOP importada: ${atualizadas} nota(s) atualizada(s), ${naoEncontradas} pendente(s), ${divergencias.length} divergencia(s).`,
+    resumo: {
+      arquivos: arquivos.length,
+      linhasLidas: linhas.length,
+      chavesValidas: chaves.length,
+      atualizadas,
+      naoEncontradas,
+      semAcesso,
+      ignoradas,
+      divergencias: divergencias.length,
+      observacoes,
+      etiquetasAplicadas,
+    },
+    pendentes: pendentes.slice(0, 80),
+    divergencias: divergencias.slice(0, 80),
+  };
+}
+
 async function guardarDocumento(
   cnpjId: number,
   cnpjInteressado: string,
@@ -1986,6 +2415,12 @@ export async function listarNotasRelatorio(pagina = 1, porPagina = 120): Promise
       pagamentoManualEm: true,
       pagamentoManualRef: true,
       pagamentoManualValor: true,
+      conferenciaTipo: true,
+      conferenciaStatus: true,
+      conferenciaObservacao: true,
+      conferenciaFonte: true,
+      conferenciaAtualizadaEm: true,
+      conferenciaDivergencia: true,
       cnpj: { select: { cnpj: true, razaoSocial: true } },
     },
   }),

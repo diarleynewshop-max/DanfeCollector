@@ -42,6 +42,8 @@ import {
   executarBackfillFiscalAutomatico,
   atualizarTransporteNotasExistentes,
   conferirNotasRecentes,
+  importarConferenciaNewshopXlsx,
+  listarPendenciasConferenciaNewshop,
   listarApiKeys,
   gerarApiKey,
   revogarApiKey,
@@ -50,6 +52,8 @@ import {
   type ApiKeyResumo,
   type CertificadoComStatus,
   type ResultadoImportChave,
+  type ResultadoImportConferenciaNewshop,
+  type ConferenciaNewshopPendenteResumo,
   type ResultadoManifestoLote,
   type ResultadoPagamentoIcmsLote,
   type ConsultaStatusRecebimento,
@@ -178,6 +182,10 @@ type FiltrosNotasAplicados = {
   modalidades: FiltroModalidadeNota[];
   tributoItem: FiltroTributoItem;
   transferenciaNewshop: FiltroTransferenciaNewshop;
+  conferenciaTipo: string;
+  conferenciaStatus: string;
+  conferenciaObservacao: 'todos' | 'com' | 'sem';
+  conferenciaDivergencia: boolean;
 };
 type FiltrosRelatorioAplicados = {
   dataInicio: string;
@@ -319,6 +327,10 @@ function filtrosNotasPadrao(): FiltrosNotasAplicados {
     modalidades: [],
     tributoItem: 'todos',
     transferenciaNewshop: 'ocultar',
+    conferenciaTipo: '',
+    conferenciaStatus: '',
+    conferenciaObservacao: 'todos',
+    conferenciaDivergencia: false,
   };
 }
 
@@ -334,6 +346,7 @@ interface DashboardProps {
   resumoInicio: ResumoInicio;
   saudeSincronizacao: SyncHealth;
   apiKeys: ApiKeyResumo[];
+  pendenciasConferenciaNewshop: ConferenciaNewshopPendenteResumo[];
 }
 
 const CACHE_DANFE_PREFIX = 'danfe-cache:v2:';
@@ -439,7 +452,27 @@ const STATUS_RECEBIMENTO_PRESET = [
   'AGUARDANDO ENVIO',
   'NF ENVIADA',
 ];
-const ETIQUETAS_PRESET = ['Conferido', 'Pendente', 'Separado', 'Revisar', 'Divergência', 'Pago', 'Devolvido', 'Urgente', ...STATUS_RECEBIMENTO_PRESET];
+const ETIQUETAS_PRESET = [
+  'Conferido',
+  'Pendente',
+  'Separado',
+  'Revisar',
+  'Divergência',
+  'Pago',
+  'Devolvido',
+  'Devolução',
+  'Cancelada/Recusada',
+  'Reclassificação',
+  'Importada',
+  'Inconsistência',
+  'Pendente entrega',
+  'Transferência',
+  'Nota filial',
+  'NPrime',
+  'Erro',
+  'Urgente',
+  ...STATUS_RECEBIMENTO_PRESET,
+];
 
 // Uma nota pode ter várias etiquetas, guardadas separadas por vírgula
 function parseEtiquetas(s: string | null | undefined): string[] {
@@ -601,6 +634,7 @@ export default function Dashboard({
   resumoInicio,
   saudeSincronizacao,
   apiKeys: apiKeysIniciais,
+  pendenciasConferenciaNewshop,
 }: DashboardProps) {
   const router = useRouter();
   const { idioma, setIdioma, t } = useIdioma();
@@ -613,6 +647,7 @@ export default function Dashboard({
   const [notas, setNotas] = useState<NotaComCnpj[]>(notasIniciais);
   const [notasAlerta, setNotasAlerta] = useState<NotaComCnpj[]>(notasAlertaIniciais);
   const [notasRelatorio, setNotasRelatorio] = useState<NotaRelatorio[]>([]);
+  const [pendenciasConferencia, setPendenciasConferencia] = useState<ConferenciaNewshopPendenteResumo[]>(pendenciasConferenciaNewshop);
   const [paginaRelatorio, setPaginaRelatorio] = useState(0);
   const [totalRelatorio, setTotalRelatorio] = useState(0);
   const [temMaisRelatorio, setTemMaisRelatorio] = useState(true);
@@ -652,6 +687,9 @@ export default function Dashboard({
       return atuais.map((n) => porId.get(n.id) ?? n);
     });
   }, [notasAlertaIniciais, anoCarregado]);
+  useEffect(() => {
+    setPendenciasConferencia(pendenciasConferenciaNewshop);
+  }, [pendenciasConferenciaNewshop]);
   const [mostrarForm, setMostrarForm] = useState(false);
   const [pending, startTransition] = useTransition();
 
@@ -674,6 +712,9 @@ export default function Dashboard({
   const [importManifestar, setImportManifestar] = useState(true);
   const [importProgresso, setImportProgresso] = useState<{ feito: number; total: number } | null>(null);
   const [importResumo, setImportResumo] = useState<Record<string, number> | null>(null);
+  const conferenciaFormRef = useRef<HTMLFormElement>(null);
+  const [importandoConferencia, setImportandoConferencia] = useState(false);
+  const [resultadoConferencia, setResultadoConferencia] = useState<ResultadoImportConferenciaNewshop | null>(null);
   const [pastaXml, setPastaXml] = useState('');
   const [conferindoChaves, setConferindoChaves] = useState(false);
 
@@ -735,6 +776,44 @@ export default function Dashboard({
 
     router.refresh();
     setStatus({ success: true, message: `Importação concluída: ${chaves.length} chave(s) processada(s).` });
+  }
+
+  async function handleImportarConferenciaNewshop(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (importandoConferencia) return;
+    const form = conferenciaFormRef.current;
+    if (!form) return;
+    const formData = new FormData(form);
+    const arquivos = formData.getAll('arquivos').filter((arquivo): arquivo is File => arquivo instanceof File && arquivo.size > 0);
+    if (arquivos.length === 0) {
+      setStatus({ success: false, message: 'Selecione a planilha XLSX de conferencia NEWSHOP.' });
+      return;
+    }
+
+    setImportandoConferencia(true);
+    setResultadoConferencia(null);
+    try {
+      const res = await importarConferenciaNewshopXlsx(formData);
+      setResultadoConferencia(res);
+      setStatus({ success: res.success, message: res.message });
+      if (res.success) {
+        const pendencias = await listarPendenciasConferenciaNewshop();
+        setPendenciasConferencia(pendencias);
+        if (anoCarregado !== null) {
+          const atualizadas = await listarNotasPorAno(anoCarregado);
+          setNotas(atualizadas as NotaComCnpj[]);
+          setNotasAlerta(atualizadas as NotaComCnpj[]);
+        } else if (todasCarregadas) {
+          const todas = await listarTodasNotas();
+          setNotas(todas as NotaComCnpj[]);
+          setNotasAlerta(todas as NotaComCnpj[]);
+        } else {
+          router.refresh();
+        }
+      }
+    } finally {
+      setImportandoConferencia(false);
+    }
   }
 
   function handleSitram() {
@@ -931,6 +1010,10 @@ export default function Dashboard({
   const [filtroModalidades, setFiltroModalidades] = useState<FiltroModalidadeNota[]>([]);
   const [filtroTributoItem, setFiltroTributoItem] = useState<FiltroTributoItem>('todos');
   const [filtroTransferenciaNewshop, setFiltroTransferenciaNewshop] = useState<FiltroTransferenciaNewshop>('ocultar');
+  const [filtroConferenciaTipo, setFiltroConferenciaTipo] = useState('');
+  const [filtroConferenciaStatus, setFiltroConferenciaStatus] = useState('');
+  const [filtroConferenciaObservacao, setFiltroConferenciaObservacao] = useState<'todos' | 'com' | 'sem'>('todos');
+  const [filtroConferenciaDivergencia, setFiltroConferenciaDivergencia] = useState(false);
   const [filtrosAplicadosNotas, setFiltrosAplicadosNotas] = useState<FiltrosNotasAplicados>(() => filtrosNotasPadrao());
 
   const daePorNota = useMemo(
@@ -1055,6 +1138,23 @@ export default function Dashboard({
     return [...set].sort((a, b) => a.localeCompare(b, 'pt-BR'));
   }, [notas]);
 
+  const conferenciaTiposParaFiltro = useMemo(() => {
+    const set = new Set<string>();
+    for (const n of notas) if (n.conferenciaTipo) set.add(n.conferenciaTipo);
+    return [...set].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  }, [notas]);
+
+  const conferenciaStatusParaFiltro = useMemo(() => {
+    const set = new Set<string>();
+    for (const n of notas) {
+      for (const statusItem of (n.conferenciaStatus ?? '').split(',')) {
+        const valor = statusItem.trim();
+        if (valor) set.add(valor);
+      }
+    }
+    return [...set].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  }, [notas]);
+
   function toggleFiltroEtiqueta(tag: string) {
     setFiltroEtiquetas((prev) => (prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]));
   }
@@ -1133,6 +1233,10 @@ export default function Dashboard({
     filtroModalidades.length > 0 ? '1' : '',
     filtroTributoItem !== 'todos' ? '1' : '',
     filtroTransferenciaNewshop !== 'ocultar' ? '1' : '',
+    filtroConferenciaTipo,
+    filtroConferenciaStatus,
+    filtroConferenciaObservacao !== 'todos' ? '1' : '',
+    filtroConferenciaDivergencia ? '1' : '',
     filtroEtiquetas.length > 0 ? '1' : '',
     filtroExcluirEmitentes.length > 0 ? '1' : '',
   ].filter(Boolean).length;
@@ -1166,6 +1270,10 @@ export default function Dashboard({
     filtrosAplicadosNotas.modalidades.length > 0 ? '1' : '',
     filtrosAplicadosNotas.tributoItem !== 'todos' ? '1' : '',
     filtrosAplicadosNotas.transferenciaNewshop !== 'ocultar' ? '1' : '',
+    filtrosAplicadosNotas.conferenciaTipo,
+    filtrosAplicadosNotas.conferenciaStatus,
+    filtrosAplicadosNotas.conferenciaObservacao !== 'todos' ? '1' : '',
+    filtrosAplicadosNotas.conferenciaDivergencia ? '1' : '',
     filtrosAplicadosNotas.etiquetas.length > 0 ? '1' : '',
     filtrosAplicadosNotas.excluirEmitentes.length > 0 ? '1' : '',
   ].filter(Boolean).length;
@@ -1201,6 +1309,10 @@ export default function Dashboard({
     filtrosAplicadosNotas.modalidades.join('\u0001') !== filtroModalidades.join('\u0001') ||
     filtrosAplicadosNotas.tributoItem !== filtroTributoItem ||
     filtrosAplicadosNotas.transferenciaNewshop !== filtroTransferenciaNewshop ||
+    filtrosAplicadosNotas.conferenciaTipo !== filtroConferenciaTipo ||
+    filtrosAplicadosNotas.conferenciaStatus !== filtroConferenciaStatus ||
+    filtrosAplicadosNotas.conferenciaObservacao !== filtroConferenciaObservacao ||
+    filtrosAplicadosNotas.conferenciaDivergencia !== filtroConferenciaDivergencia ||
     filtrosAplicadosNotas.etiquetas.join('\u0001') !== filtroEtiquetas.join('\u0001') ||
     filtrosAplicadosNotas.excluirEmitentes.join('\u0001') !== filtroExcluirEmitentes.join('\u0001');
   // Há alguma busca/filtro ativo? (inclui empresa, status e a busca por número)
@@ -1277,6 +1389,10 @@ export default function Dashboard({
       modalidades: [...filtroModalidades],
       tributoItem: filtroTributoItem,
       transferenciaNewshop: filtroTransferenciaNewshop,
+      conferenciaTipo: filtroConferenciaTipo,
+      conferenciaStatus: filtroConferenciaStatus,
+      conferenciaObservacao: filtroConferenciaObservacao,
+      conferenciaDivergencia: filtroConferenciaDivergencia,
       ...overrides,
     };
   }
@@ -1447,6 +1563,10 @@ export default function Dashboard({
     setFiltroModalidades([]);
     setFiltroTributoItem('todos');
     setFiltroTransferenciaNewshop('ocultar');
+    setFiltroConferenciaTipo('');
+    setFiltroConferenciaStatus('');
+    setFiltroConferenciaObservacao('todos');
+    setFiltroConferenciaDivergencia(false);
     setDestaqueTributoNotaAberta(null);
     setFiltroEtiquetas([]);
     setFiltroExcluirEmitentes([]);
@@ -1569,6 +1689,10 @@ export default function Dashboard({
   const filtroModalidadesBusca = filtrosAplicadosNotas.modalidades;
   const filtroTributoItemBusca = filtrosAplicadosNotas.tributoItem;
   const filtroTransferenciaNewshopBusca = filtrosAplicadosNotas.transferenciaNewshop;
+  const filtroConferenciaTipoBusca = filtrosAplicadosNotas.conferenciaTipo;
+  const filtroConferenciaStatusBusca = filtrosAplicadosNotas.conferenciaStatus;
+  const filtroConferenciaObservacaoBusca = filtrosAplicadosNotas.conferenciaObservacao;
+  const filtroConferenciaDivergenciaBusca = filtrosAplicadosNotas.conferenciaDivergencia;
   const filtroEtiquetasBusca = filtrosAplicadosNotas.etiquetas;
   const filtroExcluirEmitentesBusca = filtrosAplicadosNotas.excluirEmitentes;
   const notasBuscaIndex = useMemo(() => new Map(notas.map((n) => [
@@ -1587,6 +1711,10 @@ export default function Dashboard({
       modalidades: modalidadesDaNota(n),
       tributosItens: resumoTributosItensNota(n),
       transferenciaNewshop: notaNewshopParaNewshop(n),
+      conferenciaTipo: n.conferenciaTipo ?? '',
+      conferenciaStatus: n.conferenciaStatus ?? '',
+      conferenciaObservacao: n.conferenciaObservacao ?? '',
+      conferenciaDivergencia: n.conferenciaDivergencia === true,
       situacaoSitram: situacaoSitramEfetiva(n) ?? '',
       dae: statusDaeEfetivo(n),
       suspeitasDuplicidade: extrairPagamentoIcmsSitram(n).suspeitasDuplicidade.length,
@@ -1614,6 +1742,11 @@ export default function Dashboard({
       if (!idx) return false;
       if (filtroTransferenciaNewshopBusca === 'ocultar' && idx.transferenciaNewshop) return false;
       if (filtroTransferenciaNewshopBusca === 'somente' && !idx.transferenciaNewshop) return false;
+      if (filtroConferenciaTipoBusca && idx.conferenciaTipo !== filtroConferenciaTipoBusca) return false;
+      if (filtroConferenciaStatusBusca && !idx.conferenciaStatus.split(',').map((item) => item.trim()).includes(filtroConferenciaStatusBusca)) return false;
+      if (filtroConferenciaObservacaoBusca === 'com' && !idx.conferenciaObservacao) return false;
+      if (filtroConferenciaObservacaoBusca === 'sem' && idx.conferenciaObservacao) return false;
+      if (filtroConferenciaDivergenciaBusca && !idx.conferenciaDivergencia) return false;
       if (filtroCnpjIdBusca !== 'todos' && n.cnpjId !== filtroCnpjIdBusca) return false;
       if (filtroStatusBusca !== 'todos' && n.status !== filtroStatusBusca) return false;
       if (chaveBuscaDigitos && !n.chave.includes(chaveBuscaDigitos)) return false;
@@ -1791,6 +1924,10 @@ export default function Dashboard({
     filtroModalidadesBusca,
     filtroTributoItemBusca,
     filtroTransferenciaNewshopBusca,
+    filtroConferenciaTipoBusca,
+    filtroConferenciaStatusBusca,
+    filtroConferenciaObservacaoBusca,
+    filtroConferenciaDivergenciaBusca,
     filtroEtiquetasBusca,
     filtroExcluirEmitentesBusca,
   ]);
@@ -1830,6 +1967,10 @@ export default function Dashboard({
     filtroModalidadesBusca,
     filtroTributoItemBusca,
     filtroTransferenciaNewshopBusca,
+    filtroConferenciaTipoBusca,
+    filtroConferenciaStatusBusca,
+    filtroConferenciaObservacaoBusca,
+    filtroConferenciaDivergenciaBusca,
     filtroEtiquetasBusca,
     filtroExcluirEmitentesBusca,
   ]);
@@ -2523,6 +2664,7 @@ export default function Dashboard({
         {secaoAtual === 'relatorios' && (
           <RelatoriosDashboard
             notas={notasRelatorio}
+            pendenciasConferencia={pendenciasConferencia}
             carregando={carregandoRelatorio}
             total={totalRelatorio}
             temMais={temMaisRelatorio}
@@ -2831,6 +2973,66 @@ export default function Dashboard({
                 {importResumo['erro'] ? <Badge tone="orange">{importResumo['erro']} erro(s)</Badge> : null}
               </div>
             )}
+
+            <form ref={conferenciaFormRef} onSubmit={handleImportarConferenciaNewshop} className="mt-5 border-t border-[var(--border)] pt-4">
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-bold text-[var(--ink)]">Conferencia NEWSHOP XLSX</p>
+                  <p className="mt-1 text-xs text-[var(--ink-mut)]">
+                    Vincula por chave de acesso, atualiza tipo/status/observacao e separa as chaves que ainda nao existem no app.
+                  </p>
+                </div>
+                <button
+                  type="submit"
+                  disabled={importandoConferencia}
+                  className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-bold text-white hover:bg-slate-700 disabled:opacity-50"
+                >
+                  {importandoConferencia ? 'Importando...' : 'Importar conferencia'}
+                </button>
+              </div>
+              <input
+                type="file"
+                name="arquivos"
+                accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                multiple
+                className="w-full text-sm text-[var(--ink-mut)] file:mr-3 file:rounded-lg file:border-0 file:bg-[var(--surface-2)] file:px-3 file:py-2 file:text-sm file:font-semibold file:text-[var(--ink)]"
+              />
+              {resultadoConferencia && (
+                <div className="mt-3 space-y-3 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-3">
+                  <div className="flex flex-wrap gap-2 text-xs">
+                    <Badge tone="blue">{resultadoConferencia.resumo.linhasLidas} lida(s)</Badge>
+                    <Badge tone="green">{resultadoConferencia.resumo.atualizadas} atualizada(s)</Badge>
+                    <Badge tone={resultadoConferencia.resumo.naoEncontradas > 0 ? 'orange' : 'gray'}>{resultadoConferencia.resumo.naoEncontradas} pendente(s)</Badge>
+                    <Badge tone={resultadoConferencia.resumo.divergencias > 0 ? 'red' : 'gray'}>{resultadoConferencia.resumo.divergencias} divergencia(s)</Badge>
+                    <Badge tone="indigo">{resultadoConferencia.resumo.etiquetasAplicadas} etiqueta(s)</Badge>
+                  </div>
+                  {resultadoConferencia.divergencias.length > 0 && (
+                    <details className="text-xs text-[var(--ink-mut)]">
+                      <summary className="cursor-pointer font-semibold text-[var(--ink)]">Ver divergencias</summary>
+                      <div className="mt-2 max-h-44 space-y-1 overflow-y-auto">
+                        {resultadoConferencia.divergencias.slice(0, 12).map((item) => (
+                          <p key={item.chave} className="rounded bg-white px-2 py-1">
+                            NF {item.numeroPlanilha || item.numeroSistema || '-'} - {item.divergencias.join(' | ')}
+                          </p>
+                        ))}
+                      </div>
+                    </details>
+                  )}
+                  {resultadoConferencia.pendentes.length > 0 && (
+                    <details className="text-xs text-[var(--ink-mut)]">
+                      <summary className="cursor-pointer font-semibold text-[var(--ink)]">Ver pendencias</summary>
+                      <div className="mt-2 max-h-44 space-y-1 overflow-y-auto">
+                        {resultadoConferencia.pendentes.slice(0, 12).map((item) => (
+                          <p key={item.chave} className="rounded bg-white px-2 py-1">
+                            NF {item.numero || '-'} - {item.emitenteNome || formatarCnpj(item.emitenteCnpj)} - {item.motivo}
+                          </p>
+                        ))}
+                      </div>
+                    </details>
+                  )}
+                </div>
+              )}
+            </form>
 
             {/* Importar arquivos XML de uma pasta (notas antigas, do contador/ERP) */}
             {podeAdministrar && (
@@ -3395,6 +3597,42 @@ export default function Dashboard({
                     <GrupoCheckboxFiltro titulo="Manifesto" opcoes={MANIFESTO_NOTA_OPCOES} selecionados={filtroManifestos} onToggle={toggleFiltroManifestoNota} />
                     <GrupoCheckboxFiltro titulo="Modalidades" opcoes={MODALIDADE_NOTA_OPCOES} selecionados={filtroModalidades} onToggle={toggleFiltroModalidadeNota} />
                   </div>
+                  </div>
+
+                  <div className="rounded-xl border border-slate-200 bg-white p-4">
+                    <div className="mb-4">
+                      <h3 className="text-sm font-bold text-slate-900">Conferencia NEWSHOP</h3>
+                      <p className="mt-0.5 text-xs text-slate-500">Filtros do controle importado das planilhas.</p>
+                    </div>
+                    <div className="grid grid-cols-1 gap-x-4 gap-y-4 lg:grid-cols-12">
+                      <CampoFiltroNotas label="Tipo conferencia" className="lg:col-span-3">
+                        <select value={filtroConferenciaTipo} onChange={(e) => setFiltroConferenciaTipo(e.target.value)} className={CAMPO_FILTRO_NOTAS}>
+                          <option value="">Todos</option>
+                          {conferenciaTiposParaFiltro.map((tipo) => (
+                            <option key={tipo} value={tipo}>{tipo}</option>
+                          ))}
+                        </select>
+                      </CampoFiltroNotas>
+                      <CampoFiltroNotas label="Status conferencia" className="lg:col-span-3">
+                        <select value={filtroConferenciaStatus} onChange={(e) => setFiltroConferenciaStatus(e.target.value)} className={CAMPO_FILTRO_NOTAS}>
+                          <option value="">Todos</option>
+                          {conferenciaStatusParaFiltro.map((statusItem) => (
+                            <option key={statusItem} value={statusItem}>{statusItem}</option>
+                          ))}
+                        </select>
+                      </CampoFiltroNotas>
+                      <CampoFiltroNotas label="Observacao" className="lg:col-span-3">
+                        <select value={filtroConferenciaObservacao} onChange={(e) => setFiltroConferenciaObservacao(e.target.value as 'todos' | 'com' | 'sem')} className={CAMPO_FILTRO_NOTAS}>
+                          <option value="todos">Todas</option>
+                          <option value="com">Com observacao</option>
+                          <option value="sem">Sem observacao</option>
+                        </select>
+                      </CampoFiltroNotas>
+                      <label className="flex items-center gap-2 self-end text-sm font-semibold leading-5 text-slate-800 lg:col-span-3">
+                        <input type="checkbox" checked={filtroConferenciaDivergencia} onChange={(e) => setFiltroConferenciaDivergencia(e.target.checked)} className="h-4 w-4" />
+                        Divergencia importacao
+                      </label>
+                    </div>
                   </div>
 
                   <div className="rounded-xl border border-slate-200 bg-white p-4">
@@ -4511,6 +4749,7 @@ function ChecklistFiltro({
 
 function RelatoriosDashboard({
   notas,
+  pendenciasConferencia,
   carregando,
   total,
   temMais,
@@ -4518,6 +4757,7 @@ function RelatoriosDashboard({
   onAbrirNota,
 }: {
   notas: NotaRelatorio[];
+  pendenciasConferencia: ConferenciaNewshopPendenteResumo[];
   carregando: boolean;
   total: number;
   temMais: boolean;
@@ -4652,6 +4892,9 @@ function RelatoriosDashboard({
         nota.cnpj.cnpj,
         nota.cteChaves.join(' '),
         nota.cteNumeros.join(' '),
+        nota.conferenciaTipo,
+        nota.conferenciaStatus,
+        nota.conferenciaObservacao,
         itensTributadosTexto,
       ].filter(Boolean).join(' ')),
       itensTributadosTexto,
@@ -4901,6 +5144,42 @@ function RelatoriosDashboard({
       topEmitentes,
     };
   }, [notasPeriodo, filtrosRelatorioAplicados.tributoItem]);
+
+  const conferenciaNewshopResumo = useMemo(() => {
+    const porMes = new Map<string, { qtd: number; divergencias: number; valor: number }>();
+    const porTipo = new Map<string, number>();
+    const porStatus = new Map<string, number>();
+    let comConferencia = 0;
+    let divergencias = 0;
+    let observacoes = 0;
+
+    for (const nota of notasPeriodo) {
+      if (!nota.conferenciaAtualizadaEm && !nota.conferenciaTipo && !nota.conferenciaStatus) continue;
+      comConferencia++;
+      if (nota.conferenciaDivergencia) divergencias++;
+      if (nota.conferenciaObservacao) observacoes++;
+      const mes = porMes.get(nota.mesChave) ?? { qtd: 0, divergencias: 0, valor: 0 };
+      mes.qtd += 1;
+      mes.valor += nota.valor;
+      if (nota.conferenciaDivergencia) mes.divergencias += 1;
+      porMes.set(nota.mesChave, mes);
+      if (nota.conferenciaTipo) porTipo.set(nota.conferenciaTipo, (porTipo.get(nota.conferenciaTipo) ?? 0) + 1);
+      for (const statusItem of (nota.conferenciaStatus ?? '').split(',')) {
+        const valor = statusItem.trim();
+        if (valor) porStatus.set(valor, (porStatus.get(valor) ?? 0) + 1);
+      }
+    }
+
+    return {
+      comConferencia,
+      divergencias,
+      observacoes,
+      porMes: [...porMes.entries()].filter(([mes]) => !!mes).sort((a, b) => a[0].localeCompare(b[0])),
+      porTipo: [...porTipo.entries()].sort((a, b) => b[1] - a[1]),
+      porStatus: [...porStatus.entries()].sort((a, b) => b[1] - a[1]),
+      pendencias: pendenciasConferencia,
+    };
+  }, [notasPeriodo, pendenciasConferencia]);
   const comparativoMes = useMemo(() => {
     const meses = resumoFiscal.meses;
     const atual = meses.at(-1);
@@ -5226,7 +5505,7 @@ function RelatoriosDashboard({
   }
 
   function baixarRelatorioNotasCsv() {
-    baixarCsv('relatorio-notas-fiscais.csv', ['Emissao', 'NF', 'Serie', 'Empresa', 'Fornecedor', 'CNPJ fornecedor', 'UF', 'XML', 'Total NF', 'ICMS', 'DAE', 'CT-e qtd', 'CT-e numeros', 'CT-e valor', 'Itens ANTC', 'Itens ST', 'Risco'], notasPeriodo.map((nota) => [
+    baixarCsv('relatorio-notas-fiscais.csv', ['Emissao', 'NF', 'Serie', 'Empresa', 'Fornecedor', 'CNPJ fornecedor', 'UF', 'XML', 'Total NF', 'ICMS', 'DAE', 'CT-e qtd', 'CT-e numeros', 'CT-e valor', 'Tipo conferencia', 'Status conferencia', 'Obs conferencia', 'Divergencia conferencia', 'Itens ANTC', 'Itens ST', 'Risco'], notasPeriodo.map((nota) => [
       data(nota.emitidaEm),
       numeroNotaSistema(nota),
       serieNotaSistema(nota),
@@ -5241,6 +5520,10 @@ function RelatoriosDashboard({
       nota.cteQtd,
       nota.cteNumeros.join(' | '),
       nota.cteValorTotal,
+      nota.conferenciaTipo ?? '',
+      nota.conferenciaStatus ?? '',
+      nota.conferenciaObservacao ?? '',
+      nota.conferenciaDivergencia ? 'Sim' : 'Nao',
       itensTributadosPorTipoRelatorio(nota.itensTributados, 'ANTECIPACAO', filtrosRelatorioAplicados.tributoItem).length,
       itensTributadosPorTipoRelatorio(nota.itensTributados, 'ST', filtrosRelatorioAplicados.tributoItem).length,
       nota.risco,
@@ -5833,6 +6116,92 @@ function RelatoriosDashboard({
           <p className="w-full text-sm font-medium text-red-700">{erroExcelTransporte}</p>
         )}
       </div>
+
+      <section className="report-card rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4 shadow-sm sm:p-5">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border)] pb-3">
+          <div>
+            <h2 className="text-base font-bold text-[var(--ink)]">Conferencia NEWSHOP</h2>
+            <p className="text-xs text-[var(--ink-mut)]">Controle importado das planilhas por chave de acesso.</p>
+          </div>
+          <Badge tone={conferenciaNewshopResumo.pendencias.length > 0 ? 'orange' : 'green'}>
+            {conferenciaNewshopResumo.pendencias.length} pendente(s)
+          </Badge>
+        </div>
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <KpiCard label="Notas vinculadas" value={String(conferenciaNewshopResumo.comConferencia)} sub="Com controle importado" tone="neu" />
+          <KpiCard label="Divergencias" value={String(conferenciaNewshopResumo.divergencias)} sub="Numero, fornecedor, valor ou situacao" tone={conferenciaNewshopResumo.divergencias > 0 ? 'crit' : 'good'} />
+          <KpiCard label="Observacoes" value={String(conferenciaNewshopResumo.observacoes)} sub="Notas com comentario manual" tone="warn" />
+          <KpiCard label="Pendentes" value={String(conferenciaNewshopResumo.pendencias.length)} sub="Chaves sem vinculo no app" tone={conferenciaNewshopResumo.pendencias.length > 0 ? 'warn' : 'good'} />
+        </div>
+        <div className="mt-4 grid gap-3 lg:grid-cols-3">
+          <div className="rounded-xl border border-[var(--border)] p-3">
+            <p className="mb-2 text-xs font-bold uppercase text-[var(--ink-mut)]">Por mes</p>
+            <div className="space-y-1 text-sm">
+              {conferenciaNewshopResumo.porMes.slice(-8).map(([mes, item]) => (
+                <div key={mes} className="flex items-center justify-between gap-3">
+                  <span className="font-semibold text-[var(--ink)]">{mesLabel(mes)}</span>
+                  <span className="text-[var(--ink-mut)]">{item.qtd} NF | {item.divergencias} div.</span>
+                </div>
+              ))}
+              {conferenciaNewshopResumo.porMes.length === 0 && <p className="text-[var(--ink-mut)]">Sem dados no filtro atual.</p>}
+            </div>
+          </div>
+          <div className="rounded-xl border border-[var(--border)] p-3">
+            <p className="mb-2 text-xs font-bold uppercase text-[var(--ink-mut)]">Por tipo</p>
+            <div className="space-y-1 text-sm">
+              {conferenciaNewshopResumo.porTipo.slice(0, 8).map(([tipo, qtd]) => (
+                <div key={tipo} className="flex items-center justify-between gap-3">
+                  <span className="font-semibold text-[var(--ink)]">{tipo}</span>
+                  <span className="text-[var(--ink-mut)]">{qtd} NF</span>
+                </div>
+              ))}
+              {conferenciaNewshopResumo.porTipo.length === 0 && <p className="text-[var(--ink-mut)]">Sem dados no filtro atual.</p>}
+            </div>
+          </div>
+          <div className="rounded-xl border border-[var(--border)] p-3">
+            <p className="mb-2 text-xs font-bold uppercase text-[var(--ink-mut)]">Por status</p>
+            <div className="space-y-1 text-sm">
+              {conferenciaNewshopResumo.porStatus.slice(0, 8).map(([statusItem, qtd]) => (
+                <div key={statusItem} className="flex items-center justify-between gap-3">
+                  <span className="font-semibold text-[var(--ink)]">{statusItem}</span>
+                  <span className="text-[var(--ink-mut)]">{qtd} NF</span>
+                </div>
+              ))}
+              {conferenciaNewshopResumo.porStatus.length === 0 && <p className="text-[var(--ink-mut)]">Sem dados no filtro atual.</p>}
+            </div>
+          </div>
+        </div>
+        {conferenciaNewshopResumo.pendencias.length > 0 && (
+          <div className="mt-4 overflow-x-auto rounded-xl border border-[var(--border)]">
+            <table className="min-w-[980px] text-left text-xs">
+              <thead className="bg-[var(--surface-2)] text-[var(--ink-mut)]">
+                <tr>
+                  <th className="px-3 py-2 font-semibold">NF</th>
+                  <th className="px-3 py-2 font-semibold">Emissao</th>
+                  <th className="px-3 py-2 font-semibold">Fornecedor</th>
+                  <th className="px-3 py-2 font-semibold">UF</th>
+                  <th className="px-3 py-2 text-right font-semibold">Valor</th>
+                  <th className="px-3 py-2 font-semibold">Status</th>
+                  <th className="px-3 py-2 font-semibold">Motivo</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[var(--border)]">
+                {conferenciaNewshopResumo.pendencias.slice(0, 30).map((item) => (
+                  <tr key={item.chave}>
+                    <td className="px-3 py-2 font-semibold text-[var(--ink)]">{item.numero || '-'}</td>
+                    <td className="px-3 py-2 text-[var(--ink)]">{item.emitidaEm ? data(item.emitidaEm) : '-'}</td>
+                    <td className="max-w-[260px] truncate px-3 py-2 text-[var(--ink)]" title={item.emitenteNome || item.emitenteCnpj || ''}>{item.emitenteNome || formatarCnpj(item.emitenteCnpj)}</td>
+                    <td className="px-3 py-2 text-[var(--ink)]">{item.uf || '-'}</td>
+                    <td className="px-3 py-2 text-right text-[var(--ink)]">{moeda(item.valorTotal)}</td>
+                    <td className="px-3 py-2"><Badge tone="orange">{item.status || '-'}</Badge></td>
+                    <td className="max-w-[280px] truncate px-3 py-2 text-[var(--ink-mut)]" title={item.motivo || ''}>{item.motivo || '-'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
 
       <section className="report-card rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4 shadow-sm sm:p-5">
         <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
@@ -7338,6 +7707,9 @@ function CompactFragmentNota({
             {nota.situacaoSefaz === 'CANCELADA' && <Badge tone="orange">CANCELADA</Badge>}
             {nota.situacaoSefaz === 'DENEGADA' && <Badge tone="orange">DENEGADA</Badge>}
             {nota.recebimentoStatus && <Badge tone={toneRecebimentoStatus(nota.recebimentoStatus)}>{nota.recebimentoStatus}</Badge>}
+            {nota.conferenciaTipo && <Badge tone="sky">{nota.conferenciaTipo}</Badge>}
+            {nota.conferenciaStatus && <Badge tone={nota.conferenciaDivergencia ? 'red' : 'indigo'}>{nota.conferenciaStatus}</Badge>}
+            {nota.conferenciaDivergencia && <Badge tone="red">Divergencia</Badge>}
             {tags.slice(0, 2).map((tag) => <Badge key={tag} tone="indigo">{tag}</Badge>)}
             {tags.length > 2 && <Badge tone="gray">+{tags.length - 2}</Badge>}
           </div>
@@ -8090,6 +8462,23 @@ function DetalheNota({
                 </p>
               )}
             </div>
+            {(nota.conferenciaTipo || nota.conferenciaStatus || nota.conferenciaObservacao || nota.conferenciaFonte) && (
+              <div className={`mb-4 rounded-lg border p-3 ${nota.conferenciaDivergencia ? 'border-red-200 bg-red-50' : 'border-indigo-200 bg-indigo-50'}`}>
+                <div className="mb-2 flex flex-wrap items-center gap-2">
+                  <p className={`text-xs font-bold uppercase tracking-wide ${nota.conferenciaDivergencia ? 'text-red-800' : 'text-indigo-800'}`}>Conferencia NEWSHOP</p>
+                  {nota.conferenciaTipo && <Badge tone="sky">{nota.conferenciaTipo}</Badge>}
+                  {nota.conferenciaStatus && <Badge tone={nota.conferenciaDivergencia ? 'red' : 'indigo'}>{nota.conferenciaStatus}</Badge>}
+                  {nota.conferenciaDivergencia && <Badge tone="red">Divergencia importacao</Badge>}
+                </div>
+                <div className="grid grid-cols-1 gap-x-6 gap-y-2 text-sm md:grid-cols-2">
+                  <Campo rotulo="Observacao" valor={nota.conferenciaObservacao || 'Sem observacao'} />
+                  <Campo rotulo="Atualizado em" valor={nota.conferenciaAtualizadaEm ? dataHora(nota.conferenciaAtualizadaEm) : '-'} />
+                  <div className="md:col-span-2">
+                    <Campo rotulo="Fonte" valor={nota.conferenciaFonte || '-'} />
+                  </div>
+                </div>
+              </div>
+            )}
             <div className="grid grid-cols-1 gap-x-8 gap-y-3 text-sm md:grid-cols-2 lg:grid-cols-3">
               <Campo rotulo="Empresa (destinatário)" valor={nota.cnpj.razaoSocial || formatarCnpj(nota.cnpj.cnpj)} />
               <Campo rotulo="Natureza da Operação" valor={nota.naturezaOp || '—'} />
