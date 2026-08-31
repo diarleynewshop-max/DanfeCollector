@@ -460,16 +460,6 @@ const ETIQUETAS_PRESET = [
   'Divergência',
   'Pago',
   'Devolvido',
-  'Devolução',
-  'Cancelada/Recusada',
-  'Reclassificação',
-  'Importada',
-  'Inconsistência',
-  'Pendente entrega',
-  'Transferência',
-  'Nota filial',
-  'NPrime',
-  'Erro',
   'Urgente',
   ...STATUS_RECEBIMENTO_PRESET,
 ];
@@ -3004,7 +2994,6 @@ export default function Dashboard({
                     <Badge tone="green">{resultadoConferencia.resumo.atualizadas} atualizada(s)</Badge>
                     <Badge tone={resultadoConferencia.resumo.naoEncontradas > 0 ? 'orange' : 'gray'}>{resultadoConferencia.resumo.naoEncontradas} pendente(s)</Badge>
                     <Badge tone={resultadoConferencia.resumo.divergencias > 0 ? 'red' : 'gray'}>{resultadoConferencia.resumo.divergencias} divergencia(s)</Badge>
-                    <Badge tone="indigo">{resultadoConferencia.resumo.etiquetasAplicadas} etiqueta(s)</Badge>
                   </div>
                   {resultadoConferencia.divergencias.length > 0 && (
                     <details className="text-xs text-[var(--ink-mut)]">

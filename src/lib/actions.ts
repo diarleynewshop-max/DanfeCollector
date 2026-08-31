@@ -200,7 +200,6 @@ export type ResultadoImportConferenciaNewshop = ActionResult & {
     ignoradas: number;
     divergencias: number;
     observacoes: number;
-    etiquetasAplicadas: number;
   };
   pendentes: ConferenciaNewshopPendenteResumo[];
   divergencias: ConferenciaNewshopDivergencia[];
@@ -1555,25 +1554,6 @@ function normalizarStatusConferencia(valor: string): string | null {
   return rotulos.length > 0 ? rotulos.join(', ') : textoLimpoConferencia(valor);
 }
 
-function etiquetasConferencia(status: string | null, observacao: string | null, divergencias: string[]): string[] {
-  const texto = normalizarBuscaConferencia(`${status ?? ''} ${observacao ?? ''}`);
-  const tags = new Set<string>();
-  if (status?.includes('Efetivada')) tags.add('Conferido');
-  if (status?.includes('Cancelada/Recusada')) tags.add('Cancelada/Recusada');
-  if (status?.includes('Reclassificação')) tags.add('Reclassificação');
-  if (status?.includes('Devolução')) tags.add('Devolução');
-  if (status?.includes('Importada')) tags.add('Importada');
-  if (status?.includes('Inconsistência')) tags.add('Inconsistência');
-  if (status?.includes('Pendente entrega')) tags.add('Pendente entrega');
-  if (status?.includes('Transferência')) tags.add('Transferência');
-  if (status?.includes('Nota filial')) tags.add('Nota filial');
-  if (status?.includes('Erro')) tags.add('Erro');
-  if (texto.includes('NPRIME')) tags.add('NPrime');
-  if (texto.includes('ERRO')) tags.add('Erro');
-  if (divergencias.length > 0) tags.add('Divergência');
-  return [...tags];
-}
-
 function montarObservacaoConferencia(linha: LinhaConferenciaNewshop, divergencias: string[]): string | null {
   const partes = [
     linha.observacao,
@@ -1686,7 +1666,6 @@ export async function importarConferenciaNewshopXlsx(formData: FormData): Promis
     ignoradas: 0,
     divergencias: 0,
     observacoes: 0,
-    etiquetasAplicadas: 0,
   };
   if (!usuario) {
     return { success: false, message: 'Sessao expirada. Faca login novamente.', resumo: resumoBase, pendentes: [], divergencias: [] };
@@ -1719,7 +1698,6 @@ export async function importarConferenciaNewshopXlsx(formData: FormData): Promis
       emitenteNome: true,
       valorTotal: true,
       situacaoSefaz: true,
-      etiqueta: true,
     },
   });
   const chavesExistentes = new Set((await prisma.notaFiscal.findMany({
@@ -1732,7 +1710,6 @@ export async function importarConferenciaNewshopXlsx(formData: FormData): Promis
   let atualizadas = 0;
   let semAcesso = 0;
   let observacoes = 0;
-  let etiquetasAplicadas = 0;
   const agora = new Date();
 
   for (const linha of linhas) {
@@ -1769,10 +1746,6 @@ export async function importarConferenciaNewshopXlsx(formData: FormData): Promis
 
     const divs = divergenciasConferencia(linha, nota);
     const observacao = montarObservacaoConferencia(linha, divs);
-    const tagsAtuais = (nota.etiqueta ?? '').split(',').map((tag) => tag.trim()).filter(Boolean);
-    const tagsNovas = etiquetasConferencia(linha.status, observacao, divs);
-    const tagsFinais = [...new Set([...tagsAtuais, ...tagsNovas])];
-    etiquetasAplicadas += tagsFinais.length - tagsAtuais.length;
     if (observacao) observacoes++;
     if (divs.length > 0) {
       divergencias.push({
@@ -1797,7 +1770,6 @@ export async function importarConferenciaNewshopXlsx(formData: FormData): Promis
         conferenciaFonte: linha.fonte,
         conferenciaAtualizadaEm: agora,
         conferenciaDivergencia: divs.length > 0,
-        etiqueta: tagsFinais.length > 0 ? tagsFinais.join(',') : null,
       },
     });
     await prisma.conferenciaNewshopPendente.delete({ where: { chave: linha.chave } }).catch(() => null);
@@ -1819,7 +1791,6 @@ export async function importarConferenciaNewshopXlsx(formData: FormData): Promis
       ignoradas,
       divergencias: divergencias.length,
       observacoes,
-      etiquetasAplicadas,
     },
     pendentes: pendentes.slice(0, 80),
     divergencias: divergencias.slice(0, 80),
