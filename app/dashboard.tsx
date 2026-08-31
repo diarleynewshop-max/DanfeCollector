@@ -3301,20 +3301,6 @@ export default function Dashboard({
                         onChange={setFiltroEmitente}
                       />
                     </CampoFiltroNotas>
-                    <CampoFiltroNotas label="Item (SKU/descricao)" className="lg:col-span-3">
-                      <input
-                        value={filtroItem}
-                        onChange={(e) => setFiltroItem(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') {
-                            e.preventDefault();
-                            void aplicarFiltrosNotas();
-                          }
-                        }}
-                        placeholder="Codigo, NCM ou produto"
-                        className={CAMPO_FILTRO_NOTAS}
-                      />
-                    </CampoFiltroNotas>
                     <CampoFiltroNotas label="Num. Documento" className="lg:col-span-2">
                       <input
                         value={filtroNumero}
@@ -3326,6 +3312,20 @@ export default function Dashboard({
                           }
                         }}
                         inputMode="numeric"
+                        className={CAMPO_FILTRO_NOTAS}
+                      />
+                    </CampoFiltroNotas>
+                    <CampoFiltroNotas label="Item (SKU/descricao)" className="lg:col-span-3">
+                      <input
+                        value={filtroItem}
+                        onChange={(e) => setFiltroItem(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            void aplicarFiltrosNotas();
+                          }
+                        }}
+                        placeholder="Codigo, NCM ou produto"
                         className={CAMPO_FILTRO_NOTAS}
                       />
                     </CampoFiltroNotas>
