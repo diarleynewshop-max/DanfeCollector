@@ -149,6 +149,7 @@ type FiltrosNotasAplicados = {
   numero: string;
   chave: string;
   serie: string;
+  item: string;
   cnpjId: number | 'todos';
   status: 'todos' | 'RESUMO' | 'COMPLETA';
   emitente: string;
@@ -289,6 +290,7 @@ function filtrosNotasPadrao(): FiltrosNotasAplicados {
     numero: '',
     chave: '',
     serie: '',
+    item: '',
     cnpjId: 'todos',
     status: 'todos',
     emitente: '',
@@ -507,6 +509,21 @@ function resumoTributosItensNota(nota: NotaComCnpj): ResumoTributosItensSitram {
 function notaTemTributoItem(resumo: Pick<ResumoTributosItensSitram, 'st' | 'antecipacao'>, tipo: FiltroTributoItem): boolean {
   if (tipo === 'todos') return true;
   return tipo === 'ST' ? resumo.st > 0 : resumo.antecipacao > 0;
+}
+
+function textoBuscaItensNota(nota: NotaComCnpj): string {
+  const espelho = extrairEspelhoSitram(nota);
+  if (!espelho?.itens.length) return '';
+
+  return normalizarBuscaFiltro(espelho.itens.map((item) => [
+    `item ${item.nItem}`,
+    item.nItem,
+    item.codigo,
+    item.produto,
+    item.ncm,
+    item.cfop,
+    item.cst,
+  ].filter(Boolean).join(' ')).join(' '));
 }
 
 function toneRecebimentoStatus(status: string | null | undefined): 'green' | 'orange' | 'gray' | 'amber' | 'blue' | 'indigo' {
@@ -857,6 +874,7 @@ export default function Dashboard({
   const [filtroNumero, setFiltroNumero] = useState('');
   const [filtroChave, setFiltroChave] = useState('');
   const [filtroSerie, setFiltroSerie] = useState('');
+  const [filtroItem, setFiltroItem] = useState('');
   const [largurasColunas, setLargurasColunas] = useState<Record<ColunaRedimensionavel, number>>(LARGURAS_COLUNAS_PADRAO);
   const resizeColunaRef = useRef<{ coluna: ColunaRedimensionavel; inicioX: number; larguraInicial: number } | null>(null);
   const [todasCarregadas, setTodasCarregadas] = useState(() => notasIniciais.length >= totalNotas);
@@ -1088,6 +1106,7 @@ export default function Dashboard({
     filtroNumero,
     filtroChave,
     filtroSerie,
+    filtroItem,
     filtroEmitente,
     filtroDestinatario,
     filtroValorMin,
@@ -1122,6 +1141,7 @@ export default function Dashboard({
     filtrosAplicadosNotas.numero,
     filtrosAplicadosNotas.chave,
     filtrosAplicadosNotas.serie,
+    filtrosAplicadosNotas.item,
     filtrosAplicadosNotas.emitente,
     filtrosAplicadosNotas.destinatario,
     filtrosAplicadosNotas.valorMin,
@@ -1154,6 +1174,7 @@ export default function Dashboard({
     filtrosAplicadosNotas.numero !== filtroNumero ||
     filtrosAplicadosNotas.chave !== filtroChave ||
     filtrosAplicadosNotas.serie !== filtroSerie ||
+    filtrosAplicadosNotas.item !== filtroItem ||
     filtrosAplicadosNotas.cnpjId !== filtroCnpjId ||
     filtrosAplicadosNotas.status !== filtroStatus ||
     filtrosAplicadosNotas.emitente !== filtroEmitente ||
@@ -1227,6 +1248,7 @@ export default function Dashboard({
       numero: filtroNumero,
       chave: filtroChave,
       serie: filtroSerie,
+      item: filtroItem,
       cnpjId: filtroCnpjId,
       status: filtroStatus,
       emitente: filtroEmitente,
@@ -1394,6 +1416,7 @@ export default function Dashboard({
     setFiltroNumero('');
     setFiltroChave('');
     setFiltroSerie('');
+    setFiltroItem('');
     setFiltroEmitente('');
     setFiltroDestinatario('');
     setFiltroValorMin('');
@@ -1519,6 +1542,7 @@ export default function Dashboard({
   const filtroNumeroBusca = filtrosAplicadosNotas.numero;
   const filtroChaveBusca = filtrosAplicadosNotas.chave;
   const filtroSerieBusca = filtrosAplicadosNotas.serie;
+  const filtroItemBusca = filtrosAplicadosNotas.item;
   const filtroCnpjIdBusca = filtrosAplicadosNotas.cnpjId;
   const filtroStatusBusca = filtrosAplicadosNotas.status;
   const filtroEmitenteBusca = filtrosAplicadosNotas.emitente;
@@ -1556,6 +1580,7 @@ export default function Dashboard({
       emitenteCnpj: n.emitenteCnpj ?? '',
       destNome: normalizarBuscaFiltro(n.destNome ?? ''),
       destCnpj: n.destCnpj ?? '',
+      itensTexto: textoBuscaItensNota(n),
       emitidaEm: new Date(n.emitidaEm),
       entradaEm: new Date(n.createdAt),
       etiquetas: parseEtiquetas(n.etiqueta),
@@ -1573,6 +1598,8 @@ export default function Dashboard({
     const numeroBuscaDigitos = numeroBusca.replace(/\D/g, '');
     const chaveBuscaDigitos = filtroChaveBusca.replace(/\D/g, '');
     const serieBuscaNormalizada = filtroSerieBusca.replace(/\D/g, '').replace(/^0+/, '');
+    const itemBusca = normalizarBuscaFiltro(filtroItemBusca);
+    const itemBuscaDigitos = filtroItemBusca.replace(/\D/g, '');
     const emitenteBusca = normalizarBuscaFiltro(filtroEmitenteBusca);
     const emitenteBuscaDigitos = filtroEmitenteBusca.replace(/\D/g, '');
     const destBusca = normalizarBuscaFiltro(filtroDestinatarioBusca);
@@ -1591,6 +1618,11 @@ export default function Dashboard({
       if (filtroStatusBusca !== 'todos' && n.status !== filtroStatusBusca) return false;
       if (chaveBuscaDigitos && !n.chave.includes(chaveBuscaDigitos)) return false;
       if (serieBuscaNormalizada && idx.serie !== serieBuscaNormalizada) return false;
+      if (itemBusca) {
+        const matchTextoItem = idx.itensTexto.includes(itemBusca);
+        const matchNumeroItem = itemBuscaDigitos.length > 0 && idx.itensTexto.includes(itemBuscaDigitos);
+        if (!matchTextoItem && !matchNumeroItem) return false;
+      }
 
       // Busca por número da NF (ignora zeros à esquerda) ou por chave de acesso.
       if (numeroBuscaDigitos) {
@@ -1733,6 +1765,7 @@ export default function Dashboard({
     filtroNumeroBusca,
     filtroChaveBusca,
     filtroSerieBusca,
+    filtroItemBusca,
     filtroEmitenteBusca,
     filtroDestinatarioBusca,
     filtroValorMinBusca,
@@ -1773,6 +1806,7 @@ export default function Dashboard({
     filtroNumeroBusca,
     filtroChaveBusca,
     filtroSerieBusca,
+    filtroItemBusca,
     filtroEmitenteBusca,
     filtroDestinatarioBusca,
     filtroValorMinBusca,
@@ -3265,6 +3299,20 @@ export default function Dashboard({
                         opcoes={sugestoesEmitente}
                         placeholder="Todos os fornecedores"
                         onChange={setFiltroEmitente}
+                      />
+                    </CampoFiltroNotas>
+                    <CampoFiltroNotas label="Item (SKU/descricao)" className="lg:col-span-3">
+                      <input
+                        value={filtroItem}
+                        onChange={(e) => setFiltroItem(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            void aplicarFiltrosNotas();
+                          }
+                        }}
+                        placeholder="Codigo, NCM ou produto"
+                        className={CAMPO_FILTRO_NOTAS}
                       />
                     </CampoFiltroNotas>
                     <CampoFiltroNotas label="Num. Documento" className="lg:col-span-2">
