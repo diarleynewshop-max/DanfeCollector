@@ -82,6 +82,13 @@ import {
 } from './nfStatusIntegration';
 export type { ConsultaStatusRecebimento } from './nfStatusIntegration';
 import {
+  NFSE_CNPJ_AUTORIZADO,
+  montarPreviewNfse,
+  type NfseEmissaoInput,
+  type NfsePreview,
+} from './nfse';
+export type { NfseEmissaoInput, NfsePreview };
+import {
   analisarSelagemAutomaticamenteTramita,
   consultarAssuntoSanfit,
   consultarAssuntoTramita,
@@ -116,6 +123,10 @@ export type TramitaSelagemPreview = {
   processoRaw?: unknown;
   avisos: string[];
   podeConfirmar: boolean;
+};
+
+export type ResultadoNfse = ActionResult & {
+  preview?: NfsePreview;
 };
 
 export type SyncHealthLevel = 'OK' | 'ATENCAO' | 'CRITICO';
@@ -427,6 +438,140 @@ const UFS_VALIDAS = new Set([
 
 function formatarCnpj(cnpj: string): string {
   return cnpj.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, '$1.$2.$3/$4-$5');
+}
+
+function normalizarInputNfse(input: NfseEmissaoInput): NfseEmissaoInput {
+  const numero = (valor: unknown) => Number(valor) || 0;
+  return {
+    prestadorCnpj: limparCnpj(input.prestadorCnpj ?? ''),
+    tomadorDocumento: String(input.tomadorDocumento ?? ''),
+    tomadorNome: String(input.tomadorNome ?? ''),
+    tomadorEmail: String(input.tomadorEmail ?? ''),
+    tomadorMunicipio: String(input.tomadorMunicipio ?? ''),
+    tomadorUf: String(input.tomadorUf ?? '').toUpperCase().slice(0, 2),
+    tomadorEndereco: String(input.tomadorEndereco ?? ''),
+    competencia: String(input.competencia ?? ''),
+    municipioIncidencia: String(input.municipioIncidencia ?? ''),
+    ufIncidencia: String(input.ufIncidencia ?? '').toUpperCase().slice(0, 2),
+    codigoMunicipioIbge: String(input.codigoMunicipioIbge ?? ''),
+    descricao: String(input.descricao ?? ''),
+    itemListaServico: String(input.itemListaServico ?? ''),
+    codigoTributacaoMunicipio: String(input.codigoTributacaoMunicipio ?? ''),
+    cnae: String(input.cnae ?? ''),
+    nbs: String(input.nbs ?? ''),
+    regimeTributario: String(input.regimeTributario ?? ''),
+    optanteSimples: !!input.optanteSimples,
+    exigibilidadeIss: String(input.exigibilidadeIss ?? ''),
+    naturezaOperacao: String(input.naturezaOperacao ?? ''),
+    localPrestacao: String(input.localPrestacao ?? ''),
+    valorServico: numero(input.valorServico),
+    deducaoBaseCalculo: numero(input.deducaoBaseCalculo),
+    descontoIncondicionado: numero(input.descontoIncondicionado),
+    descontoCondicionado: numero(input.descontoCondicionado),
+    aliquotaIss: numero(input.aliquotaIss),
+    issRetido: !!input.issRetido,
+    responsavelRetencao: String(input.responsavelRetencao ?? ''),
+    pisNaoRetido: numero(input.pisNaoRetido),
+    cofinsNaoRetido: numero(input.cofinsNaoRetido),
+    pisRetido: numero(input.pisRetido),
+    cofinsRetido: numero(input.cofinsRetido),
+    csllRetido: numero(input.csllRetido),
+    irrfRetido: numero(input.irrfRetido),
+    inssRetido: numero(input.inssRetido),
+    csrfRetido: numero(input.csrfRetido),
+    outrasRetencoes: numero(input.outrasRetencoes),
+    baseCalculoIbsCbs: numero(input.baseCalculoIbsCbs),
+    aliquotaIbs: numero(input.aliquotaIbs),
+    valorIbs: numero(input.valorIbs),
+    aliquotaCbs: numero(input.aliquotaCbs),
+    valorCbs: numero(input.valorCbs),
+    observacao: String(input.observacao ?? ''),
+  };
+}
+
+async function validarPrestadorNfseAutorizado(usuario: Awaited<ReturnType<typeof exigirUsuario>>) {
+  const empresa = await prisma.cnpj.findUnique({
+    where: { cnpj: NFSE_CNPJ_AUTORIZADO },
+    select: { id: true, cnpj: true, razaoSocial: true, uf: true, ativo: true },
+  });
+
+  if (!empresa) {
+    return {
+      ok: false as const,
+      message: `CNPJ ${formatarCnpj(NFSE_CNPJ_AUTORIZADO)} nao cadastrado no DanfeCollector.`,
+      empresa: null,
+    };
+  }
+
+  if (!empresa.ativo) {
+    return {
+      ok: false as const,
+      message: `CNPJ ${formatarCnpj(NFSE_CNPJ_AUTORIZADO)} esta inativo no DanfeCollector.`,
+      empresa,
+    };
+  }
+
+  if (!usuarioPodeAcessarCnpj(usuario, empresa.id)) {
+    return {
+      ok: false as const,
+      message: `Usuario sem acesso ao CNPJ ${formatarCnpj(NFSE_CNPJ_AUTORIZADO)}.`,
+      empresa,
+    };
+  }
+
+  return { ok: true as const, message: 'Prestador autorizado para NFS-e.', empresa };
+}
+
+export async function prepararEmissaoNfse(input: NfseEmissaoInput): Promise<ResultadoNfse> {
+  const usuario = await exigirUsuario();
+  const prestador = await validarPrestadorNfseAutorizado(usuario);
+  const normalizado = normalizarInputNfse(input);
+
+  if (!prestador.ok) {
+    return {
+      success: false,
+      message: prestador.message,
+      preview: montarPreviewNfse(normalizado),
+    };
+  }
+
+  const preview = montarPreviewNfse({
+    ...normalizado,
+    prestadorCnpj: prestador.empresa.cnpj,
+  });
+
+  return {
+    success: preview.avisos.length === 0,
+    message: preview.avisos.length === 0
+      ? 'Pre-emissao de NFS-e validada para revisao.'
+      : `Pre-emissao bloqueada: ${preview.avisos.join(' ')}`,
+    preview,
+  };
+}
+
+export async function emitirNfse(input: NfseEmissaoInput, confirmacao: string): Promise<ResultadoNfse> {
+  const preview = await prepararEmissaoNfse(input);
+  if (confirmacao.trim().toUpperCase() !== 'EMITIR') {
+    return {
+      success: false,
+      message: 'Digite EMITIR para autorizar uma emissao individual de NFS-e.',
+      preview: preview.preview,
+    };
+  }
+
+  if (!preview.preview?.podeEmitir) {
+    return {
+      success: false,
+      message: preview.message,
+      preview: preview.preview,
+    };
+  }
+
+  return {
+    success: false,
+    message: 'Emissao externa ainda nao implementada: falta definir o provedor NFS-e de Fortaleza/Nacional e credenciais de producao.',
+    preview: preview.preview,
+  };
 }
 
 // ---------------------------------------------------------------------------

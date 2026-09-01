@@ -36,6 +36,8 @@ import {
   atualizarSitramPorChaves,
   prepararSelagemTramitaNota,
   confirmarSelagemTramitaNota,
+  prepararEmissaoNfse,
+  emitirNfse,
   consultarPagamentoIcmsNota,
   consultarPagamentoIcmsLote,
   listarChavesSitramParaAtualizacao,
@@ -62,6 +64,8 @@ import {
   type ResumoInicio,
   type SyncHealth,
   type TramitaSelagemPreview,
+  type NfseEmissaoInput,
+  type NfsePreview,
 } from '@/lib/actions';
 import type { DanfeData } from '@/lib/sefaz/detalhe';
 import {
@@ -146,7 +150,8 @@ type FiltroOrigemNota = 'proprio' | 'terceiro';
 type FiltroManifestoNota = 'manifestada' | 'nao-manifestada' | 'pendente-processando' | 'com-erros';
 type FiltroModalidadeNota = 'simplificada' | 'estorno' | 'devolucao' | 'transferencia' | 'normal' | 'ajuste-icms';
 type FiltroTributoItem = 'todos' | TipoTributoItemSitram;
-type SecaoApp = 'home' | 'notas' | 'relatorios' | 'ie-fornecedor' | 'empresas' | 'usuarios' | 'configuracao';
+type SecaoApp = 'home' | 'notas' | 'relatorios' | 'nfse' | 'ie-fornecedor' | 'empresas' | 'usuarios' | 'configuracao';
+const NFSE_CNPJ_AUTORIZADO_DASHBOARD = '45998339000329';
 type ColunaRedimensionavel = 'nf' | 'emitente' | 'destinatario' | 'valores' | 'transporte' | 'sitram' | 'status';
 type ModalRelatorioTipo = 'ranking-uf' | 'detalhe-uf' | 'evolucao-mensal' | 'emitentes' | 'daes-pagos' | 'daes-nao-pagos' | 'daes-prioritarios' | 'pendencias';
 type FiltrosNotasAplicados = {
@@ -726,6 +731,79 @@ export default function Dashboard({
     atualizadas: number;
     erros: number;
   } | null>(null);
+  const cnpjNfseAutorizado = useMemo(
+    () => cnpjs.find((cnpj) => cnpj.cnpj === NFSE_CNPJ_AUTORIZADO_DASHBOARD) ?? null,
+    [cnpjs],
+  );
+  const [nfseForm, setNfseForm] = useState<NfseEmissaoInput>({
+    prestadorCnpj: NFSE_CNPJ_AUTORIZADO_DASHBOARD,
+    tomadorDocumento: '',
+    tomadorNome: '',
+    tomadorEmail: '',
+    tomadorMunicipio: 'Fortaleza',
+    tomadorUf: 'CE',
+    tomadorEndereco: '',
+    competencia: new Date().toISOString().slice(0, 10),
+    municipioIncidencia: 'Fortaleza',
+    ufIncidencia: 'CE',
+    codigoMunicipioIbge: '2304400',
+    descricao: '',
+    itemListaServico: '',
+    codigoTributacaoMunicipio: '',
+    cnae: '',
+    nbs: '',
+    regimeTributario: '',
+    optanteSimples: false,
+    exigibilidadeIss: '',
+    naturezaOperacao: '',
+    localPrestacao: 'Fortaleza/CE',
+    valorServico: 0,
+    deducaoBaseCalculo: 0,
+    descontoIncondicionado: 0,
+    descontoCondicionado: 0,
+    aliquotaIss: 0,
+    issRetido: false,
+    responsavelRetencao: '',
+    pisNaoRetido: 0,
+    cofinsNaoRetido: 0,
+    pisRetido: 0,
+    cofinsRetido: 0,
+    csllRetido: 0,
+    irrfRetido: 0,
+    inssRetido: 0,
+    csrfRetido: 0,
+    outrasRetencoes: 0,
+    baseCalculoIbsCbs: 0,
+    aliquotaIbs: 0,
+    valorIbs: 0,
+    aliquotaCbs: 0,
+    valorCbs: 0,
+    observacao: '',
+  });
+  const [nfsePreview, setNfsePreview] = useState<NfsePreview | null>(null);
+  const [nfseProcessando, setNfseProcessando] = useState(false);
+  const [nfseAutoriza, setNfseAutoriza] = useState(false);
+  const [nfseConfirmacao, setNfseConfirmacao] = useState('');
+
+  function atualizarCampoNfse<K extends keyof NfseEmissaoInput>(campo: K, valor: NfseEmissaoInput[K]) {
+    setNfseForm((atual) => ({ ...atual, [campo]: valor }));
+  }
+
+  async function handlePreValidarNfse() {
+    setNfseProcessando(true);
+    const res = await prepararEmissaoNfse({ ...nfseForm, prestadorCnpj: NFSE_CNPJ_AUTORIZADO_DASHBOARD });
+    setNfsePreview(res.preview ?? null);
+    setStatus({ success: res.success, message: res.message });
+    setNfseProcessando(false);
+  }
+
+  async function handleEmitirNfse() {
+    setNfseProcessando(true);
+    const res = await emitirNfse({ ...nfseForm, prestadorCnpj: NFSE_CNPJ_AUTORIZADO_DASHBOARD }, nfseConfirmacao);
+    setNfsePreview(res.preview ?? null);
+    setStatus({ success: res.success, message: res.message });
+    setNfseProcessando(false);
+  }
 
   function handleImportarPasta() {
     startTransition(async () => {
@@ -2477,6 +2555,7 @@ export default function Dashboard({
             <SecaoBotao atual={secaoAtual} alvo="home" onClick={setSecaoAtual}>{t('home')}</SecaoBotao>
             <SecaoBotao atual={secaoAtual} alvo="notas" onClick={setSecaoAtual}>{t('invoice')}</SecaoBotao>
             <SecaoBotao atual={secaoAtual} alvo="relatorios" onClick={setSecaoAtual}>{t('reports')}</SecaoBotao>
+            {cnpjNfseAutorizado && <SecaoBotao atual={secaoAtual} alvo="nfse" onClick={setSecaoAtual}>NFS-e</SecaoBotao>}
             <SecaoBotao atual={secaoAtual} alvo="ie-fornecedor" onClick={setSecaoAtual}>IE Fornecedor</SecaoBotao>
             <SecaoBotao atual={secaoAtual} alvo="empresas" onClick={setSecaoAtual}>{t('companies')}</SecaoBotao>
             {podeAdministrar && <SecaoBotao atual={secaoAtual} alvo="usuarios" onClick={() => abrirUsuariosAdmin()}>{t('users')}</SecaoBotao>}
@@ -2661,6 +2740,458 @@ export default function Dashboard({
             onCarregarMais={carregarMaisRelatorio}
             onAbrirNota={abrirNotaComDestaque}
           />
+        )}
+
+        {secaoAtual === 'nfse' && (
+          <section className="space-y-4">
+            <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-5 shadow-sm">
+              <div className="flex flex-col gap-3 border-b border-[var(--border)] pb-4 md:flex-row md:items-start md:justify-between">
+                <div>
+                  <h2 className="text-lg font-black text-[var(--ink)]">Emissao de NFS-e</h2>
+                  <p className="mt-1 text-sm text-[var(--ink-mut)]">
+                    Prestador limitado ao CNPJ {formatarCnpj(NFSE_CNPJ_AUTORIZADO_DASHBOARD)}.
+                  </p>
+                </div>
+                <Badge tone={cnpjNfseAutorizado ? 'green' : 'red'}>
+                  {cnpjNfseAutorizado ? 'CNPJ autorizado' : 'CNPJ sem acesso'}
+                </Badge>
+              </div>
+
+              <div className="mt-4 grid gap-4 lg:grid-cols-[.9fr_1.1fr]">
+                <div className="space-y-4">
+                  <section className="rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-4">
+                    <h3 className="mb-3 text-sm font-bold text-[var(--ink)]">Prestador</h3>
+                    <div className="grid gap-3 text-sm">
+                      <Campo rotulo="Empresa" valor={cnpjNfseAutorizado?.razaoSocial || 'NEWSHOP COMERCIO LTDA'} />
+                      <Campo rotulo="CNPJ" valor={formatarCnpj(NFSE_CNPJ_AUTORIZADO_DASHBOARD)} />
+                      <Campo rotulo="Municipio" valor="Fortaleza/CE" />
+                    </div>
+                  </section>
+
+                  <section className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+                    <p className="font-bold">Emissao externa bloqueada por enquanto</p>
+                    <p className="mt-1">
+                      Para liberar, falta definir se usaremos NFS-e Nacional ou webservice municipal de Fortaleza e configurar credenciais na VPS.
+                    </p>
+                  </section>
+
+                  {nfsePreview && (
+                    <section className="rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-4">
+                      <h3 className="mb-3 text-sm font-bold text-[var(--ink)]">Resumo da pre-emissao</h3>
+                      <div className="grid gap-3 text-sm">
+                        <Campo rotulo="Tomador" valor={`${nfsePreview.tomadorNome} - ${nfsePreview.tomadorDocumento || '-'}`} />
+                        <Campo rotulo="Servico" valor={nfsePreview.descricao || '-'} />
+                        <Campo rotulo="Valor do servico" valor={moeda(nfsePreview.valorServico)} />
+                        <Campo rotulo="Base ISS" valor={moeda(nfsePreview.baseCalculoIss)} />
+                        <Campo rotulo="ISS estimado" valor={`${moeda(nfsePreview.valorIss)} (${nfsePreview.aliquotaIss || 0}%)`} />
+                        <Campo rotulo="Retencoes federais" valor={moeda(nfsePreview.retencoesFederais)} />
+                        <Campo rotulo="IBS / CBS" valor={`${moeda(nfsePreview.valorIbs)} / ${moeda(nfsePreview.valorCbs)}`} />
+                        <Campo rotulo="Liquido estimado" valor={moeda(nfsePreview.valorLiquido)} />
+                        <Campo rotulo="ISS retido" valor={nfsePreview.issRetido ? 'Sim' : 'Nao'} />
+                        <Campo rotulo="Municipio incidencia" valor={nfsePreview.municipioIncidencia} />
+                        <Campo rotulo="Regime / NBS" valor={`${nfsePreview.regimeTributario || '-'} / ${nfsePreview.nbs || '-'}`} />
+                      </div>
+                      {nfsePreview.avisos.length > 0 && (
+                        <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-amber-900">
+                          <p className="text-xs font-bold uppercase">Bloqueios / avisos</p>
+                          <ul className="mt-2 list-disc space-y-1 pl-5 text-sm">
+                            {nfsePreview.avisos.map((aviso, index) => (
+                              <li key={`${aviso}-${index}`}>{aviso}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </section>
+                  )}
+                </div>
+
+                <form
+                  onSubmit={(evento) => {
+                    evento.preventDefault();
+                    void handlePreValidarNfse();
+                  }}
+                  className="space-y-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4"
+                >
+                  <div>
+                    <h3 className="text-sm font-bold text-[var(--ink)]">Tomador</h3>
+                    <div className="mt-3 grid gap-3 md:grid-cols-2">
+                      <label className="text-sm">
+                        <span className="mb-1 block font-medium text-[var(--ink-mut)]">CPF/CNPJ</span>
+                        <input
+                          value={nfseForm.tomadorDocumento}
+                          onChange={(e) => atualizarCampoNfse('tomadorDocumento', e.target.value)}
+                          className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)] outline-none focus:border-[var(--accent)]"
+                          placeholder="Somente numeros"
+                        />
+                      </label>
+                      <label className="text-sm">
+                        <span className="mb-1 block font-medium text-[var(--ink-mut)]">Nome / razao social</span>
+                        <input
+                          value={nfseForm.tomadorNome}
+                          onChange={(e) => atualizarCampoNfse('tomadorNome', e.target.value)}
+                          className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)] outline-none focus:border-[var(--accent)]"
+                        />
+                      </label>
+                      <label className="text-sm">
+                        <span className="mb-1 block font-medium text-[var(--ink-mut)]">E-mail</span>
+                        <input
+                          type="email"
+                          value={nfseForm.tomadorEmail}
+                          onChange={(e) => atualizarCampoNfse('tomadorEmail', e.target.value)}
+                          className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)] outline-none focus:border-[var(--accent)]"
+                        />
+                      </label>
+                      <div className="grid grid-cols-[1fr_80px] gap-2">
+                        <label className="text-sm">
+                          <span className="mb-1 block font-medium text-[var(--ink-mut)]">Municipio</span>
+                          <input
+                            value={nfseForm.tomadorMunicipio}
+                            onChange={(e) => atualizarCampoNfse('tomadorMunicipio', e.target.value)}
+                            className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)] outline-none focus:border-[var(--accent)]"
+                          />
+                        </label>
+                        <label className="text-sm">
+                          <span className="mb-1 block font-medium text-[var(--ink-mut)]">UF</span>
+                          <input
+                            value={nfseForm.tomadorUf}
+                            maxLength={2}
+                            onChange={(e) => atualizarCampoNfse('tomadorUf', e.target.value.toUpperCase())}
+                            className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm uppercase text-[var(--ink)] outline-none focus:border-[var(--accent)]"
+                          />
+                        </label>
+                      </div>
+                      <label className="text-sm md:col-span-2">
+                        <span className="mb-1 block font-medium text-[var(--ink-mut)]">Endereco do tomador</span>
+                        <input
+                          value={nfseForm.tomadorEndereco}
+                          onChange={(e) => atualizarCampoNfse('tomadorEndereco', e.target.value)}
+                          className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)] outline-none focus:border-[var(--accent)]"
+                          placeholder="Rua, numero, bairro, CEP"
+                        />
+                      </label>
+                    </div>
+                  </div>
+
+                  <div className="border-t border-[var(--border)] pt-4">
+                    <h3 className="text-sm font-bold text-[var(--ink)]">Servico</h3>
+                    <div className="mt-3 grid gap-3 md:grid-cols-2">
+                      <label className="text-sm">
+                        <span className="mb-1 block font-medium text-[var(--ink-mut)]">Competencia</span>
+                        <input
+                          type="date"
+                          value={nfseForm.competencia}
+                          onChange={(e) => atualizarCampoNfse('competencia', e.target.value)}
+                          className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)] outline-none focus:border-[var(--accent)]"
+                        />
+                      </label>
+                      <div className="grid grid-cols-[1fr_80px] gap-2">
+                        <label className="text-sm">
+                          <span className="mb-1 block font-medium text-[var(--ink-mut)]">Municipio incidencia ISS</span>
+                          <input
+                            value={nfseForm.municipioIncidencia}
+                            onChange={(e) => atualizarCampoNfse('municipioIncidencia', e.target.value)}
+                            className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)] outline-none focus:border-[var(--accent)]"
+                          />
+                        </label>
+                        <label className="text-sm">
+                          <span className="mb-1 block font-medium text-[var(--ink-mut)]">UF</span>
+                          <input
+                            value={nfseForm.ufIncidencia}
+                            maxLength={2}
+                            onChange={(e) => atualizarCampoNfse('ufIncidencia', e.target.value.toUpperCase())}
+                            className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm uppercase text-[var(--ink)] outline-none focus:border-[var(--accent)]"
+                          />
+                        </label>
+                      </div>
+                      <label className="text-sm">
+                        <span className="mb-1 block font-medium text-[var(--ink-mut)]">Codigo IBGE municipio</span>
+                        <input
+                          value={nfseForm.codigoMunicipioIbge}
+                          onChange={(e) => atualizarCampoNfse('codigoMunicipioIbge', e.target.value)}
+                          className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)] outline-none focus:border-[var(--accent)]"
+                          placeholder="Fortaleza: 2304400"
+                        />
+                      </label>
+                      <label className="text-sm">
+                        <span className="mb-1 block font-medium text-[var(--ink-mut)]">Valor</span>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={nfseForm.valorServico || ''}
+                          onChange={(e) => atualizarCampoNfse('valorServico', Number(e.target.value))}
+                          className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)] outline-none focus:border-[var(--accent)]"
+                        />
+                      </label>
+                      <label className="text-sm">
+                        <span className="mb-1 block font-medium text-[var(--ink-mut)]">Item da lista</span>
+                        <input
+                          value={nfseForm.itemListaServico}
+                          onChange={(e) => atualizarCampoNfse('itemListaServico', e.target.value)}
+                          className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)] outline-none focus:border-[var(--accent)]"
+                          placeholder="Ex: 14.01"
+                        />
+                      </label>
+                      <label className="text-sm">
+                        <span className="mb-1 block font-medium text-[var(--ink-mut)]">NBS</span>
+                        <input
+                          value={nfseForm.nbs}
+                          onChange={(e) => atualizarCampoNfse('nbs', e.target.value)}
+                          className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)] outline-none focus:border-[var(--accent)]"
+                        />
+                      </label>
+                      <label className="text-sm">
+                        <span className="mb-1 block font-medium text-[var(--ink-mut)]">CNAE</span>
+                        <input
+                          value={nfseForm.cnae}
+                          onChange={(e) => atualizarCampoNfse('cnae', e.target.value)}
+                          className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)] outline-none focus:border-[var(--accent)]"
+                        />
+                      </label>
+                      <label className="text-sm">
+                        <span className="mb-1 block font-medium text-[var(--ink-mut)]">Cod. tributacao municipal</span>
+                        <input
+                          value={nfseForm.codigoTributacaoMunicipio}
+                          onChange={(e) => atualizarCampoNfse('codigoTributacaoMunicipio', e.target.value)}
+                          className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)] outline-none focus:border-[var(--accent)]"
+                        />
+                      </label>
+                      <label className="text-sm">
+                        <span className="mb-1 block font-medium text-[var(--ink-mut)]">Regime tributario</span>
+                        <select
+                          value={nfseForm.regimeTributario}
+                          onChange={(e) => atualizarCampoNfse('regimeTributario', e.target.value)}
+                          className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)] outline-none focus:border-[var(--accent)]"
+                        >
+                          <option value="">Selecionar</option>
+                          <option value="simples-nacional">Simples Nacional</option>
+                          <option value="lucro-presumido">Lucro Presumido</option>
+                          <option value="lucro-real">Lucro Real</option>
+                          <option value="mei">MEI</option>
+                          <option value="outro">Outro</option>
+                        </select>
+                      </label>
+                      <label className="text-sm">
+                        <span className="mb-1 block font-medium text-[var(--ink-mut)]">Exigibilidade ISS</span>
+                        <select
+                          value={nfseForm.exigibilidadeIss}
+                          onChange={(e) => atualizarCampoNfse('exigibilidadeIss', e.target.value)}
+                          className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)] outline-none focus:border-[var(--accent)]"
+                        >
+                          <option value="">Selecionar</option>
+                          <option value="exigivel">Exigivel</option>
+                          <option value="nao-incidencia">Nao incidencia</option>
+                          <option value="isencao">Isencao</option>
+                          <option value="exportacao">Exportacao</option>
+                          <option value="imunidade">Imunidade</option>
+                          <option value="suspenso-decisao-judicial">Suspenso por decisao judicial</option>
+                          <option value="suspenso-processo-administrativo">Suspenso por processo administrativo</option>
+                        </select>
+                      </label>
+                      <label className="text-sm">
+                        <span className="mb-1 block font-medium text-[var(--ink-mut)]">Natureza operacao</span>
+                        <input
+                          value={nfseForm.naturezaOperacao}
+                          onChange={(e) => atualizarCampoNfse('naturezaOperacao', e.target.value)}
+                          className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)] outline-none focus:border-[var(--accent)]"
+                        />
+                      </label>
+                      <label className="text-sm">
+                        <span className="mb-1 block font-medium text-[var(--ink-mut)]">Local da prestacao</span>
+                        <input
+                          value={nfseForm.localPrestacao}
+                          onChange={(e) => atualizarCampoNfse('localPrestacao', e.target.value)}
+                          className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)] outline-none focus:border-[var(--accent)]"
+                        />
+                      </label>
+                      <label className="text-sm">
+                        <span className="mb-1 block font-medium text-[var(--ink-mut)]">Aliquota ISS %</span>
+                        <input
+                          type="number"
+                          min="0"
+                          max="100"
+                          step="0.01"
+                          value={nfseForm.aliquotaIss || ''}
+                          onChange={(e) => atualizarCampoNfse('aliquotaIss', Number(e.target.value))}
+                          className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)] outline-none focus:border-[var(--accent)]"
+                        />
+                      </label>
+                      <label className="flex items-center gap-2 pt-6 text-sm font-medium text-[var(--ink)]">
+                        <input
+                          type="checkbox"
+                          checked={nfseForm.optanteSimples}
+                          onChange={(e) => atualizarCampoNfse('optanteSimples', e.target.checked)}
+                        />
+                        Optante pelo Simples
+                      </label>
+                      <label className="flex items-center gap-2 pt-6 text-sm font-medium text-[var(--ink)]">
+                        <input
+                          type="checkbox"
+                          checked={nfseForm.issRetido}
+                          onChange={(e) => atualizarCampoNfse('issRetido', e.target.checked)}
+                        />
+                        ISS retido pelo tomador
+                      </label>
+                      {nfseForm.issRetido && (
+                        <label className="text-sm md:col-span-2">
+                          <span className="mb-1 block font-medium text-[var(--ink-mut)]">Responsavel retencao ISS</span>
+                          <input
+                            value={nfseForm.responsavelRetencao}
+                            onChange={(e) => atualizarCampoNfse('responsavelRetencao', e.target.value)}
+                            className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)] outline-none focus:border-[var(--accent)]"
+                            placeholder="Tomador, intermediario ou prestador"
+                          />
+                        </label>
+                      )}
+                    </div>
+                    <label className="mt-3 block text-sm">
+                      <span className="mb-1 block font-medium text-[var(--ink-mut)]">Descricao do servico</span>
+                      <textarea
+                        value={nfseForm.descricao}
+                        onChange={(e) => atualizarCampoNfse('descricao', e.target.value)}
+                        rows={4}
+                        className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)] outline-none focus:border-[var(--accent)]"
+                      />
+                    </label>
+                    <div className="mt-4 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-3">
+                      <h4 className="text-xs font-bold uppercase text-[var(--ink-mut)]">Base, descontos e retencoes</h4>
+                      <div className="mt-3 grid gap-3 md:grid-cols-3">
+                        <label className="text-sm">
+                          <span className="mb-1 block font-medium text-[var(--ink-mut)]">Deducao base ISS</span>
+                          <input type="number" min="0" step="0.01" value={nfseForm.deducaoBaseCalculo || ''} onChange={(e) => atualizarCampoNfse('deducaoBaseCalculo', Number(e.target.value))} className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)] outline-none focus:border-[var(--accent)]" />
+                        </label>
+                        <label className="text-sm">
+                          <span className="mb-1 block font-medium text-[var(--ink-mut)]">Desc. incondicional</span>
+                          <input type="number" min="0" step="0.01" value={nfseForm.descontoIncondicionado || ''} onChange={(e) => atualizarCampoNfse('descontoIncondicionado', Number(e.target.value))} className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)] outline-none focus:border-[var(--accent)]" />
+                        </label>
+                        <label className="text-sm">
+                          <span className="mb-1 block font-medium text-[var(--ink-mut)]">Desc. condicionado</span>
+                          <input type="number" min="0" step="0.01" value={nfseForm.descontoCondicionado || ''} onChange={(e) => atualizarCampoNfse('descontoCondicionado', Number(e.target.value))} className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)] outline-none focus:border-[var(--accent)]" />
+                        </label>
+                        <label className="text-sm">
+                          <span className="mb-1 block font-medium text-[var(--ink-mut)]">PIS nao retido</span>
+                          <input type="number" min="0" step="0.01" value={nfseForm.pisNaoRetido || ''} onChange={(e) => atualizarCampoNfse('pisNaoRetido', Number(e.target.value))} className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)] outline-none focus:border-[var(--accent)]" />
+                        </label>
+                        <label className="text-sm">
+                          <span className="mb-1 block font-medium text-[var(--ink-mut)]">COFINS nao retido</span>
+                          <input type="number" min="0" step="0.01" value={nfseForm.cofinsNaoRetido || ''} onChange={(e) => atualizarCampoNfse('cofinsNaoRetido', Number(e.target.value))} className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)] outline-none focus:border-[var(--accent)]" />
+                        </label>
+                        <label className="text-sm">
+                          <span className="mb-1 block font-medium text-[var(--ink-mut)]">Outras retencoes</span>
+                          <input type="number" min="0" step="0.01" value={nfseForm.outrasRetencoes || ''} onChange={(e) => atualizarCampoNfse('outrasRetencoes', Number(e.target.value))} className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)] outline-none focus:border-[var(--accent)]" />
+                        </label>
+                      </div>
+                    </div>
+
+                    <div className="mt-4 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-3">
+                      <h4 className="text-xs font-bold uppercase text-[var(--ink-mut)]">Retencoes federais</h4>
+                      <div className="mt-3 grid gap-3 md:grid-cols-3">
+                        <label className="text-sm">
+                          <span className="mb-1 block font-medium text-[var(--ink-mut)]">PIS retido</span>
+                          <input type="number" min="0" step="0.01" value={nfseForm.pisRetido || ''} onChange={(e) => atualizarCampoNfse('pisRetido', Number(e.target.value))} className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)] outline-none focus:border-[var(--accent)]" />
+                        </label>
+                        <label className="text-sm">
+                          <span className="mb-1 block font-medium text-[var(--ink-mut)]">COFINS retido</span>
+                          <input type="number" min="0" step="0.01" value={nfseForm.cofinsRetido || ''} onChange={(e) => atualizarCampoNfse('cofinsRetido', Number(e.target.value))} className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)] outline-none focus:border-[var(--accent)]" />
+                        </label>
+                        <label className="text-sm">
+                          <span className="mb-1 block font-medium text-[var(--ink-mut)]">CSLL retido</span>
+                          <input type="number" min="0" step="0.01" value={nfseForm.csllRetido || ''} onChange={(e) => atualizarCampoNfse('csllRetido', Number(e.target.value))} className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)] outline-none focus:border-[var(--accent)]" />
+                        </label>
+                        <label className="text-sm">
+                          <span className="mb-1 block font-medium text-[var(--ink-mut)]">CSRF agregado</span>
+                          <input type="number" min="0" step="0.01" value={nfseForm.csrfRetido || ''} onChange={(e) => atualizarCampoNfse('csrfRetido', Number(e.target.value))} className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)] outline-none focus:border-[var(--accent)]" />
+                        </label>
+                        <label className="text-sm">
+                          <span className="mb-1 block font-medium text-[var(--ink-mut)]">IRRF</span>
+                          <input type="number" min="0" step="0.01" value={nfseForm.irrfRetido || ''} onChange={(e) => atualizarCampoNfse('irrfRetido', Number(e.target.value))} className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)] outline-none focus:border-[var(--accent)]" />
+                        </label>
+                        <label className="text-sm">
+                          <span className="mb-1 block font-medium text-[var(--ink-mut)]">INSS</span>
+                          <input type="number" min="0" step="0.01" value={nfseForm.inssRetido || ''} onChange={(e) => atualizarCampoNfse('inssRetido', Number(e.target.value))} className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)] outline-none focus:border-[var(--accent)]" />
+                        </label>
+                      </div>
+                    </div>
+
+                    <div className="mt-4 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-3">
+                      <h4 className="text-xs font-bold uppercase text-[var(--ink-mut)]">IBS / CBS</h4>
+                      <div className="mt-3 grid gap-3 md:grid-cols-3">
+                        <label className="text-sm">
+                          <span className="mb-1 block font-medium text-[var(--ink-mut)]">Base IBS/CBS</span>
+                          <input type="number" min="0" step="0.01" value={nfseForm.baseCalculoIbsCbs || ''} onChange={(e) => atualizarCampoNfse('baseCalculoIbsCbs', Number(e.target.value))} className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)] outline-none focus:border-[var(--accent)]" />
+                        </label>
+                        <label className="text-sm">
+                          <span className="mb-1 block font-medium text-[var(--ink-mut)]">Aliquota IBS %</span>
+                          <input type="number" min="0" max="100" step="0.0001" value={nfseForm.aliquotaIbs || ''} onChange={(e) => atualizarCampoNfse('aliquotaIbs', Number(e.target.value))} className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)] outline-none focus:border-[var(--accent)]" />
+                        </label>
+                        <label className="text-sm">
+                          <span className="mb-1 block font-medium text-[var(--ink-mut)]">Valor IBS</span>
+                          <input type="number" min="0" step="0.01" value={nfseForm.valorIbs || ''} onChange={(e) => atualizarCampoNfse('valorIbs', Number(e.target.value))} className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)] outline-none focus:border-[var(--accent)]" />
+                        </label>
+                        <label className="text-sm">
+                          <span className="mb-1 block font-medium text-[var(--ink-mut)]">Aliquota CBS %</span>
+                          <input type="number" min="0" max="100" step="0.0001" value={nfseForm.aliquotaCbs || ''} onChange={(e) => atualizarCampoNfse('aliquotaCbs', Number(e.target.value))} className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)] outline-none focus:border-[var(--accent)]" />
+                        </label>
+                        <label className="text-sm">
+                          <span className="mb-1 block font-medium text-[var(--ink-mut)]">Valor CBS</span>
+                          <input type="number" min="0" step="0.01" value={nfseForm.valorCbs || ''} onChange={(e) => atualizarCampoNfse('valorCbs', Number(e.target.value))} className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)] outline-none focus:border-[var(--accent)]" />
+                        </label>
+                      </div>
+                    </div>
+
+                    <label className="mt-3 block text-sm">
+                      <span className="mb-1 block font-medium text-[var(--ink-mut)]">Observacao interna</span>
+                      <textarea
+                        value={nfseForm.observacao}
+                        onChange={(e) => atualizarCampoNfse('observacao', e.target.value)}
+                        rows={2}
+                        className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)] outline-none focus:border-[var(--accent)]"
+                      />
+                    </label>
+                  </div>
+
+                  <div className="border-t border-[var(--border)] pt-4">
+                    <button
+                      type="submit"
+                      disabled={nfseProcessando || !cnpjNfseAutorizado}
+                      className="rounded-lg bg-[var(--accent)] px-4 py-2 text-sm font-bold text-white hover:brightness-110 disabled:opacity-50"
+                    >
+                      {nfseProcessando ? 'Validando...' : 'Pre-validar NFS-e'}
+                    </button>
+
+                    <div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-3 text-red-900">
+                      <label className="flex items-start gap-2 text-sm font-medium">
+                        <input
+                          type="checkbox"
+                          checked={nfseAutoriza}
+                          onChange={(e) => setNfseAutoriza(e.target.checked)}
+                          className="mt-1"
+                        />
+                        <span>Autorizo emitir somente esta NFS-e para o CNPJ {formatarCnpj(NFSE_CNPJ_AUTORIZADO_DASHBOARD)}.</span>
+                      </label>
+                      <label className="mt-3 block text-xs font-bold uppercase tracking-wide">
+                        Digite EMITIR para confirmar
+                      </label>
+                      <input
+                        value={nfseConfirmacao}
+                        onChange={(e) => setNfseConfirmacao(e.target.value)}
+                        className="mt-1 w-full rounded-lg border border-red-200 bg-white px-3 py-2 text-sm font-bold uppercase text-red-900 outline-none focus:border-red-400"
+                        placeholder="EMITIR"
+                      />
+                      <button
+                        type="button"
+                        onClick={handleEmitirNfse}
+                        disabled={!nfseAutoriza || nfseConfirmacao.trim().toUpperCase() !== 'EMITIR' || nfseProcessando || !cnpjNfseAutorizado}
+                        className="mt-3 rounded-lg bg-red-600 px-4 py-2 text-sm font-bold text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        Emitir NFS-e
+                      </button>
+                    </div>
+                  </div>
+                </form>
+              </div>
+            </div>
+          </section>
         )}
 
         {secaoAtual === 'ie-fornecedor' && <FornecedorIeConsulta />}

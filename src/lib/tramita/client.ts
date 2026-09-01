@@ -46,6 +46,27 @@ function textoErro(data: unknown, fallback: string): string {
   );
 }
 
+function respostaContemChaveNfe(data: unknown, chave: string): boolean {
+  const chaveNormalizada = chave.replace(/\D/g, '');
+  if (!chaveNormalizada) return false;
+
+  if (typeof data === 'string') {
+    return data.replace(/\D/g, '').includes(chaveNormalizada);
+  }
+
+  if (Array.isArray(data)) {
+    return data.some((item) => respostaContemChaveNfe(item, chaveNormalizada));
+  }
+
+  if (data && typeof data === 'object') {
+    return Object.values(data as Record<string, unknown>).some((valor) =>
+      respostaContemChaveNfe(valor, chaveNormalizada),
+    );
+  }
+
+  return false;
+}
+
 async function tramitaRequest<T>(
   path: string,
   init: RequestInit = {},
@@ -97,6 +118,15 @@ export async function consultarProcessoTramitaPorChave(
   );
 
   if (res.ok) {
+    if (!respostaContemChaveNfe(res.data, chave)) {
+      return {
+        ok: false,
+        status: res.status,
+        data: { encontrado: false, raw: res.data, message: 'TRAMITA retornou sucesso sem confirmar a chave consultada.' },
+        message: 'Consulta TRAMITA retornou sucesso, mas sem a chave NF-e consultada.',
+      };
+    }
+
     return {
       ...res,
       data: { encontrado: true, raw: res.data, message: null },
