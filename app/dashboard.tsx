@@ -823,6 +823,8 @@ export default function Dashboard({
   const nfseCnaeStatus: 'ok' | 'erro' | undefined = nfseCnaeDigitos.length === 0 ? undefined : nfseCnaeDigitos.length === 7 ? 'ok' : 'erro';
   const nfseNbsDigitos = somenteDigitos(nfseForm.nbs);
   const nfseNbsStatus: 'ok' | 'erro' | undefined = nfseNbsDigitos.length === 0 ? undefined : nfseNbsDigitos.length === 9 ? 'ok' : 'erro';
+  const nfseBaseIssCalculada = Math.max(0, nfseForm.valorServico - nfseForm.deducaoBaseCalculo - nfseForm.descontoIncondicionado);
+  const nfseIssCalculado = Math.round(nfseBaseIssCalculada * (nfseForm.aliquotaIss / 100) * 100) / 100;
   const nfseBasePisCofinsCalculada = nfseForm.baseCalculoPisCofins > 0 ? nfseForm.baseCalculoPisCofins : nfseForm.valorServico;
   const nfsePisCalculado = Math.round(nfseBasePisCofinsCalculada * (nfseForm.aliquotaPis / 100) * 100) / 100;
   const nfseCofinsCalculado = Math.round(nfseBasePisCofinsCalculada * (nfseForm.aliquotaCofins / 100) * 100) / 100;
@@ -2859,10 +2861,9 @@ export default function Dashboard({
                     evento.preventDefault();
                     void handlePreValidarNfse();
                   }}
-                  className="space-y-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4"
+                  className="space-y-5 rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-5 shadow-sm"
                 >
-                  <div>
-                    <h3 className="text-sm font-bold text-[var(--ink)]">Tomador</h3>
+                  <BlocoNfse numero="1" titulo="Consumidor" subtitulo="Dados do cliente que vai receber a NFS-e">
                     <div className="mt-3 grid gap-3 md:grid-cols-2">
                       <label className="text-sm">
                         <RotuloFiscal obrigatorio>CPF/CNPJ</RotuloFiscal>
@@ -2925,13 +2926,17 @@ export default function Dashboard({
                         />
                       </label>
                     </div>
-                  </div>
+                  </BlocoNfse>
 
-                  <div className="border-t border-[var(--border)] pt-4">
-                    <h3 className="text-sm font-bold text-[var(--ink)]">Servico</h3>
+                  <BlocoNfse numero="2" titulo="Serviço + Valor" subtitulo="Atividade fiscal, local de incidencia, valores e impostos">
                     <p className="mt-1 text-xs text-[var(--ink-mut)]">
                       Padrao Newshop Bike: cod. municipal 952910401, CNAE 95.29-1-04, item 14.01 e ISS 5%. Use 952910404 para conserto de pneus/camaras.
                     </p>
+                    <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                      <ResumoNfse rotulo="Valor do servico" valor={moeda(nfseForm.valorServico || 0)} />
+                      <ResumoNfse rotulo="ISS estimado" valor={moeda(nfseIssCalculado)} detalhe={`${nfseForm.aliquotaIss || 0}%`} />
+                      <ResumoNfse rotulo="PIS + COFINS" valor={moeda(nfsePisCalculado + nfseCofinsCalculado)} detalhe="0,65% + 3%" />
+                    </div>
                     <div className="mt-3 grid gap-3 md:grid-cols-2">
                       <label className="text-sm">
                         <RotuloFiscal obrigatorio>Competencia</RotuloFiscal>
@@ -3311,9 +3316,9 @@ export default function Dashboard({
                         className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)] outline-none focus:border-[var(--accent)]"
                       />
                     </label>
-                  </div>
+                  </BlocoNfse>
 
-                  <div className="border-t border-[var(--border)] pt-4">
+                  <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface-2)] p-4">
                     <button
                       type="submit"
                       disabled={nfseProcessando || !cnpjNfseAutorizado}
@@ -9737,6 +9742,43 @@ function Campo({ rotulo, valor }: { rotulo: string; valor: string }) {
     <div>
       <p className="text-xs text-[var(--ink-mut)]">{rotulo}</p>
       <p className="font-medium text-[var(--ink)] break-words">{valor}</p>
+    </div>
+  );
+}
+
+function BlocoNfse({
+  numero,
+  titulo,
+  subtitulo,
+  children,
+}: {
+  numero: string;
+  titulo: string;
+  subtitulo: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="rounded-2xl border border-[var(--border)] bg-[var(--surface-2)] p-4 shadow-sm">
+      <div className="mb-4 flex items-start gap-3 border-b border-[var(--border)] pb-3">
+        <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-[var(--accent)] text-sm font-black text-[var(--accent-ink)]">
+          {numero}
+        </span>
+        <div>
+          <h3 className="text-sm font-black uppercase text-[var(--ink)]">{titulo}</h3>
+          <p className="mt-0.5 text-xs text-[var(--ink-mut)]">{subtitulo}</p>
+        </div>
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function ResumoNfse({ rotulo, valor, detalhe }: { rotulo: string; valor: string; detalhe?: string }) {
+  return (
+    <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2">
+      <p className="text-[11px] font-semibold uppercase text-[var(--ink-mut)]">{rotulo}</p>
+      <p className="mt-1 text-base font-black text-[var(--ink)]">{valor}</p>
+      {detalhe && <p className="text-[11px] text-[var(--ink-mut)]">{detalhe}</p>}
     </div>
   );
 }
