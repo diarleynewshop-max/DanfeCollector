@@ -364,6 +364,24 @@ function formatarCnpj(cnpj: string | null): string {
   if (!cnpj) return '—';
   return cnpj.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, '$1.$2.$3/$4-$5');
 }
+function somenteDigitos(valor: string | null | undefined): string {
+  return String(valor ?? '').replace(/\D/g, '');
+}
+
+function formatarCpfCnpj(valor: string | null | undefined): string {
+  const digitos = somenteDigitos(valor);
+  if (digitos.length === 11) return digitos.replace(/^(\d{3})(\d{3})(\d{3})(\d{2})$/, '$1.$2.$3-$4');
+  if (digitos.length === 14) return formatarCnpj(digitos);
+  return digitos || '-';
+}
+
+function classeCampoFiscal(status?: 'ok' | 'erro'): string {
+  const base = 'w-full rounded-lg border bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)] outline-none focus:border-[var(--accent)]';
+  if (status === 'ok') return `${base} border-emerald-400`;
+  if (status === 'erro') return `${base} border-red-400`;
+  return `${base} border-[var(--border-strong)]`;
+}
+
 function moeda(v: number | null): string {
   if (v === null || v === undefined) return '—';
   return v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -748,14 +766,14 @@ export default function Dashboard({
     ufIncidencia: 'CE',
     codigoMunicipioIbge: '2304400',
     descricao: '',
-    itemListaServico: '',
+    itemListaServico: '14.01',
     codigoTributacaoMunicipio: '',
-    cnae: '',
-    nbs: '',
+    cnae: '95.29-1-04',
+    nbs: '1.2001.31.20',
     regimeTributario: '',
     optanteSimples: false,
     exigibilidadeIss: '',
-    naturezaOperacao: '',
+    naturezaOperacao: 'Prestacao de servico tributada no municipio',
     localPrestacao: 'Fortaleza/CE',
     valorServico: 0,
     deducaoBaseCalculo: 0,
@@ -784,6 +802,18 @@ export default function Dashboard({
   const [nfseProcessando, setNfseProcessando] = useState(false);
   const [nfseAutoriza, setNfseAutoriza] = useState(false);
   const [nfseConfirmacao, setNfseConfirmacao] = useState('');
+  const nfseDocumentoDigitos = somenteDigitos(nfseForm.tomadorDocumento);
+  const nfseDocumentoStatus: 'ok' | 'erro' | undefined = nfseDocumentoDigitos.length === 0
+    ? undefined
+    : [11, 14].includes(nfseDocumentoDigitos.length)
+      ? 'ok'
+      : 'erro';
+  const nfseIbgeDigitos = somenteDigitos(nfseForm.codigoMunicipioIbge);
+  const nfseIbgeStatus: 'ok' | 'erro' | undefined = nfseIbgeDigitos.length === 0 ? undefined : nfseIbgeDigitos.length === 7 ? 'ok' : 'erro';
+  const nfseCnaeDigitos = somenteDigitos(nfseForm.cnae);
+  const nfseCnaeStatus: 'ok' | 'erro' | undefined = nfseCnaeDigitos.length === 0 ? undefined : nfseCnaeDigitos.length === 7 ? 'ok' : 'erro';
+  const nfseNbsDigitos = somenteDigitos(nfseForm.nbs);
+  const nfseNbsStatus: 'ok' | 'erro' | undefined = nfseNbsDigitos.length === 0 ? undefined : nfseNbsDigitos.length === 9 ? 'ok' : 'erro';
 
   function atualizarCampoNfse<K extends keyof NfseEmissaoInput>(campo: K, valor: NfseEmissaoInput[K]) {
     setNfseForm((atual) => ({ ...atual, [campo]: valor }));
@@ -2749,7 +2779,7 @@ export default function Dashboard({
                 <div>
                   <h2 className="text-lg font-black text-[var(--ink)]">Emissao de NFS-e</h2>
                   <p className="mt-1 text-sm text-[var(--ink-mut)]">
-                    Prestador limitado ao CNPJ {formatarCnpj(NFSE_CNPJ_AUTORIZADO_DASHBOARD)}.
+                    Prestador limitado ao CNPJ {formatarCnpj(NFSE_CNPJ_AUTORIZADO_DASHBOARD)}. Campos com <span className="font-bold text-red-600">*</span> sao obrigatorios.
                   </p>
                 </div>
                 <Badge tone={cnpjNfseAutorizado ? 'green' : 'red'}>
@@ -2778,8 +2808,13 @@ export default function Dashboard({
                   {nfsePreview && (
                     <section className="rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-4">
                       <h3 className="mb-3 text-sm font-bold text-[var(--ink)]">Resumo da pre-emissao</h3>
+                      {nfsePreview.avisos.length === 0 && (
+                        <div className="mb-3 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm font-semibold text-emerald-800">
+                          Dados aceitos na pre-validacao. O documento e os codigos fiscais serao enviados sem mascara.
+                        </div>
+                      )}
                       <div className="grid gap-3 text-sm">
-                        <Campo rotulo="Tomador" valor={`${nfsePreview.tomadorNome} - ${nfsePreview.tomadorDocumento || '-'}`} />
+                        <Campo rotulo="Tomador" valor={`${nfsePreview.tomadorNome} - ${formatarCpfCnpj(nfsePreview.tomadorDocumento)}`} />
                         <Campo rotulo="Servico" valor={nfsePreview.descricao || '-'} />
                         <Campo rotulo="Valor do servico" valor={moeda(nfsePreview.valorServico)} />
                         <Campo rotulo="Base ISS" valor={moeda(nfsePreview.baseCalculoIss)} />
@@ -2816,16 +2851,22 @@ export default function Dashboard({
                     <h3 className="text-sm font-bold text-[var(--ink)]">Tomador</h3>
                     <div className="mt-3 grid gap-3 md:grid-cols-2">
                       <label className="text-sm">
-                        <span className="mb-1 block font-medium text-[var(--ink-mut)]">CPF/CNPJ</span>
+                        <RotuloFiscal obrigatorio>CPF/CNPJ</RotuloFiscal>
                         <input
                           value={nfseForm.tomadorDocumento}
                           onChange={(e) => atualizarCampoNfse('tomadorDocumento', e.target.value)}
-                          className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)] outline-none focus:border-[var(--accent)]"
-                          placeholder="Somente numeros"
+                          className={classeCampoFiscal(nfseDocumentoStatus)}
+                          inputMode="numeric"
+                          placeholder="000.000.000-00 ou 00.000.000/0000-00"
                         />
+                        <AjudaFiscal tone={nfseDocumentoStatus}>
+                          {nfseDocumentoDigitos
+                            ? `${nfseDocumentoDigitos.length} digitos lidos. Envio: ${nfseDocumentoDigitos}. O Pre-validar confere o documento.`
+                            : 'Pode digitar com ponto, barra e hifen ou somente numeros.'}
+                        </AjudaFiscal>
                       </label>
                       <label className="text-sm">
-                        <span className="mb-1 block font-medium text-[var(--ink-mut)]">Nome / razao social</span>
+                        <RotuloFiscal obrigatorio>Nome / razao social</RotuloFiscal>
                         <input
                           value={nfseForm.tomadorNome}
                           onChange={(e) => atualizarCampoNfse('tomadorNome', e.target.value)}
@@ -2874,9 +2915,12 @@ export default function Dashboard({
 
                   <div className="border-t border-[var(--border)] pt-4">
                     <h3 className="text-sm font-bold text-[var(--ink)]">Servico</h3>
+                    <p className="mt-1 text-xs text-[var(--ink-mut)]">
+                      Padrao Newshop Bike: CNAE 95.29-1-04, item LC 116 14.01 e NBS 1.2001.31.20. Confirme o codigo municipal no portal/contador.
+                    </p>
                     <div className="mt-3 grid gap-3 md:grid-cols-2">
                       <label className="text-sm">
-                        <span className="mb-1 block font-medium text-[var(--ink-mut)]">Competencia</span>
+                        <RotuloFiscal obrigatorio>Competencia</RotuloFiscal>
                         <input
                           type="date"
                           value={nfseForm.competencia}
@@ -2886,7 +2930,7 @@ export default function Dashboard({
                       </label>
                       <div className="grid grid-cols-[1fr_80px] gap-2">
                         <label className="text-sm">
-                          <span className="mb-1 block font-medium text-[var(--ink-mut)]">Municipio incidencia ISS</span>
+                          <RotuloFiscal obrigatorio>Municipio incidencia ISS</RotuloFiscal>
                           <input
                             value={nfseForm.municipioIncidencia}
                             onChange={(e) => atualizarCampoNfse('municipioIncidencia', e.target.value)}
@@ -2894,7 +2938,7 @@ export default function Dashboard({
                           />
                         </label>
                         <label className="text-sm">
-                          <span className="mb-1 block font-medium text-[var(--ink-mut)]">UF</span>
+                          <RotuloFiscal obrigatorio>UF</RotuloFiscal>
                           <input
                             value={nfseForm.ufIncidencia}
                             maxLength={2}
@@ -2904,16 +2948,20 @@ export default function Dashboard({
                         </label>
                       </div>
                       <label className="text-sm">
-                        <span className="mb-1 block font-medium text-[var(--ink-mut)]">Codigo IBGE municipio</span>
+                        <RotuloFiscal obrigatorio>Codigo IBGE municipio</RotuloFiscal>
                         <input
                           value={nfseForm.codigoMunicipioIbge}
                           onChange={(e) => atualizarCampoNfse('codigoMunicipioIbge', e.target.value)}
-                          className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)] outline-none focus:border-[var(--accent)]"
+                          className={classeCampoFiscal(nfseIbgeStatus)}
+                          inputMode="numeric"
                           placeholder="Fortaleza: 2304400"
                         />
+                        <AjudaFiscal tone={nfseIbgeStatus}>
+                          {nfseIbgeDigitos ? `Envio: ${nfseIbgeDigitos}. Precisa ter 7 digitos.` : 'Fortaleza/CE: 2304400.'}
+                        </AjudaFiscal>
                       </label>
                       <label className="text-sm">
-                        <span className="mb-1 block font-medium text-[var(--ink-mut)]">Valor</span>
+                        <RotuloFiscal obrigatorio>Valor</RotuloFiscal>
                         <input
                           type="number"
                           min="0"
@@ -2924,7 +2972,7 @@ export default function Dashboard({
                         />
                       </label>
                       <label className="text-sm">
-                        <span className="mb-1 block font-medium text-[var(--ink-mut)]">Item da lista</span>
+                        <RotuloFiscal obrigatorio>Item da lista</RotuloFiscal>
                         <input
                           value={nfseForm.itemListaServico}
                           onChange={(e) => atualizarCampoNfse('itemListaServico', e.target.value)}
@@ -2933,37 +2981,49 @@ export default function Dashboard({
                         />
                       </label>
                       <label className="text-sm">
-                        <span className="mb-1 block font-medium text-[var(--ink-mut)]">NBS</span>
+                        <RotuloFiscal obrigatorio>NBS</RotuloFiscal>
                         <input
                           value={nfseForm.nbs}
                           onChange={(e) => atualizarCampoNfse('nbs', e.target.value)}
-                          className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)] outline-none focus:border-[var(--accent)]"
+                          className={classeCampoFiscal(nfseNbsStatus)}
+                          inputMode="numeric"
+                          placeholder="Ex: 1.0101.00.00"
                         />
+                        <AjudaFiscal tone={nfseNbsStatus}>
+                          {nfseNbsDigitos ? `Envio: ${nfseNbsDigitos}. Precisa ter 9 digitos.` : 'Informe quando aplicavel ao servico.'}
+                        </AjudaFiscal>
                       </label>
                       <label className="text-sm">
-                        <span className="mb-1 block font-medium text-[var(--ink-mut)]">CNAE</span>
+                        <RotuloFiscal obrigatorio>CNAE</RotuloFiscal>
                         <input
                           value={nfseForm.cnae}
                           onChange={(e) => atualizarCampoNfse('cnae', e.target.value)}
-                          className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)] outline-none focus:border-[var(--accent)]"
+                          className={classeCampoFiscal(nfseCnaeStatus)}
+                          inputMode="numeric"
+                          placeholder="Ex: 45.20-0-01 ou 4520001"
                         />
+                        <AjudaFiscal tone={nfseCnaeStatus}>
+                          {nfseCnaeDigitos ? `Envio: ${nfseCnaeDigitos}. Precisa ter 7 digitos.` : 'Use o CNAE da atividade do servico.'}
+                        </AjudaFiscal>
                       </label>
                       <label className="text-sm">
-                        <span className="mb-1 block font-medium text-[var(--ink-mut)]">Cod. tributacao municipal</span>
+                        <RotuloFiscal obrigatorio>Cod. tributacao municipal</RotuloFiscal>
                         <input
                           value={nfseForm.codigoTributacaoMunicipio}
                           onChange={(e) => atualizarCampoNfse('codigoTributacaoMunicipio', e.target.value)}
                           className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)] outline-none focus:border-[var(--accent)]"
+                          placeholder="Codigo da atividade no ISS Fortaleza"
                         />
+                        <AjudaFiscal>Deixe em aberto ate confirmar no portal ISS Fortaleza ou com o contador.</AjudaFiscal>
                       </label>
                       <label className="text-sm">
-                        <span className="mb-1 block font-medium text-[var(--ink-mut)]">Regime tributario</span>
+                        <RotuloFiscal obrigatorio>Regime tributario</RotuloFiscal>
                         <select
                           value={nfseForm.regimeTributario}
                           onChange={(e) => atualizarCampoNfse('regimeTributario', e.target.value)}
                           className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)] outline-none focus:border-[var(--accent)]"
                         >
-                          <option value="">Selecionar</option>
+                          <option value="">Selecionar com contador</option>
                           <option value="simples-nacional">Simples Nacional</option>
                           <option value="lucro-presumido">Lucro Presumido</option>
                           <option value="lucro-real">Lucro Real</option>
@@ -2972,13 +3032,13 @@ export default function Dashboard({
                         </select>
                       </label>
                       <label className="text-sm">
-                        <span className="mb-1 block font-medium text-[var(--ink-mut)]">Exigibilidade ISS</span>
+                        <RotuloFiscal obrigatorio>Exigibilidade ISS</RotuloFiscal>
                         <select
                           value={nfseForm.exigibilidadeIss}
                           onChange={(e) => atualizarCampoNfse('exigibilidadeIss', e.target.value)}
                           className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)] outline-none focus:border-[var(--accent)]"
                         >
-                          <option value="">Selecionar</option>
+                          <option value="">Selecionar conforme servico</option>
                           <option value="exigivel">Exigivel</option>
                           <option value="nao-incidencia">Nao incidencia</option>
                           <option value="isencao">Isencao</option>
@@ -2989,15 +3049,16 @@ export default function Dashboard({
                         </select>
                       </label>
                       <label className="text-sm">
-                        <span className="mb-1 block font-medium text-[var(--ink-mut)]">Natureza operacao</span>
+                        <RotuloFiscal obrigatorio>Natureza operacao</RotuloFiscal>
                         <input
                           value={nfseForm.naturezaOperacao}
                           onChange={(e) => atualizarCampoNfse('naturezaOperacao', e.target.value)}
                           className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)] outline-none focus:border-[var(--accent)]"
+                          placeholder="Ex: Prestacao de servico tributada no municipio"
                         />
                       </label>
                       <label className="text-sm">
-                        <span className="mb-1 block font-medium text-[var(--ink-mut)]">Local da prestacao</span>
+                        <RotuloFiscal obrigatorio>Local da prestacao</RotuloFiscal>
                         <input
                           value={nfseForm.localPrestacao}
                           onChange={(e) => atualizarCampoNfse('localPrestacao', e.target.value)}
@@ -3005,7 +3066,7 @@ export default function Dashboard({
                         />
                       </label>
                       <label className="text-sm">
-                        <span className="mb-1 block font-medium text-[var(--ink-mut)]">Aliquota ISS %</span>
+                        <RotuloFiscal obrigatorio>Aliquota ISS %</RotuloFiscal>
                         <input
                           type="number"
                           min="0"
@@ -3034,7 +3095,7 @@ export default function Dashboard({
                       </label>
                       {nfseForm.issRetido && (
                         <label className="text-sm md:col-span-2">
-                          <span className="mb-1 block font-medium text-[var(--ink-mut)]">Responsavel retencao ISS</span>
+                          <RotuloFiscal obrigatorio>Responsavel retencao ISS</RotuloFiscal>
                           <input
                             value={nfseForm.responsavelRetencao}
                             onChange={(e) => atualizarCampoNfse('responsavelRetencao', e.target.value)}
@@ -3045,7 +3106,7 @@ export default function Dashboard({
                       )}
                     </div>
                     <label className="mt-3 block text-sm">
-                      <span className="mb-1 block font-medium text-[var(--ink-mut)]">Descricao do servico</span>
+                      <RotuloFiscal obrigatorio>Descricao do servico</RotuloFiscal>
                       <textarea
                         value={nfseForm.descricao}
                         onChange={(e) => atualizarCampoNfse('descricao', e.target.value)}
@@ -3117,8 +3178,9 @@ export default function Dashboard({
                       <h4 className="text-xs font-bold uppercase text-[var(--ink-mut)]">IBS / CBS</h4>
                       <div className="mt-3 grid gap-3 md:grid-cols-3">
                         <label className="text-sm">
-                          <span className="mb-1 block font-medium text-[var(--ink-mut)]">Base IBS/CBS</span>
+                          <RotuloFiscal obrigatorio>Base IBS/CBS</RotuloFiscal>
                           <input type="number" min="0" step="0.01" value={nfseForm.baseCalculoIbsCbs || ''} onChange={(e) => atualizarCampoNfse('baseCalculoIbsCbs', Number(e.target.value))} className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)] outline-none focus:border-[var(--accent)]" />
+                          <AjudaFiscal>Se for zero por regra, escreva a justificativa na observacao com IBS/CBS.</AjudaFiscal>
                         </label>
                         <label className="text-sm">
                           <span className="mb-1 block font-medium text-[var(--ink-mut)]">Aliquota IBS %</span>
@@ -9576,4 +9638,18 @@ function Campo({ rotulo, valor }: { rotulo: string; valor: string }) {
       <p className="font-medium text-[var(--ink)] break-words">{valor}</p>
     </div>
   );
+}
+
+function RotuloFiscal({ children, obrigatorio = false }: { children: React.ReactNode; obrigatorio?: boolean }) {
+  return (
+    <span className="mb-1 block font-medium text-[var(--ink-mut)]">
+      {children}
+      {obrigatorio && <span className="ml-1 text-red-600">*</span>}
+    </span>
+  );
+}
+
+function AjudaFiscal({ children, tone = 'muted' }: { children: React.ReactNode; tone?: 'muted' | 'ok' | 'erro' }) {
+  const cor = tone === 'ok' ? 'text-emerald-700' : tone === 'erro' ? 'text-red-700' : 'text-[var(--ink-mut)]';
+  return <p className={`mt-1 text-[11px] leading-snug ${cor}`}>{children}</p>;
 }

@@ -83,6 +83,8 @@ import {
 export type { ConsultaStatusRecebimento } from './nfStatusIntegration';
 import {
   NFSE_CNPJ_AUTORIZADO,
+  limparCodigoFiscal,
+  limparCpfCnpj,
   montarPreviewNfse,
   type NfseEmissaoInput,
   type NfsePreview,
@@ -444,7 +446,7 @@ function normalizarInputNfse(input: NfseEmissaoInput): NfseEmissaoInput {
   const numero = (valor: unknown) => Number(valor) || 0;
   return {
     prestadorCnpj: limparCnpj(input.prestadorCnpj ?? ''),
-    tomadorDocumento: String(input.tomadorDocumento ?? ''),
+    tomadorDocumento: limparCpfCnpj(String(input.tomadorDocumento ?? '')),
     tomadorNome: String(input.tomadorNome ?? ''),
     tomadorEmail: String(input.tomadorEmail ?? ''),
     tomadorMunicipio: String(input.tomadorMunicipio ?? ''),
@@ -453,12 +455,12 @@ function normalizarInputNfse(input: NfseEmissaoInput): NfseEmissaoInput {
     competencia: String(input.competencia ?? ''),
     municipioIncidencia: String(input.municipioIncidencia ?? ''),
     ufIncidencia: String(input.ufIncidencia ?? '').toUpperCase().slice(0, 2),
-    codigoMunicipioIbge: String(input.codigoMunicipioIbge ?? ''),
+    codigoMunicipioIbge: limparCodigoFiscal(String(input.codigoMunicipioIbge ?? '')),
     descricao: String(input.descricao ?? ''),
     itemListaServico: String(input.itemListaServico ?? ''),
     codigoTributacaoMunicipio: String(input.codigoTributacaoMunicipio ?? ''),
-    cnae: String(input.cnae ?? ''),
-    nbs: String(input.nbs ?? ''),
+    cnae: limparCodigoFiscal(String(input.cnae ?? '')),
+    nbs: limparCodigoFiscal(String(input.nbs ?? '')),
     regimeTributario: String(input.regimeTributario ?? ''),
     optanteSimples: !!input.optanteSimples,
     exigibilidadeIss: String(input.exigibilidadeIss ?? ''),

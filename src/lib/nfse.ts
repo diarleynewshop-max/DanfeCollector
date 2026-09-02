@@ -88,6 +88,52 @@ export function limparCpfCnpj(valor: string): string {
   return valor.replace(/\D/g, '');
 }
 
+export function limparCodigoFiscal(valor: string): string {
+  return valor.replace(/\D/g, '');
+}
+
+function todosDigitosIguais(valor: string): boolean {
+  return /^(\d)\1+$/.test(valor);
+}
+
+function validarCpf(cpf: string): boolean {
+  if (!/^\d{11}$/.test(cpf) || todosDigitosIguais(cpf)) return false;
+
+  const calcularDigito = (base: string, pesoInicial: number) => {
+    const soma = base
+      .split('')
+      .reduce((total, digito, index) => total + Number(digito) * (pesoInicial - index), 0);
+    const resto = soma % 11;
+    return resto < 2 ? 0 : 11 - resto;
+  };
+
+  const digito1 = calcularDigito(cpf.slice(0, 9), 10);
+  const digito2 = calcularDigito(cpf.slice(0, 10), 11);
+  return cpf[9] === String(digito1) && cpf[10] === String(digito2);
+}
+
+function validarCnpj(cnpj: string): boolean {
+  if (!/^\d{14}$/.test(cnpj) || todosDigitosIguais(cnpj)) return false;
+
+  const calcularDigito = (base: string, pesos: number[]) => {
+    const soma = base
+      .split('')
+      .reduce((total, digito, index) => total + Number(digito) * pesos[index], 0);
+    const resto = soma % 11;
+    return resto < 2 ? 0 : 11 - resto;
+  };
+
+  const digito1 = calcularDigito(cnpj.slice(0, 12), [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]);
+  const digito2 = calcularDigito(cnpj.slice(0, 13), [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]);
+  return cnpj[12] === String(digito1) && cnpj[13] === String(digito2);
+}
+
+function validarCpfOuCnpj(documento: string): boolean {
+  if (documento.length === 11) return validarCpf(documento);
+  if (documento.length === 14) return validarCnpj(documento);
+  return false;
+}
+
 function textoObrigatorio(valor: string | undefined | null): boolean {
   return !!valor?.trim();
 }
@@ -125,6 +171,9 @@ export function montarPreviewNfse(input: NfseEmissaoInput): NfsePreview {
   const avisos: string[] = [];
   const prestadorCnpj = limparCpfCnpj(input.prestadorCnpj);
   const tomadorDocumento = limparCpfCnpj(input.tomadorDocumento);
+  const codigoMunicipioIbge = limparCodigoFiscal(input.codigoMunicipioIbge);
+  const cnae = limparCodigoFiscal(input.cnae);
+  const nbs = limparCodigoFiscal(input.nbs);
   const valorServico = numeroSeguro(input.valorServico);
   const deducaoBaseCalculo = numeroSeguro(input.deducaoBaseCalculo);
   const descontoIncondicionado = numeroSeguro(input.descontoIncondicionado);
@@ -140,20 +189,25 @@ export function montarPreviewNfse(input: NfseEmissaoInput): NfsePreview {
   const pisNaoRetido = numeroSeguro(input.pisNaoRetido);
   const cofinsNaoRetido = numeroSeguro(input.cofinsNaoRetido);
   const baseCalculoIbsCbs = numeroSeguro(input.baseCalculoIbsCbs);
-  const valorIbs = numeroSeguro(input.valorIbs);
-  const valorCbs = numeroSeguro(input.valorCbs);
+  const aliquotaIbs = numeroSeguro(input.aliquotaIbs);
+  const valorIbsInformado = numeroSeguro(input.valorIbs);
+  const aliquotaCbs = numeroSeguro(input.aliquotaCbs);
+  const valorCbsInformado = numeroSeguro(input.valorCbs);
 
   if (prestadorCnpj !== NFSE_CNPJ_AUTORIZADO) {
     avisos.push('Emissao de NFS-e limitada ao CNPJ 45.998.339/0003-29.');
   }
-  if (![11, 14].includes(tomadorDocumento.length)) {
-    avisos.push('Documento do tomador deve ser CPF ou CNPJ valido em quantidade de digitos.');
+  if (!validarCpfOuCnpj(tomadorDocumento)) {
+    avisos.push('Documento do tomador deve ser CPF ou CNPJ valido.');
   }
   if (!textoObrigatorio(input.tomadorNome)) avisos.push('Informe o nome/razao social do tomador.');
   if (!textoObrigatorio(input.competencia)) avisos.push('Informe a competencia do servico.');
   if (!textoObrigatorio(input.municipioIncidencia)) avisos.push('Informe o municipio de incidencia do ISS.');
   if (!textoObrigatorio(input.ufIncidencia)) avisos.push('Informe a UF de incidencia do ISS.');
-  if (!textoObrigatorio(input.codigoMunicipioIbge)) avisos.push('Informe o codigo IBGE do municipio de incidencia.');
+  if (!codigoMunicipioIbge) avisos.push('Informe o codigo IBGE do municipio de incidencia.');
+  if (codigoMunicipioIbge && codigoMunicipioIbge.length !== 7) {
+    avisos.push('Codigo IBGE do municipio deve ter 7 digitos.');
+  }
   if (!textoObrigatorio(input.descricao) || input.descricao.trim().length < 10) {
     avisos.push('Descreva o servico com pelo menos 10 caracteres.');
   }
@@ -161,8 +215,10 @@ export function montarPreviewNfse(input: NfseEmissaoInput): NfsePreview {
   if (!textoObrigatorio(input.codigoTributacaoMunicipio)) {
     avisos.push('Informe o codigo de tributacao municipal.');
   }
-  if (!textoObrigatorio(input.cnae)) avisos.push('Informe o CNAE usado na prestacao.');
-  if (!textoObrigatorio(input.nbs)) avisos.push('Informe a NBS quando aplicavel ao servico.');
+  if (!cnae) avisos.push('Informe o CNAE usado na prestacao.');
+  if (cnae && cnae.length !== 7) avisos.push('CNAE deve ter 7 digitos.');
+  if (!nbs) avisos.push('Informe a NBS quando aplicavel ao servico.');
+  if (nbs && nbs.length !== 9) avisos.push('NBS deve ter 9 digitos quando informado.');
   if (!textoObrigatorio(input.regimeTributario)) avisos.push('Informe o regime tributario da empresa.');
   if (!textoObrigatorio(input.exigibilidadeIss)) avisos.push('Informe a exigibilidade do ISS.');
   if (!textoObrigatorio(input.naturezaOperacao)) avisos.push('Informe a natureza da operacao.');
@@ -174,7 +230,15 @@ export function montarPreviewNfse(input: NfseEmissaoInput): NfsePreview {
   if (!Number.isFinite(aliquotaIss) || aliquotaIss < 0 || aliquotaIss > 100) {
     avisos.push('Aliquota ISS deve ficar entre 0 e 100.');
   }
-  if (baseCalculoIbsCbs <= 0) avisos.push('Informe a base de calculo de IBS/CBS, mesmo que seja zero por regra validada.');
+  if (!Number.isFinite(aliquotaIbs) || aliquotaIbs < 0 || aliquotaIbs > 100) {
+    avisos.push('Aliquota IBS deve ficar entre 0 e 100.');
+  }
+  if (!Number.isFinite(aliquotaCbs) || aliquotaCbs < 0 || aliquotaCbs > 100) {
+    avisos.push('Aliquota CBS deve ficar entre 0 e 100.');
+  }
+  if (baseCalculoIbsCbs <= 0 && !/ibs|cbs/i.test(input.observacao ?? '')) {
+    avisos.push('Informe a base de calculo de IBS/CBS ou justifique zero na observacao.');
+  }
 
   const escritaHabilitada = nfseEscritaHabilitada();
   const provedorConfigurado = nfseProvedorConfigurado();
@@ -187,20 +251,22 @@ export function montarPreviewNfse(input: NfseEmissaoInput): NfsePreview {
     pisRetido + cofinsRetido + csllRetido + irrfRetido + inssRetido + csrfRetido + outrasRetencoes,
   );
   const totalRetencoes = arredondarMoeda((input.issRetido ? valorIss : 0) + retencoesFederais);
+  const valorIbs = valorIbsInformado > 0 ? valorIbsInformado : arredondarMoeda(baseCalculoIbsCbs * (aliquotaIbs / 100));
+  const valorCbs = valorCbsInformado > 0 ? valorCbsInformado : arredondarMoeda(baseCalculoIbsCbs * (aliquotaCbs / 100));
 
   return {
     prestadorCnpj,
     municipio: `${NFSE_MUNICIPIO_AUTORIZADO}/${NFSE_UF_AUTORIZADA}`,
     municipioIncidencia: `${input.municipioIncidencia.trim() || '-'}${input.ufIncidencia ? `/${input.ufIncidencia.trim().toUpperCase()}` : ''}`,
-    codigoMunicipioIbge: input.codigoMunicipioIbge.trim(),
+    codigoMunicipioIbge,
     tomadorDocumento,
     tomadorNome: input.tomadorNome.trim(),
     competencia: input.competencia,
     descricao: input.descricao.trim(),
     itemListaServico: input.itemListaServico.trim(),
     codigoTributacaoMunicipio: input.codigoTributacaoMunicipio.trim(),
-    cnae: input.cnae.trim(),
-    nbs: input.nbs.trim(),
+    cnae,
+    nbs,
     regimeTributario: input.regimeTributario.trim(),
     optanteSimples: input.optanteSimples,
     exigibilidadeIss: input.exigibilidadeIss.trim(),
