@@ -767,21 +767,30 @@ export default function Dashboard({
     codigoMunicipioIbge: '2304400',
     descricao: '',
     itemListaServico: '14.01',
-    codigoTributacaoMunicipio: '',
+    codigoTributacaoMunicipio: '952910401',
     cnae: '95.29-1-04',
     nbs: '1.2001.31.20',
-    regimeTributario: '',
+    regimeTributario: 'lucro-presumido',
     optanteSimples: false,
-    exigibilidadeIss: '',
+    exigibilidadeIss: 'exigivel',
     naturezaOperacao: 'Prestacao de servico tributada no municipio',
     localPrestacao: 'Fortaleza/CE',
+    indicadorOperacao: '050101',
+    cstIss: '000',
+    classificacaoTributariaIbsCbs: '000001',
+    destinatarioServico: 'tomador',
     valorServico: 0,
     deducaoBaseCalculo: 0,
     descontoIncondicionado: 0,
     descontoCondicionado: 0,
-    aliquotaIss: 0,
+    aliquotaIss: 5,
     issRetido: false,
     responsavelRetencao: '',
+    tipoRetencaoPisCofinsCsll: '0',
+    codigoSituacaoTributariaPisCofins: '01',
+    baseCalculoPisCofins: 0,
+    aliquotaPis: 0.65,
+    aliquotaCofins: 3,
     pisNaoRetido: 0,
     cofinsNaoRetido: 0,
     pisRetido: 0,
@@ -814,6 +823,9 @@ export default function Dashboard({
   const nfseCnaeStatus: 'ok' | 'erro' | undefined = nfseCnaeDigitos.length === 0 ? undefined : nfseCnaeDigitos.length === 7 ? 'ok' : 'erro';
   const nfseNbsDigitos = somenteDigitos(nfseForm.nbs);
   const nfseNbsStatus: 'ok' | 'erro' | undefined = nfseNbsDigitos.length === 0 ? undefined : nfseNbsDigitos.length === 9 ? 'ok' : 'erro';
+  const nfseBasePisCofinsCalculada = nfseForm.baseCalculoPisCofins > 0 ? nfseForm.baseCalculoPisCofins : nfseForm.valorServico;
+  const nfsePisCalculado = Math.round(nfseBasePisCofinsCalculada * (nfseForm.aliquotaPis / 100) * 100) / 100;
+  const nfseCofinsCalculado = Math.round(nfseBasePisCofinsCalculada * (nfseForm.aliquotaCofins / 100) * 100) / 100;
 
   function atualizarCampoNfse<K extends keyof NfseEmissaoInput>(campo: K, valor: NfseEmissaoInput[K]) {
     setNfseForm((atual) => ({ ...atual, [campo]: valor }));
@@ -2819,12 +2831,14 @@ export default function Dashboard({
                         <Campo rotulo="Valor do servico" valor={moeda(nfsePreview.valorServico)} />
                         <Campo rotulo="Base ISS" valor={moeda(nfsePreview.baseCalculoIss)} />
                         <Campo rotulo="ISS estimado" valor={`${moeda(nfsePreview.valorIss)} (${nfsePreview.aliquotaIss || 0}%)`} />
+                        <Campo rotulo="PIS / COFINS apuracao propria" valor={`${moeda(nfsePreview.pisNaoRetido)} (${nfsePreview.aliquotaPis || 0}%) / ${moeda(nfsePreview.cofinsNaoRetido)} (${nfsePreview.aliquotaCofins || 0}%)`} />
                         <Campo rotulo="Retencoes federais" valor={moeda(nfsePreview.retencoesFederais)} />
                         <Campo rotulo="IBS / CBS" valor={`${moeda(nfsePreview.valorIbs)} / ${moeda(nfsePreview.valorCbs)}`} />
                         <Campo rotulo="Liquido estimado" valor={moeda(nfsePreview.valorLiquido)} />
                         <Campo rotulo="ISS retido" valor={nfsePreview.issRetido ? 'Sim' : 'Nao'} />
                         <Campo rotulo="Municipio incidencia" valor={nfsePreview.municipioIncidencia} />
                         <Campo rotulo="Regime / NBS" valor={`${nfsePreview.regimeTributario || '-'} / ${nfsePreview.nbs || '-'}`} />
+                        <Campo rotulo="CST / Classificacao" valor={`${nfsePreview.cstIss || '-'} / ${nfsePreview.classificacaoTributariaIbsCbs || '-'}`} />
                       </div>
                       {nfsePreview.avisos.length > 0 && (
                         <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-amber-900">
@@ -2916,7 +2930,7 @@ export default function Dashboard({
                   <div className="border-t border-[var(--border)] pt-4">
                     <h3 className="text-sm font-bold text-[var(--ink)]">Servico</h3>
                     <p className="mt-1 text-xs text-[var(--ink-mut)]">
-                      Padrao Newshop Bike: CNAE 95.29-1-04, item LC 116 14.01 e NBS 1.2001.31.20. Confirme o codigo municipal no portal/contador.
+                      Padrao Newshop Bike: cod. municipal 952910401, CNAE 95.29-1-04, item 14.01 e ISS 5%. Use 952910404 para conserto de pneus/camaras.
                     </p>
                     <div className="mt-3 grid gap-3 md:grid-cols-2">
                       <label className="text-sm">
@@ -3012,9 +3026,9 @@ export default function Dashboard({
                           value={nfseForm.codigoTributacaoMunicipio}
                           onChange={(e) => atualizarCampoNfse('codigoTributacaoMunicipio', e.target.value)}
                           className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)] outline-none focus:border-[var(--accent)]"
-                          placeholder="Codigo da atividade no ISS Fortaleza"
+                          placeholder="Ex: 952910401"
                         />
-                        <AjudaFiscal>Deixe em aberto ate confirmar no portal ISS Fortaleza ou com o contador.</AjudaFiscal>
+                        <AjudaFiscal>Codigo de 9 digitos da tabela CNAE x Lista de Servicos da SEFIN.</AjudaFiscal>
                       </label>
                       <label className="text-sm">
                         <RotuloFiscal obrigatorio>Regime tributario</RotuloFiscal>
@@ -3056,6 +3070,51 @@ export default function Dashboard({
                           className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)] outline-none focus:border-[var(--accent)]"
                           placeholder="Ex: Prestacao de servico tributada no municipio"
                         />
+                      </label>
+                      <label className="text-sm">
+                        <RotuloFiscal obrigatorio>Ind. Operacao</RotuloFiscal>
+                        <select
+                          value={nfseForm.indicadorOperacao}
+                          onChange={(e) => atualizarCampoNfse('indicadorOperacao', e.target.value)}
+                          className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)] outline-none focus:border-[var(--accent)]"
+                        >
+                          <option value="050101">050101 - Estabelecimento do fornecedor como local da prestacao</option>
+                          <option value="050103">050103 - Endereco do destinatario</option>
+                          <option value="050104">050104 - Endereco diverso do fornecedor/destinatario</option>
+                          <option value="050102">050102 - Local diverso do estabelecimento do fornecedor</option>
+                        </select>
+                      </label>
+                      <label className="text-sm">
+                        <RotuloFiscal obrigatorio>CST</RotuloFiscal>
+                        <select
+                          value={nfseForm.cstIss}
+                          onChange={(e) => atualizarCampoNfse('cstIss', e.target.value)}
+                          className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)] outline-none focus:border-[var(--accent)]"
+                        >
+                          <option value="000">000 - Tributacao integral</option>
+                          <option value="410">410 - Imunidade e nao incidencia</option>
+                        </select>
+                      </label>
+                      <label className="text-sm">
+                        <RotuloFiscal obrigatorio>Classificacao Tributaria</RotuloFiscal>
+                        <select
+                          value={nfseForm.classificacaoTributariaIbsCbs}
+                          onChange={(e) => atualizarCampoNfse('classificacaoTributariaIbsCbs', e.target.value)}
+                          className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)] outline-none focus:border-[var(--accent)]"
+                        >
+                          <option value="000001">000001 - Situacoes tributadas integralmente pelo IBS e CBS</option>
+                        </select>
+                      </label>
+                      <label className="text-sm">
+                        <RotuloFiscal obrigatorio>Destinatario</RotuloFiscal>
+                        <select
+                          value={nfseForm.destinatarioServico}
+                          onChange={(e) => atualizarCampoNfse('destinatarioServico', e.target.value)}
+                          className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)] outline-none focus:border-[var(--accent)]"
+                        >
+                          <option value="tomador">Tomador</option>
+                          <option value="intermediario">Intermediario</option>
+                        </select>
                       </label>
                       <label className="text-sm">
                         <RotuloFiscal obrigatorio>Local da prestacao</RotuloFiscal>
@@ -3130,16 +3189,58 @@ export default function Dashboard({
                           <input type="number" min="0" step="0.01" value={nfseForm.descontoCondicionado || ''} onChange={(e) => atualizarCampoNfse('descontoCondicionado', Number(e.target.value))} className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)] outline-none focus:border-[var(--accent)]" />
                         </label>
                         <label className="text-sm">
-                          <span className="mb-1 block font-medium text-[var(--ink-mut)]">PIS nao retido</span>
-                          <input type="number" min="0" step="0.01" value={nfseForm.pisNaoRetido || ''} onChange={(e) => atualizarCampoNfse('pisNaoRetido', Number(e.target.value))} className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)] outline-none focus:border-[var(--accent)]" />
-                        </label>
-                        <label className="text-sm">
-                          <span className="mb-1 block font-medium text-[var(--ink-mut)]">COFINS nao retido</span>
-                          <input type="number" min="0" step="0.01" value={nfseForm.cofinsNaoRetido || ''} onChange={(e) => atualizarCampoNfse('cofinsNaoRetido', Number(e.target.value))} className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)] outline-none focus:border-[var(--accent)]" />
-                        </label>
-                        <label className="text-sm">
                           <span className="mb-1 block font-medium text-[var(--ink-mut)]">Outras retencoes</span>
                           <input type="number" min="0" step="0.01" value={nfseForm.outrasRetencoes || ''} onChange={(e) => atualizarCampoNfse('outrasRetencoes', Number(e.target.value))} className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)] outline-none focus:border-[var(--accent)]" />
+                        </label>
+                      </div>
+                    </div>
+
+                    <div className="mt-4 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-3">
+                      <h4 className="text-xs font-bold uppercase text-[var(--ink-mut)]">PIS / COFINS - Lucro Presumido</h4>
+                      <div className="mt-3 grid gap-3 md:grid-cols-3">
+                        <label className="text-sm md:col-span-2">
+                          <RotuloFiscal obrigatorio>Tipo de Retencao PIS, COFINS e CSLL</RotuloFiscal>
+                          <select
+                            value={nfseForm.tipoRetencaoPisCofinsCsll}
+                            onChange={(e) => atualizarCampoNfse('tipoRetencaoPisCofinsCsll', e.target.value)}
+                            className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)] outline-none focus:border-[var(--accent)]"
+                          >
+                            <option value="0">0 - PIS/COFINS/CSLL Nao Retidos</option>
+                            <option value="1">1 - PIS/COFINS/CSLL Retidos</option>
+                          </select>
+                        </label>
+                        <label className="text-sm">
+                          <RotuloFiscal obrigatorio>CST PIS/COFINS</RotuloFiscal>
+                          <select
+                            value={nfseForm.codigoSituacaoTributariaPisCofins}
+                            onChange={(e) => atualizarCampoNfse('codigoSituacaoTributariaPisCofins', e.target.value)}
+                            className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)] outline-none focus:border-[var(--accent)]"
+                          >
+                            <option value="01">01 - Operacao Tributavel com Aliquota Basica</option>
+                          </select>
+                        </label>
+                        <label className="text-sm">
+                          <RotuloFiscal obrigatorio>Base PIS/COFINS</RotuloFiscal>
+                          <input type="number" min="0" step="0.01" value={nfseForm.baseCalculoPisCofins || ''} onChange={(e) => atualizarCampoNfse('baseCalculoPisCofins', Number(e.target.value))} className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)] outline-none focus:border-[var(--accent)]" />
+                          <AjudaFiscal>Se deixar vazio, usa o valor do servico como base.</AjudaFiscal>
+                        </label>
+                        <label className="text-sm">
+                          <RotuloFiscal obrigatorio>Aliquota PIS %</RotuloFiscal>
+                          <input type="number" min="0" max="100" step="0.01" value={nfseForm.aliquotaPis || ''} onChange={(e) => atualizarCampoNfse('aliquotaPis', Number(e.target.value))} className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)] outline-none focus:border-[var(--accent)]" />
+                        </label>
+                        <label className="text-sm">
+                          <RotuloFiscal obrigatorio>Aliquota COFINS %</RotuloFiscal>
+                          <input type="number" min="0" max="100" step="0.01" value={nfseForm.aliquotaCofins || ''} onChange={(e) => atualizarCampoNfse('aliquotaCofins', Number(e.target.value))} className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)] outline-none focus:border-[var(--accent)]" />
+                        </label>
+                        <label className="text-sm">
+                          <span className="mb-1 block font-medium text-[var(--ink-mut)]">PIS Apuracao Propria</span>
+                          <input type="number" min="0" step="0.01" value={nfseForm.pisNaoRetido || ''} onChange={(e) => atualizarCampoNfse('pisNaoRetido', Number(e.target.value))} className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)] outline-none focus:border-[var(--accent)]" placeholder={String(nfsePisCalculado || '')} />
+                          <AjudaFiscal>Calculado: {moeda(nfsePisCalculado)} sobre {moeda(nfseBasePisCofinsCalculada)}.</AjudaFiscal>
+                        </label>
+                        <label className="text-sm">
+                          <span className="mb-1 block font-medium text-[var(--ink-mut)]">COFINS Apuracao Propria</span>
+                          <input type="number" min="0" step="0.01" value={nfseForm.cofinsNaoRetido || ''} onChange={(e) => atualizarCampoNfse('cofinsNaoRetido', Number(e.target.value))} className="w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--ink)] outline-none focus:border-[var(--accent)]" placeholder={String(nfseCofinsCalculado || '')} />
+                          <AjudaFiscal>Calculado: {moeda(nfseCofinsCalculado)} sobre {moeda(nfseBasePisCofinsCalculada)}.</AjudaFiscal>
                         </label>
                       </div>
                     </div>

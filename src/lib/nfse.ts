@@ -24,6 +24,10 @@ export type NfseEmissaoInput = {
   exigibilidadeIss: string;
   naturezaOperacao: string;
   localPrestacao: string;
+  indicadorOperacao: string;
+  cstIss: string;
+  classificacaoTributariaIbsCbs: string;
+  destinatarioServico: string;
   valorServico: number;
   deducaoBaseCalculo: number;
   descontoIncondicionado: number;
@@ -31,6 +35,11 @@ export type NfseEmissaoInput = {
   aliquotaIss: number;
   issRetido: boolean;
   responsavelRetencao: string;
+  tipoRetencaoPisCofinsCsll: string;
+  codigoSituacaoTributariaPisCofins: string;
+  baseCalculoPisCofins: number;
+  aliquotaPis: number;
+  aliquotaCofins: number;
   pisNaoRetido: number;
   cofinsNaoRetido: number;
   pisRetido: number;
@@ -65,10 +74,19 @@ export type NfsePreview = {
   optanteSimples: boolean;
   exigibilidadeIss: string;
   naturezaOperacao: string;
+  indicadorOperacao: string;
+  cstIss: string;
+  classificacaoTributariaIbsCbs: string;
+  destinatarioServico: string;
   valorServico: number;
   baseCalculoIss: number;
   aliquotaIss: number;
   valorIss: number;
+  tipoRetencaoPisCofinsCsll: string;
+  codigoSituacaoTributariaPisCofins: string;
+  baseCalculoPisCofins: number;
+  aliquotaPis: number;
+  aliquotaCofins: number;
   retencoesFederais: number;
   totalRetencoes: number;
   valorLiquido: number;
@@ -179,6 +197,9 @@ export function montarPreviewNfse(input: NfseEmissaoInput): NfsePreview {
   const descontoIncondicionado = numeroSeguro(input.descontoIncondicionado);
   const descontoCondicionado = numeroSeguro(input.descontoCondicionado);
   const aliquotaIss = numeroSeguro(input.aliquotaIss);
+  const baseCalculoPisCofinsInformada = numeroSeguro(input.baseCalculoPisCofins);
+  const aliquotaPis = numeroSeguro(input.aliquotaPis);
+  const aliquotaCofins = numeroSeguro(input.aliquotaCofins);
   const pisRetido = numeroSeguro(input.pisRetido);
   const cofinsRetido = numeroSeguro(input.cofinsRetido);
   const csllRetido = numeroSeguro(input.csllRetido);
@@ -186,8 +207,8 @@ export function montarPreviewNfse(input: NfseEmissaoInput): NfsePreview {
   const inssRetido = numeroSeguro(input.inssRetido);
   const csrfRetido = numeroSeguro(input.csrfRetido);
   const outrasRetencoes = numeroSeguro(input.outrasRetencoes);
-  const pisNaoRetido = numeroSeguro(input.pisNaoRetido);
-  const cofinsNaoRetido = numeroSeguro(input.cofinsNaoRetido);
+  const pisNaoRetidoInformado = numeroSeguro(input.pisNaoRetido);
+  const cofinsNaoRetidoInformado = numeroSeguro(input.cofinsNaoRetido);
   const baseCalculoIbsCbs = numeroSeguro(input.baseCalculoIbsCbs);
   const aliquotaIbs = numeroSeguro(input.aliquotaIbs);
   const valorIbsInformado = numeroSeguro(input.valorIbs);
@@ -223,12 +244,30 @@ export function montarPreviewNfse(input: NfseEmissaoInput): NfsePreview {
   if (!textoObrigatorio(input.exigibilidadeIss)) avisos.push('Informe a exigibilidade do ISS.');
   if (!textoObrigatorio(input.naturezaOperacao)) avisos.push('Informe a natureza da operacao.');
   if (!textoObrigatorio(input.localPrestacao)) avisos.push('Informe o local da prestacao.');
+  if (!textoObrigatorio(input.indicadorOperacao)) avisos.push('Informe o indicador da operacao.');
+  if (!textoObrigatorio(input.cstIss)) avisos.push('Informe o CST do ISS.');
+  if (!textoObrigatorio(input.classificacaoTributariaIbsCbs)) {
+    avisos.push('Informe a classificacao tributaria do IBS/CBS.');
+  }
+  if (!textoObrigatorio(input.destinatarioServico)) avisos.push('Informe o destinatario do servico.');
+  if (!textoObrigatorio(input.tipoRetencaoPisCofinsCsll)) {
+    avisos.push('Informe o tipo de retencao de PIS/COFINS/CSLL.');
+  }
+  if (!textoObrigatorio(input.codigoSituacaoTributariaPisCofins)) {
+    avisos.push('Informe o codigo de situacao tributaria do PIS/COFINS.');
+  }
   if (input.issRetido && !textoObrigatorio(input.responsavelRetencao)) {
     avisos.push('Informe o responsavel pela retencao do ISS.');
   }
   if (!Number.isFinite(valorServico) || valorServico <= 0) avisos.push('Valor do servico deve ser maior que zero.');
   if (!Number.isFinite(aliquotaIss) || aliquotaIss < 0 || aliquotaIss > 100) {
     avisos.push('Aliquota ISS deve ficar entre 0 e 100.');
+  }
+  if (!Number.isFinite(aliquotaPis) || aliquotaPis < 0 || aliquotaPis > 100) {
+    avisos.push('Aliquota PIS deve ficar entre 0 e 100.');
+  }
+  if (!Number.isFinite(aliquotaCofins) || aliquotaCofins < 0 || aliquotaCofins > 100) {
+    avisos.push('Aliquota COFINS deve ficar entre 0 e 100.');
   }
   if (!Number.isFinite(aliquotaIbs) || aliquotaIbs < 0 || aliquotaIbs > 100) {
     avisos.push('Aliquota IBS deve ficar entre 0 e 100.');
@@ -247,6 +286,13 @@ export function montarPreviewNfse(input: NfseEmissaoInput): NfsePreview {
 
   const baseCalculoIss = Math.max(0, valorServico - deducaoBaseCalculo - descontoIncondicionado);
   const valorIss = arredondarMoeda(baseCalculoIss * (aliquotaIss / 100));
+  const baseCalculoPisCofins = baseCalculoPisCofinsInformada > 0 ? baseCalculoPisCofinsInformada : valorServico;
+  const pisNaoRetido = pisNaoRetidoInformado > 0
+    ? pisNaoRetidoInformado
+    : arredondarMoeda(baseCalculoPisCofins * (aliquotaPis / 100));
+  const cofinsNaoRetido = cofinsNaoRetidoInformado > 0
+    ? cofinsNaoRetidoInformado
+    : arredondarMoeda(baseCalculoPisCofins * (aliquotaCofins / 100));
   const retencoesFederais = arredondarMoeda(
     pisRetido + cofinsRetido + csllRetido + irrfRetido + inssRetido + csrfRetido + outrasRetencoes,
   );
@@ -271,10 +317,19 @@ export function montarPreviewNfse(input: NfseEmissaoInput): NfsePreview {
     optanteSimples: input.optanteSimples,
     exigibilidadeIss: input.exigibilidadeIss.trim(),
     naturezaOperacao: input.naturezaOperacao.trim(),
+    indicadorOperacao: input.indicadorOperacao.trim(),
+    cstIss: input.cstIss.trim(),
+    classificacaoTributariaIbsCbs: input.classificacaoTributariaIbsCbs.trim(),
+    destinatarioServico: input.destinatarioServico.trim(),
     valorServico: arredondarMoeda(valorServico),
     baseCalculoIss: arredondarMoeda(baseCalculoIss),
     aliquotaIss,
     valorIss,
+    tipoRetencaoPisCofinsCsll: input.tipoRetencaoPisCofinsCsll.trim(),
+    codigoSituacaoTributariaPisCofins: input.codigoSituacaoTributariaPisCofins.trim(),
+    baseCalculoPisCofins: arredondarMoeda(baseCalculoPisCofins),
+    aliquotaPis,
+    aliquotaCofins,
     retencoesFederais,
     totalRetencoes,
     valorLiquido: arredondarMoeda(valorServico - totalRetencoes - descontoCondicionado),
