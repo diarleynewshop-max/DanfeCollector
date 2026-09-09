@@ -23,6 +23,27 @@ if (!segredo) {
 
 let executando = false;
 let proximoTimer = null;
+let ciclosExecutados = 0;
+
+async function reconciliarMeuDanfeErp() {
+  try {
+    const scriptPath = path.resolve(__dirname, 'importar_todas_pendentes_meudanfe.js');
+    if (fs.existsSync(scriptPath)) {
+      console.log(`[${new Date().toISOString()}] [MeuDanfe/ERP] Verificando se há notas pendentes no ERP nos últimos 30 dias...`);
+      const { fork } = require('child_process');
+      const child = fork(scriptPath, [], { stdio: 'inherit' });
+      await new Promise((resolve) => {
+        child.on('close', resolve);
+        child.on('error', (err) => {
+          console.error(`[MeuDanfe/ERP] Erro no subprocesso: ${err.message}`);
+          resolve();
+        });
+      });
+    }
+  } catch (err) {
+    console.error(`[MeuDanfe/ERP] Falha na reconciliação: ${err.message}`);
+  }
+}
 
 async function executar() {
   if (executando) {
@@ -56,6 +77,12 @@ async function executar() {
       // Nao encerra o processo: um CNPJ ou uma falha transitoria nao pode
       // desligar a rotina dos demais CNPJs.
       console.error(`[${new Date().toISOString()}] Ciclo NF com alerta HTTP ${resp.status}; proxima tentativa sera mantida.`);
+    }
+
+    ciclosExecutados++;
+    // A cada 2 ciclos (~30 min), roda a reconciliação com MeuDanfe / ERP
+    if (ciclosExecutados % 2 === 1) {
+      await reconciliarMeuDanfeErp();
     }
   } catch (error) {
     console.error(`[${new Date().toISOString()}] Falha no ciclo NF: ${error.message}`);
