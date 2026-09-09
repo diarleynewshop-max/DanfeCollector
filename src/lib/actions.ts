@@ -60,7 +60,7 @@ import {
   type ItemTributadoSitramResumo,
 } from './sitram/espelho';
 import { RAIZ_CNPJ_NEWSHOP } from './notasNewshop';
-import { numeroNotaDaChave, serieNotaDaChave } from './notasIdentificacao';
+import { numeroNotaDaChave, serieNotaDaChave, dadosBasicosDaChave } from './notasIdentificacao';
 import { parseRelacaoPagamentoSitram, chaveCruzamento, extrairDaChave } from './sitram/pagamento';
 import {
   consultarDaePorCodigo,
@@ -961,14 +961,20 @@ async function salvarCteExtraido(cte: CteExtraido, cnpjId: number): Promise<'nov
 
   const existente = await prisma.conhecimentoTransporte.findUnique({
     where: { chave: cte.chave },
-    select: { id: true, status: true },
+    select: { id: true, status: true, situacaoSefaz: true },
   });
+
+  // Um cancelamento ja confirmado (via evento) e definitivo: nunca deixa um resumo ou
+  // XML completo que chegue depois reverter o CT-e de volta para AUTORIZADO.
+  const dadosAtualizacao = existente?.situacaoSefaz === 'CANCELADO'
+    ? { ...data, situacaoSefaz: 'CANCELADO' as const }
+    : data;
 
   const registro = existente
     ? await prisma.conhecimentoTransporte.update({
         where: { chave: cte.chave },
         data: cte.status === 'COMPLETO' || existente.status !== 'COMPLETO'
-          ? data
+          ? dadosAtualizacao
           : { nsu: cte.nsu || undefined },
         select: { id: true },
       })
@@ -1070,10 +1076,30 @@ export async function sincronizarCtesInterno(cnpjId: number): Promise<ActionResu
         for (const doc of ret.documentos) {
           const cancelamento = interpretarEventoCancelamentoCte(doc.xml);
           if (cancelamento?.chave) {
-            await prisma.conhecimentoTransporte.updateMany({
+            const atualizado = await prisma.conhecimentoTransporte.updateMany({
               where: { chave: cancelamento.chave, cnpjId },
               data: { situacaoSefaz: 'CANCELADO' },
             });
+            // A ordem de NSU nao garante que o resumo/completo chegue antes do evento de
+            // cancelamento; sem isso o CT-e cancelado nunca seria criado no banco.
+            if (atualizado.count === 0) {
+              const basicos = dadosBasicosDaChave(cancelamento.chave);
+              if (basicos) {
+                await prisma.conhecimentoTransporte.upsert({
+                  where: { chave: cancelamento.chave },
+                  create: {
+                    chave: cancelamento.chave,
+                    nsu: doc.nsu,
+                    emitidaEm: basicos.emitidaEm,
+                    emitenteCnpj: basicos.emitenteCnpj,
+                    status: 'RESUMO',
+                    situacaoSefaz: 'CANCELADO',
+                    cnpjId,
+                  },
+                  update: { situacaoSefaz: 'CANCELADO' },
+                });
+              }
+            }
           }
 
           const cte = await processarDocumentoCte(doc, registro.cnpj);
@@ -1219,10 +1245,30 @@ export async function sincronizarNotasInterno(cnpjId: number): Promise<ActionRes
           // Evento de cancelamento (110111) → marca nota como CANCELADA
           const evCanc = interpretarEventoCancelamento(doc.xml);
           if (evCanc?.chave) {
-            await prisma.notaFiscal.updateMany({
+            const atualizado = await prisma.notaFiscal.updateMany({
               where: { chave: evCanc.chave, cnpjId },
               data: { situacaoSefaz: 'CANCELADA' },
             });
+            // A ordem de NSU nao garante que o resumo/completo chegue antes do evento de
+            // cancelamento; sem isso a nota cancelada nunca seria criada no banco.
+            if (atualizado.count === 0) {
+              const basicos = dadosBasicosDaChave(evCanc.chave);
+              if (basicos) {
+                await prisma.notaFiscal.upsert({
+                  where: { chave: evCanc.chave },
+                  create: {
+                    chave: evCanc.chave,
+                    nsu: doc.nsu,
+                    emitidaEm: basicos.emitidaEm,
+                    emitenteCnpj: basicos.emitenteCnpj,
+                    status: 'RESUMO',
+                    situacaoSefaz: 'CANCELADA',
+                    cnpjId,
+                  },
+                  update: { situacaoSefaz: 'CANCELADA' },
+                });
+              }
+            }
           }
 
           const nota = await processarDocumento(doc, registro.cnpj);
@@ -1234,13 +1280,18 @@ export async function sincronizarNotasInterno(cnpjId: number): Promise<ActionRes
               data: { ...nota, cnpjId },
             });
             novasNotas++;
-          } else if (existente.status === 'RESUMO' && nota.status === 'COMPLETA') {
-            // XML completo chegou depois da manifestação — promove o registro
-            const { status, chave, ...campos } = nota;
+          } else if (existente.status === 'RESUMO' && (nota.status === 'COMPLETA' || !existente.emitenteNome)) {
+            // XML completo (ou resumo com mais dados) chegou depois de um evento — promove
+            // o registro, mas nunca reverte um cancelamento ja confirmado.
+            const { status, chave, situacaoSefaz, ...campos } = nota;
             void chave;
             await prisma.notaFiscal.update({
               where: { chave: nota.chave },
-              data: { ...campos, status },
+              data: {
+                ...campos,
+                status,
+                situacaoSefaz: existente.situacaoSefaz === 'CANCELADA' ? existente.situacaoSefaz : situacaoSefaz,
+              },
             });
             atualizadas++;
           }

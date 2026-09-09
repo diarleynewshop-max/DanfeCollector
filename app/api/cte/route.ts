@@ -62,6 +62,17 @@ export async function GET(req: Request) {
       or.push({ destinatarioCnpj: { contains: somenteDigitos } });
       or.push({ notasVinculadas: { some: { chaveNfe: { contains: somenteDigitos } } } });
     }
+    if (somenteDigitos.length > 0 && somenteDigitos.length <= 9) {
+      // Numero da NF-e (ate 9 digitos): busca a chave correspondente e acha o(s) CT-e vinculado(s).
+      const notasPorNumero = await prisma.notaFiscal.findMany({
+        where: { AND: [whereNotaPermitida(usuario), { numero: { contains: somenteDigitos } }] },
+        select: { chave: true },
+        take: 50,
+      });
+      if (notasPorNumero.length > 0) {
+        or.push({ notasVinculadas: { some: { chaveNfe: { in: notasPorNumero.map((nota) => nota.chave) } } } });
+      }
+    }
     filtros.push({ OR: or });
   }
 

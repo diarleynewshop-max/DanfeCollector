@@ -179,7 +179,7 @@ export default function CteConsulta({ cnpjs }: { cnpjs: CnpjOpcaoCte[] }) {
             <input
               value={busca}
               onChange={(event) => setBusca(event.target.value)}
-              placeholder="Chave CT-e, chave NF-e, numero, CNPJ ou nome"
+              placeholder="Chave ou numero do CT-e, chave ou numero da NF-e, CNPJ ou nome"
               className="h-10 w-full rounded-lg border border-[var(--border-strong)] bg-white px-3 text-sm font-semibold text-[var(--ink)] outline-none focus:ring-2 focus:ring-[var(--border-strong)]"
             />
           </div>
@@ -298,15 +298,34 @@ export default function CteConsulta({ cnpjs }: { cnpjs: CnpjOpcaoCte[] }) {
                         {cte.notasVinculadas.length}
                       </td>
                       <td className="px-3 py-2 text-right">
-                        {cte.notasVinculadas.length > 0 && (
-                          <button
-                            type="button"
-                            onClick={() => setExpandido(expandido === cte.id ? null : cte.id)}
-                            className="rounded-lg border border-[var(--border-strong)] px-3 py-1.5 text-xs font-bold text-[var(--ink)] hover:bg-[var(--surface-2)]"
-                          >
-                            {expandido === cte.id ? 'Ocultar' : 'Ver NF-e'}
-                          </button>
-                        )}
+                        <div className="flex justify-end gap-2">
+                          {cte.status === 'COMPLETO' ? (
+                            <a
+                              href={`/dacte/${cte.chave}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="rounded-lg border border-[var(--border-strong)] px-3 py-1.5 text-xs font-bold text-[var(--ink)] hover:bg-[var(--surface-2)]"
+                            >
+                              DACTE
+                            </a>
+                          ) : (
+                            <span
+                              title="So e possivel gerar o DACTE quando o XML completo do CT-e ja foi sincronizado (nao apenas o resumo)."
+                              className="cursor-not-allowed rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs font-bold text-[var(--ink-mut)] opacity-50"
+                            >
+                              DACTE
+                            </span>
+                          )}
+                          {cte.notasVinculadas.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => setExpandido(expandido === cte.id ? null : cte.id)}
+                              className="rounded-lg border border-[var(--border-strong)] px-3 py-1.5 text-xs font-bold text-[var(--ink)] hover:bg-[var(--surface-2)]"
+                            >
+                              {expandido === cte.id ? 'Ocultar' : 'Ver NF-e'}
+                            </button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                     {expandido === cte.id && cte.notasVinculadas.length > 0 && (

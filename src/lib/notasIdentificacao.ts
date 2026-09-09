@@ -58,6 +58,23 @@ export function serieNotaDaChave(chave: string | null | undefined): string | nul
   return serie.replace(/^0+/, '') || serie;
 }
 
+/**
+ * Deriva emissao (mes/ano) e CNPJ emitente diretamente da chave de acesso (NF-e ou CT-e,
+ * mesmo layout de 44 digitos). Usado para nunca perder um documento cujo unico registro
+ * na Distribuicao DFe seja um evento (ex.: cancelamento) chegando antes do resumo/completo.
+ */
+export function dadosBasicosDaChave(chave: string | null | undefined): { emitidaEm: Date; emitenteCnpj: string } | null {
+  const normalizada = String(chave ?? '').replace(/\D/g, '');
+  if (normalizada.length !== 44) return null;
+  const mes = Number(normalizada.slice(4, 6));
+  if (!Number.isInteger(mes) || mes < 1 || mes > 12) return null;
+  const ano = 2000 + Number(normalizada.slice(2, 4));
+  return {
+    emitidaEm: new Date(Date.UTC(ano, mes - 1, 1)),
+    emitenteCnpj: normalizada.slice(6, 20),
+  };
+}
+
 export function numeroNotaSistema(nota: Pick<NotaComIdentificacao, 'numero' | 'chave'>): string {
   return nota.numero || numeroNotaDaChave(nota.chave) || '';
 }
