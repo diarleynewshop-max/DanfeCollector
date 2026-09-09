@@ -130,6 +130,7 @@ import SitramEspelhoView from './components/SitramEspelhoView';
 import SitramItensView from './components/SitramItensView';
 import MapaBrasil, { nomeUf, type ValorUf } from './components/MapaBrasil';
 import FornecedorIeConsulta from './components/FornecedorIeConsulta';
+import CteConsulta from './components/CteConsulta';
 import { useIdioma } from '@/lib/i18n';
 
 type NotaComCnpj = NotaFiscal & {
@@ -151,7 +152,7 @@ type FiltroOrigemNota = 'proprio' | 'terceiro';
 type FiltroManifestoNota = 'manifestada' | 'nao-manifestada' | 'pendente-processando' | 'com-erros';
 type FiltroModalidadeNota = 'simplificada' | 'estorno' | 'devolucao' | 'transferencia' | 'normal' | 'ajuste-icms';
 type FiltroTributoItem = 'todos' | TipoTributoItemSitram;
-type SecaoApp = 'home' | 'notas' | 'relatorios' | 'nfse' | 'ie-fornecedor' | 'empresas' | 'usuarios' | 'configuracao';
+type SecaoApp = 'home' | 'notas' | 'relatorios' | 'nfse' | 'cte' | 'ie-fornecedor' | 'empresas' | 'usuarios' | 'configuracao';
 const NFSE_CNPJ_AUTORIZADO_DASHBOARD = '45998339000329';
 type ColunaRedimensionavel = 'nf' | 'emitente' | 'destinatario' | 'valores' | 'transporte' | 'sitram' | 'status';
 type ModalRelatorioTipo = 'ranking-uf' | 'detalhe-uf' | 'evolucao-mensal' | 'emitentes' | 'daes-pagos' | 'daes-nao-pagos' | 'daes-prioritarios' | 'pendencias';
@@ -1065,6 +1066,7 @@ export default function Dashboard({
 
   // Painel de importação da relação de pagamento SITRAM
   const [mostrarPagamento, setMostrarPagamento] = useState(false);
+  const [menuMobileAberto, setMenuMobileAberto] = useState(false);
 
   // Busca rápida por número da NF (ou chave)
   const [filtroNumero, setFiltroNumero] = useState('');
@@ -2490,7 +2492,7 @@ export default function Dashboard({
     <div className="min-h-screen p-3 md:p-5 bg-[var(--ground)]">
       <div className="max-w-[1800px] mx-auto">
         {/* Header */}
-        <header className="rounded-xl bg-[var(--surface)] border border-[var(--border)] px-5 py-3.5 mb-4 shadow-sm flex flex-wrap gap-4 justify-between items-center">
+        <header className="rounded-xl bg-[var(--surface)] border border-[var(--border)] px-3.5 sm:px-5 py-3 sm:py-3.5 mb-3 sm:mb-4 shadow-sm flex justify-between items-center relative">
           <div className="flex min-w-0 items-center">
             <Image
               src="/brand/danfe-collect-logo.svg"
@@ -2498,11 +2500,13 @@ export default function Dashboard({
               width={720}
               height={170}
               priority
-              className="h-auto w-[220px] max-w-[70vw]"
+              className="h-auto w-[150px] sm:w-[220px] max-w-[60vw]"
             />
             <span className="sr-only">{t('tagline')}</span>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
+
+          {/* Ações para Desktop */}
+          <div className="hidden md:flex flex-wrap items-center gap-2">
             <button
               onClick={() => { setSecaoAtual('notas'); setMostrarImport((v) => !v); }}
               className="px-3.5 py-2 rounded-lg text-sm font-medium border border-[var(--border-strong)] bg-[var(--surface)] text-[var(--ink)] hover:bg-[var(--surface-2)] transition"
@@ -2597,14 +2601,150 @@ export default function Dashboard({
               <option value="zh-CN">中文</option>
             </select>
           </div>
+
+          {/* Barra Rápida Mobile */}
+          <div className="flex md:hidden items-center gap-2">
+            <button
+              onClick={() => handleRotinaMatinal(false)}
+              disabled={pending || sitramConsultandoTudo || rotinaMatinalRodando}
+              className="px-2.5 py-1.5 rounded-lg text-xs font-bold bg-emerald-600 text-white hover:bg-emerald-700 transition disabled:opacity-50 flex items-center gap-1 shadow-xs"
+              title={t('updateAll')}
+            >
+              <span className={rotinaMatinalRodando || sitramConsultandoTudo ? 'animate-spin inline-block' : ''}>↻</span>
+              <span>{rotinaMatinalRodando || sitramConsultandoTudo ? 'Atualizando' : 'Sincronizar'}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setMenuMobileAberto((v) => !v)}
+              className="p-2 rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] text-[var(--ink)] hover:bg-[var(--surface-2)] transition"
+              aria-label="Abrir menu de ações"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                {menuMobileAberto ? (
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                ) : (
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+                )}
+              </svg>
+            </button>
+          </div>
         </header>
 
-        <nav className="mb-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-2 shadow-sm">
-          <div className="flex flex-wrap gap-2">
+        {/* Modal / Menu Drawer Mobile */}
+        {menuMobileAberto && (
+          <div className="md:hidden fixed inset-0 z-50 flex flex-col justify-end bg-black/50 p-3 sm:p-4 backdrop-blur-xs">
+            <div className="bg-[var(--surface)] rounded-2xl border border-[var(--border)] p-4 shadow-xl max-h-[85vh] overflow-y-auto space-y-4">
+              <div className="flex items-center justify-between border-b border-[var(--border)] pb-3">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-full bg-[var(--accent)] text-white grid place-items-center text-xs font-bold">
+                    {usuario.nome.slice(0, 2).toUpperCase()}
+                  </div>
+                  <div>
+                    <div className="text-sm font-bold text-[var(--ink)]">{usuario.nome}</div>
+                    <div className="text-xs text-[var(--ink-mut)]">{usuario.admin ? 'Administrador' : t('operation')}</div>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setMenuMobileAberto(false)}
+                  className="rounded-lg p-1.5 text-[var(--ink-mut)] hover:bg-[var(--surface-2)]"
+                  aria-label="Fechar menu"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <div>
+                <p className="text-xs font-bold uppercase tracking-wider text-[var(--ink-mut)] mb-2">Ações Rápidas</p>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    onClick={() => { setSecaoAtual('notas'); setMostrarImport((v) => !v); setMenuMobileAberto(false); }}
+                    className="p-2.5 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] text-left font-semibold text-xs text-[var(--ink)] hover:border-[var(--border-strong)]"
+                  >
+                    🔑 {t('keys')}
+                  </button>
+                  <button
+                    onClick={() => { setSecaoAtual('notas'); setMostrarPagamento((v) => !v); setMenuMobileAberto(false); }}
+                    className="p-2.5 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] text-left font-semibold text-xs text-[var(--ink)] hover:border-[var(--border-strong)]"
+                  >
+                    💳 {t('payment')}
+                  </button>
+                  <button
+                    onClick={() => { setSecaoAtual('notas'); setMostrarSitram((v) => !v); setMenuMobileAberto(false); }}
+                    className="p-2.5 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] text-left font-semibold text-xs text-[var(--ink)] hover:border-[var(--border-strong)] col-span-2"
+                  >
+                    🏛️ Painel SITRAM
+                  </button>
+                </div>
+              </div>
+
+              {podeAdministrar && (
+                <div className="border-t border-[var(--border)] pt-3">
+                  <p className="text-xs font-bold uppercase tracking-wider text-[var(--ink-mut)] mb-2">Administração</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      onClick={() => { setSecaoAtual('configuracao'); setMostrarUploadCert(true); setMenuMobileAberto(false); }}
+                      className="p-2.5 rounded-xl border border-amber-200 bg-amber-50 text-left font-semibold text-xs text-amber-900"
+                    >
+                      📜 {t('updateCertificate')}
+                    </button>
+                    <button
+                      onClick={() => { setSecaoAtual('configuracao'); executar(verificarCertificado); setMenuMobileAberto(false); }}
+                      className="p-2.5 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] text-left font-semibold text-xs text-[var(--ink)]"
+                    >
+                      🔍 {t('checkCertificate')}
+                    </button>
+                    <button
+                      onClick={() => { abrirUsuariosAdmin(); setMenuMobileAberto(false); }}
+                      className="p-2.5 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] text-left font-semibold text-xs text-[var(--ink)] col-span-2"
+                    >
+                      👥 {t('users')}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              <div className="border-t border-[var(--border)] pt-3 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-[var(--ink-mut)] font-semibold">{t('language')}:</span>
+                  <div className="inline-flex rounded-lg border border-[var(--border)] p-0.5 bg-[var(--surface-2)] text-xs font-bold">
+                    <button
+                      type="button"
+                      onClick={() => setIdioma('pt-BR')}
+                      className={`px-2.5 py-1 rounded-md transition ${idioma === 'pt-BR' ? 'bg-[var(--surface)] text-[var(--accent)] shadow-xs' : 'text-[var(--ink-mut)]'}`}
+                    >
+                      PT
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setIdioma('zh-CN')}
+                      className={`px-2.5 py-1 rounded-md transition ${idioma === 'zh-CN' ? 'bg-[var(--surface)] text-[var(--accent)] shadow-xs' : 'text-[var(--ink-mut)]'}`}
+                    >
+                      中文
+                    </button>
+                  </div>
+                </div>
+
+                <form action={sairUsuario}>
+                  <button
+                    type="submit"
+                    className="px-3.5 py-1.5 rounded-lg text-xs font-bold text-red-600 bg-red-50 hover:bg-red-100 border border-red-200"
+                  >
+                    {t('logout')}
+                  </button>
+                </form>
+              </div>
+            </div>
+          </div>
+        )}
+
+        <nav className="mb-3 sm:mb-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-1.5 sm:p-2 shadow-sm">
+          <div className="flex gap-1.5 sm:gap-2 overflow-x-auto no-scrollbar py-0.5 scroll-smooth snap-x">
             <SecaoBotao atual={secaoAtual} alvo="home" onClick={setSecaoAtual}>{t('home')}</SecaoBotao>
             <SecaoBotao atual={secaoAtual} alvo="notas" onClick={setSecaoAtual}>{t('invoice')}</SecaoBotao>
             <SecaoBotao atual={secaoAtual} alvo="relatorios" onClick={setSecaoAtual}>{t('reports')}</SecaoBotao>
             {cnpjNfseAutorizado && <SecaoBotao atual={secaoAtual} alvo="nfse" onClick={setSecaoAtual}>NFS-e</SecaoBotao>}
+            <SecaoBotao atual={secaoAtual} alvo="cte" onClick={setSecaoAtual}>CT-e</SecaoBotao>
             <SecaoBotao atual={secaoAtual} alvo="ie-fornecedor" onClick={setSecaoAtual}>IE Fornecedor</SecaoBotao>
             <SecaoBotao atual={secaoAtual} alvo="empresas" onClick={setSecaoAtual}>{t('companies')}</SecaoBotao>
             {podeAdministrar && <SecaoBotao atual={secaoAtual} alvo="usuarios" onClick={() => abrirUsuariosAdmin()}>{t('users')}</SecaoBotao>}
@@ -3367,6 +3507,8 @@ export default function Dashboard({
           </section>
         )}
 
+        {secaoAtual === 'cte' && <CteConsulta cnpjs={cnpjs} />}
+
         {secaoAtual === 'ie-fornecedor' && <FornecedorIeConsulta />}
 
         {podeAdministrar && secaoAtual === 'configuracao' && (
@@ -4053,7 +4195,7 @@ export default function Dashboard({
           </div>
 
           {/* Notas */}
-          <div className={`${secaoAtual === 'notas' ? 'lg:col-span-4' : 'hidden'} bg-[var(--surface)] p-5 rounded-2xl shadow-sm border border-[var(--border)]`}>
+          <div className={`${secaoAtual === 'notas' ? 'lg:col-span-4' : 'hidden'} bg-[var(--surface)] p-3 sm:p-5 rounded-xl sm:rounded-2xl shadow-sm border border-[var(--border)]`}>
             <AlertaDaes
               notas={notasAlerta}
               cnpjId={filtroCnpjId}
@@ -5108,7 +5250,31 @@ export default function Dashboard({
               </div>
             )}
 
-            <div className="overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--surface)]">
+            {/* Visualização Mobile: Cards Touch Otimizados */}
+            <div className="space-y-3 md:hidden">
+              {notasFiltradas.length === 0 && (
+                <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-8 text-center text-sm text-[var(--ink-mut)]">
+                  Nenhuma nota para o filtro selecionado.
+                </div>
+              )}
+              {notasVisiveis.map((n) => (
+                <MobileCardNota
+                  key={n.id}
+                  nota={n}
+                  aberta={expandida === n.id}
+                  onToggle={() => alternarNotaVisivel(n)}
+                  selecionavel={true}
+                  selecionada={selecionadas.has(n.id)}
+                  onToggleSelecionada={() => toggleSelecionada(n.id)}
+                  onNotaAtualizada={atualizarNotaLocal}
+                  abaInicialDetalhe={filtroTributoItemBusca === 'todos' ? 'dados' : 'itens'}
+                  destaqueTributoItem={expandida === n.id ? destaqueTributoNotaAberta : null}
+                />
+              ))}
+            </div>
+
+            {/* Visualização Desktop: Tabela Completa Redimensionável */}
+            <div className="hidden md:block overflow-x-auto rounded-xl border border-[var(--border)] bg-[var(--surface)]">
               <table className="w-full table-fixed text-left text-sm">
                 <colgroup>
                   <col className="w-[56px]" />
@@ -5268,7 +5434,7 @@ function SecaoBotao({
     <button
       type="button"
       onClick={() => onClick(alvo)}
-      className={`rounded-lg px-4 py-2 text-sm font-semibold transition ${
+      className={`shrink-0 whitespace-nowrap rounded-lg px-3.5 sm:px-4 py-2 text-xs sm:text-sm font-semibold transition ${
         ativo
           ? 'bg-[var(--accent)] text-white shadow-sm'
           : 'border border-[var(--border)] bg-[var(--surface)] text-[var(--ink-mut)] hover:bg-[var(--surface-2)] hover:text-[var(--ink)]'
@@ -8278,6 +8444,181 @@ function AlertaDaes({
   );
 }
 
+type Aba = 'dados' | 'sitram' | 'frete' | 'danfe' | 'itens' | 'anexos';
+
+function MobileCardNota({
+  nota,
+  aberta,
+  onToggle,
+  selecionavel,
+  selecionada,
+  onToggleSelecionada,
+  onNotaAtualizada,
+  abaInicialDetalhe = 'dados',
+  destaqueTributoItem = null,
+}: {
+  nota: NotaComCnpj;
+  aberta: boolean;
+  onToggle: () => void;
+  selecionavel: boolean;
+  selecionada: boolean;
+  onToggleSelecionada: () => void;
+  onNotaAtualizada: (nota: NotaComCnpj) => void;
+  abaInicialDetalhe?: Aba;
+  destaqueTributoItem?: TipoTributoItemSitram | null;
+}) {
+  const tags = parseEtiquetas(nota.etiqueta).filter((tag) => tag !== nota.recebimentoStatus);
+  const dae = extrairResumoDae(nota);
+  const resumoTributosItem = resumoTributosItensNota(nota);
+  const situacaoSitram = situacaoSitramEfetiva(nota);
+  const statusDae = statusDaeEfetivo(nota);
+  const lancamentoDestaque = dae.lancamentos.find((l) => !l.pago) ?? dae.lancamentos[0];
+  const diasParaVencer = diasAteVencimento(lancamentoDestaque?.vencimento);
+
+  return (
+    <article className={`rounded-xl border transition shadow-xs overflow-hidden ${
+      aberta ? 'border-[var(--accent)] bg-[var(--surface)] ring-1 ring-[var(--accent)]' : 'border-[var(--border)] bg-[var(--surface)] hover:border-[var(--border-strong)]'
+    }`}>
+      {/* Top Header Row */}
+      <div className="flex items-center justify-between gap-2 border-b border-[var(--border)] bg-[var(--surface-2)]/60 px-3.5 py-2.5">
+        <div className="flex items-center gap-2 min-w-0">
+          {selecionavel && (
+            <input
+              type="checkbox"
+              checked={selecionada}
+              onChange={onToggleSelecionada}
+              className="h-4 w-4 rounded border-gray-300 text-[var(--accent)] focus:ring-[var(--accent)]"
+              aria-label={`Selecionar NF ${numeroNotaSistema(nota) || ''}`}
+            />
+          )}
+          <div className="min-w-0">
+            <span className="text-sm font-black text-[var(--ink)]">
+              NF {numeroNotaSistema(nota) || dae.numeroNota || '-'}
+            </span>
+            <span className="ml-1.5 text-xs text-[var(--ink-mut)] font-medium">
+              Série {serieNotaSistema(nota) || '-'}
+            </span>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-1.5 shrink-0">
+          <Badge tone={nota.status === 'COMPLETA' ? 'green' : 'blue'}>
+            {nota.status}
+          </Badge>
+          {nota.tipoOperacao && (
+            <Badge tone={nota.tipoOperacao === 'Entrada' ? 'sky' : 'orange'}>
+              {nota.tipoOperacao}
+            </Badge>
+          )}
+        </div>
+      </div>
+
+      {/* Main Info - Tap to expand */}
+      <div className="p-3.5 cursor-pointer space-y-2.5" onClick={onToggle}>
+        {/* Emitente & Destinatário */}
+        <div className="space-y-1.5">
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0 flex-1">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--ink-mut)]">Fornecedor</p>
+              <p className="text-sm font-bold text-[var(--ink)] leading-snug line-clamp-2" title={nota.emitenteNome || ''}>
+                {nota.emitenteNome || 'Emitente não informado'}
+              </p>
+              <p className="text-[11px] font-mono text-[var(--ink-mut)]">
+                {formatarCnpj(nota.emitenteCnpj)}
+              </p>
+            </div>
+            <div className="text-right shrink-0">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--ink-mut)]">Valor Total</p>
+              <p className="text-base font-black text-[var(--ink)] whitespace-nowrap">
+                {moeda(nota.valorTotal)}
+              </p>
+              <p className="text-[11px] text-[var(--ink-mut)] whitespace-nowrap">
+                {nota.qtdItens ? `${nota.qtdItens} itens` : ''} {nota.valorFrete ? `· Frete ${moeda(nota.valorFrete)}` : ''}
+              </p>
+            </div>
+          </div>
+
+          <div className="rounded-lg bg-[var(--surface-2)] px-2.5 py-1.5 text-xs flex items-center justify-between gap-2">
+            <span className="text-[var(--ink-mut)] font-medium">Destino:</span>
+            <span className="font-bold text-[var(--ink)] truncate">
+              {nomeEmpresaCurta(nota)} ({formatarCnpj(nota.destCnpj)})
+            </span>
+          </div>
+        </div>
+
+        {/* Fiscal, SITRAM & Status Badges */}
+        <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+          {nota.sitramConsultadaEm ? (
+            <Badge tone={toneSelagemSitram(nota)}>{textoSelagemSitram(nota)}</Badge>
+          ) : (
+            <Badge tone="gray">Sem SITRAM</Badge>
+          )}
+
+          {nota.sitramDaeStatus ? (
+            <Badge tone={toneDaeSitram(statusDae)}>{textoDaeSitram(statusDae)}</Badge>
+          ) : (
+            <Badge tone="gray">Sem DAE</Badge>
+          )}
+
+          {resumoTributosItem.antecipacao > 0 && (
+            <Badge tone="amber">ANTC {resumoTributosItem.antecipacao}</Badge>
+          )}
+          {resumoTributosItem.st > 0 && (
+            <Badge tone="red">ST {resumoTributosItem.st}</Badge>
+          )}
+
+          {nota.recebimentoStatus && (
+            <Badge tone={toneRecebimentoStatus(nota.recebimentoStatus)}>{nota.recebimentoStatus}</Badge>
+          )}
+
+          {nota.situacaoSefaz === 'CANCELADA' && <Badge tone="orange">CANCELADA</Badge>}
+          {nota.conferenciaDivergencia && <Badge tone="red">Divergência</Badge>}
+
+          {tags.slice(0, 2).map((tag) => (
+            <Badge key={tag} tone="indigo">{tag}</Badge>
+          ))}
+        </div>
+
+        {/* SITRAM DAE Expiration Alert if present */}
+        {lancamentoDestaque && (
+          <div className="flex items-center justify-between text-xs pt-1.5 text-[var(--ink-mut)] border-t border-[var(--border)] mt-1">
+            <span>
+              {statusDae === 'PAGO' ? 'DAE Pago' : 'DAE a pagar'}: <strong className="text-[var(--ink)]">{moeda(statusDae === 'PAGO' ? lancamentoDestaque.valorPago : lancamentoDestaque.valorAberto)}</strong>
+            </span>
+            {lancamentoDestaque.vencimento && (
+              <span className={!lancamentoDestaque.pago && diasParaVencer !== null && diasParaVencer < 0 ? 'font-bold text-red-600' : ''}>
+                Vence {data(lancamentoDestaque.vencimento)}
+                {!lancamentoDestaque.pago && diasParaVencer !== null && diasParaVencer < 0 ? ' (VENCIDO)' : ''}
+              </span>
+            )}
+          </div>
+        )}
+
+        {/* Date & Expand trigger button */}
+        <div className="flex items-center justify-between pt-1 text-xs text-[var(--ink-mut)]">
+          <span>Emissão: {data(nota.emitidaEm)}</span>
+          <span className="inline-flex items-center gap-1 font-bold text-[var(--accent)]">
+            {aberta ? 'Recolher detalhes' : 'Ver detalhes e DANFE'}
+            <span className="text-xs">{aberta ? '▲' : '▼'}</span>
+          </span>
+        </div>
+      </div>
+
+      {/* Accordion Detail View */}
+      {aberta && (
+        <div className="border-t border-[var(--border)] bg-[var(--surface-2)]/50 p-3 sm:p-4">
+          <DetalheNota
+            nota={nota}
+            onNotaAtualizada={onNotaAtualizada}
+            abaInicial={abaInicialDetalhe}
+            destaqueTributoItem={destaqueTributoItem}
+          />
+        </div>
+      )}
+    </article>
+  );
+}
+
 function CompactFragmentNota({
   nota,
   aberta,
@@ -8546,7 +8887,6 @@ function FragmentNota({
   );
 }
 
-type Aba = 'dados' | 'sitram' | 'frete' | 'danfe' | 'itens' | 'anexos';
 
 function DetalheNota({
   nota,
@@ -9098,7 +9438,7 @@ function DetalheNota({
 
   return (
     <div>
-      <div className="mb-4 flex w-full flex-wrap gap-1 rounded-lg bg-[var(--surface-2)] p-1 sm:w-fit">
+      <div className="mb-4 flex w-full gap-1 overflow-x-auto no-scrollbar rounded-lg bg-[var(--surface-2)] p-1 sm:w-fit py-1">
         {(['dados', 'sitram', 'frete', 'danfe', 'itens', 'anexos'] as Aba[]).map((a) => (
           <button
             key={a}

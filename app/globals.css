@@ -121,6 +121,22 @@ select:focus-visible,
   }
 }
 
+/* Utilitário para barra de rolagem horizontal invisível em abas e cards */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Otimização de toque e áreas de clique para telas mobile */
+@media (max-width: 768px) {
+  button, a, input, select {
+    touch-action: manipulation;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     scroll-behavior: auto !important;
