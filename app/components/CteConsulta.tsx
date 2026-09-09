@@ -66,6 +66,14 @@ function chaveResumida(chave: string): string {
   return `${chave.slice(0, 4)}...${chave.slice(-6)}`;
 }
 
+function nomeArquivoDownload(resposta: Response): string {
+  const disposition = resposta.headers.get('content-disposition') ?? '';
+  const utf8 = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utf8?.[1]) return decodeURIComponent(utf8[1]);
+  const simples = disposition.match(/filename="?([^";]+)"?/i);
+  return simples?.[1] ?? 'cte-mensal-cnpj.xlsx';
+}
+
 export default function CteConsulta({ cnpjs }: { cnpjs: CnpjOpcaoCte[] }) {
   const [busca, setBusca] = useState('');
   const [cnpjId, setCnpjId] = useState('todos');
@@ -76,6 +84,44 @@ export default function CteConsulta({ cnpjs }: { cnpjs: CnpjOpcaoCte[] }) {
   const [resultados, setResultados] = useState<CteResultado[] | null>(null);
   const [limiteAtingido, setLimiteAtingido] = useState(false);
   const [expandido, setExpandido] = useState<number | null>(null);
+  const [baixandoRelatorio, setBaixandoRelatorio] = useState(false);
+  const [erroRelatorio, setErroRelatorio] = useState<string | null>(null);
+
+  function parametrosFiltroAtual(): URLSearchParams {
+    const params = new URLSearchParams();
+    if (cnpjId !== 'todos') params.set('cnpjId', cnpjId);
+    if (inicio) params.set('inicio', inicio);
+    if (fim) params.set('fim', fim);
+    return params;
+  }
+
+  async function baixarRelatorioMensal() {
+    setBaixandoRelatorio(true);
+    setErroRelatorio(null);
+    try {
+      const resposta = await fetch(`/api/relatorios/cte-mensal-xlsx?${parametrosFiltroAtual().toString()}`, {
+        cache: 'no-store',
+      });
+      if (!resposta.ok) {
+        const erroJson = await resposta.json().catch(() => null) as { message?: string } | null;
+        throw new Error(erroJson?.message || 'Nao foi possivel gerar o relatorio.');
+      }
+
+      const blob = await resposta.blob();
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = nomeArquivoDownload(resposta);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (error: unknown) {
+      setErroRelatorio((error as Error).message || 'Erro ao gerar relatorio.');
+    } finally {
+      setBaixandoRelatorio(false);
+    }
+  }
 
   async function buscar(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -106,11 +152,25 @@ export default function CteConsulta({ cnpjs }: { cnpjs: CnpjOpcaoCte[] }) {
   return (
     <section className="space-y-4">
       <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-5 shadow-sm">
-        <div className="mb-4 border-b border-[var(--border)] pb-4">
-          <h2 className="text-base font-black text-[var(--ink)]">CT-e vinculados as NF-e</h2>
-          <p className="mt-1 text-xs text-[var(--ink-mut)]">
-            Busque os Conhecimentos de Transporte recebidos da SEFAZ para os CNPJs cadastrados e veja quais NF-e cada CT-e transporta.
-          </p>
+        <div className="mb-4 flex flex-col gap-3 border-b border-[var(--border)] pb-4 md:flex-row md:items-start md:justify-between">
+          <div>
+            <h2 className="text-base font-black text-[var(--ink)]">CT-e vinculados as NF-e</h2>
+            <p className="mt-1 text-xs text-[var(--ink-mut)]">
+              Busque os Conhecimentos de Transporte recebidos da SEFAZ para os CNPJs cadastrados e veja quais NF-e cada CT-e transporta.
+            </p>
+          </div>
+          <div className="flex flex-col items-start gap-1 md:items-end">
+            <button
+              type="button"
+              onClick={baixarRelatorioMensal}
+              disabled={baixandoRelatorio}
+              title="Gera um Excel com quantidade e valores de CT-e por CNPJ e mes, considerando os filtros de CNPJ e periodo abaixo (todos os CNPJs e periodos de varios meses sao suportados)"
+              className="rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-xs font-bold text-[var(--ink)] hover:bg-[var(--surface-2)] disabled:opacity-50"
+            >
+              {baixandoRelatorio ? 'Gerando relatorio...' : 'Relatorio mensal por CNPJ (Excel)'}
+            </button>
+            {erroRelatorio && <p className="text-[11px] font-semibold text-red-700">{erroRelatorio}</p>}
+          </div>
         </div>
 
         <form onSubmit={buscar} className="grid gap-3 md:grid-cols-[minmax(0,1fr)_180px_150px_150px_auto]">
