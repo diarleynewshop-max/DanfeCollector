@@ -367,6 +367,76 @@ function dadosUpdate(existente, dados) {
   return update;
 }
 
+const NOTA_FISCAL_COLUNAS_LEGADAS = new Set([
+  'chave',
+  'nsu',
+  'numero',
+  'serie',
+  'emitidaEm',
+  'tipoOperacao',
+  'naturezaOp',
+  'emitenteNome',
+  'emitenteCnpj',
+  'emitenteIe',
+  'emitenteUf',
+  'destNome',
+  'destCnpj',
+  'valorTotal',
+  'valorProdutos',
+  'valorFrete',
+  'valorDesconto',
+  'valorIcms',
+  'modalidadeFrete',
+  'transportadoraNome',
+  'transportadoraCnpj',
+  'transportadoraIe',
+  'transportadoraUf',
+  'transportadoraMunicipio',
+  'qtdItens',
+  'etiqueta',
+  'status',
+  'situacaoSefaz',
+  'sitramDetalhe',
+  'xmlPath',
+  'pdfPath',
+  'cnpjId',
+  'updatedAt',
+]);
+
+function filtrarColunasNota(data) {
+  return Object.fromEntries(
+    Object.entries(data).filter(([campo, valor]) =>
+      NOTA_FISCAL_COLUNAS_LEGADAS.has(campo) &&
+      valor !== undefined &&
+      valor !== null &&
+      valor !== '',
+    ),
+  );
+}
+
+async function criarNotaRaw(prisma, dados) {
+  const data = filtrarColunasNota({
+    ...dadosCreate(dados),
+    updatedAt: new Date(),
+  });
+  const colunas = Object.keys(data);
+  const parametros = colunas.map((_, i) => `$${i + 1}`);
+  const sql = `insert into "NotaFiscal" (${colunas.map((c) => `"${c}"`).join(', ')}) values (${parametros.join(', ')})`;
+  await prisma.$executeRawUnsafe(sql, ...colunas.map((c) => data[c]));
+}
+
+async function atualizarNotaRaw(prisma, chave, data) {
+  const update = filtrarColunasNota({
+    ...data,
+    updatedAt: new Date(),
+  });
+  const colunas = Object.keys(update);
+  if (!colunas.length) return;
+  const sets = colunas.map((c, i) => `"${c}" = $${i + 1}`);
+  const sql = `update "NotaFiscal" set ${sets.join(', ')} where "chave" = $${colunas.length + 1}`;
+  await prisma.$executeRawUnsafe(sql, ...colunas.map((c) => update[c]), chave);
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help || !args.csv || !args.cnpj) {
@@ -403,7 +473,10 @@ async function main() {
   const erros = [];
 
   try {
-    const empresa = await prisma.cnpj.findUnique({ where: { cnpj } });
+    const empresa = await prisma.cnpj.findUnique({
+      where: { cnpj },
+      select: { id: true, cnpj: true, razaoSocial: true },
+    });
     if (!empresa) throw new Error(`CNPJ ${cnpj} nao esta cadastrado no sistema.`);
 
     console.log(`[inicio] chaves_csv=${todas.length} processar=${chaves.length} empresa=${empresa.cnpj} dryRun=${args.dryRun}`);
@@ -469,10 +542,10 @@ async function main() {
 
         if (!args.dryRun) {
           if (existente) {
-            await prisma.notaFiscal.update({ where: { chave }, data: dadosUpdate(existente, dados) });
+            await atualizarNotaRaw(prisma, chave, dadosUpdate(existente, dados));
             acao = 'atualizada';
           } else {
-            await prisma.notaFiscal.create({ data: dadosCreate(dados) });
+            await criarNotaRaw(prisma, dados);
             acao = 'criada';
           }
         } else {

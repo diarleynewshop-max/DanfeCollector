@@ -65,8 +65,14 @@ function envLocal(chave: string): string {
 
 function configStatusRecebimento() {
   const baseUrl = (envLocal('NF_STATUS_API_URL') || 'https://api-recebimento.newgrup.cloud/functions/v1/nf-status-integration').trim();
-  const token = envLocal('NF_STATUS_API_TOKEN');
-  return { baseUrl, token };
+  const tokens = [
+    envLocal('NF_STATUS_API_TOKEN_FACIL'),
+    envLocal('NF_STATUS_API_TOKEN_SOYE'),
+    envLocal('NF_STATUS_API_TOKEN'),
+    envLocal('NF_STATUS_API_TOKEN_NEWSHOP'),
+  ].filter((t): t is string => Boolean(t?.trim()));
+  const lista = [...new Set(tokens)];
+  return { baseUrl, tokens: lista };
 }
 
 function normalizarChaveNfe(chave: string): string {
@@ -102,73 +108,89 @@ function etiquetaComStatusRecebimento(etiquetaAtual: string | null | undefined, 
 }
 
 async function chamarApiStatusRecebimento(chave: string): Promise<ResultadoStatusRecebimento> {
-  const { baseUrl, token } = configStatusRecebimento();
-  if (!token) throw new Error('NF_STATUS_API_TOKEN nao configurado no servidor.');
+  const { baseUrl, tokens } = configStatusRecebimento();
+  if (tokens.length === 0) throw new Error('NF_STATUS_API_TOKEN nao configurado no servidor.');
 
   const url = new URL(baseUrl);
   url.searchParams.set('chave', chave);
 
-  const resposta = await fetch(url, {
-    method: 'GET',
-    headers: { Authorization: `Bearer ${token}` },
-    cache: 'no-store',
-    signal: AbortSignal.timeout(30000),
-  });
+  let ultimoErro: Error | null = null;
 
-  let payload: unknown = null;
-  const textoResposta = await resposta.text();
-  if (textoResposta) {
+  for (const token of tokens) {
     try {
-      payload = JSON.parse(textoResposta);
-    } catch {
-      throw new Error(`API status NF retornou resposta invalida HTTP ${resposta.status}.`);
+      const resposta = await fetch(url, {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${token}` },
+        cache: 'no-store',
+        signal: AbortSignal.timeout(30000),
+      });
+
+      let payload: unknown = null;
+      const textoResposta = await resposta.text();
+      if (textoResposta) {
+        try {
+          payload = JSON.parse(textoResposta);
+        } catch {
+          throw new Error(`API status NF retornou resposta invalida HTTP ${resposta.status}.`);
+        }
+      }
+
+      if (resposta.status === 404) {
+        continue;
+      }
+      if (!resposta.ok) {
+        const erro = typeof payload === 'object' && payload && 'error' in payload ? String((payload as { error?: unknown }).error ?? '') : '';
+        throw new Error(`API status NF HTTP ${resposta.status}: ${erro || resposta.statusText}`);
+      }
+
+      const result = typeof payload === 'object' && payload && 'result' in payload
+        ? (payload as { result?: unknown }).result
+        : null;
+
+      if (!result || typeof result !== 'object') {
+        throw new Error('API status NF nao retornou result.');
+      }
+
+      const raw = result as Record<string, unknown>;
+      if (raw.found === false) continue;
+
+      const status = texto(raw.status);
+      const chaveNfe = normalizarChaveNfe(texto(raw.chaveNfe) ?? chave);
+      if (!status) throw new Error('API status NF retornou nota sem status.');
+      if (chaveNfe.length !== 44) throw new Error('API status NF retornou chave invalida.');
+
+      return {
+        found: true,
+        id: texto(raw.id),
+        loja: texto(raw.loja),
+        numero: texto(raw.numero),
+        serie: texto(raw.serie),
+        fornecedor: texto(raw.fornecedor),
+        destinatarioNome: texto(raw.destinatarioNome),
+        chaveNfe,
+        status,
+        kanbanStatus: texto(raw.kanbanStatus),
+        kanbanUpdatedAt: texto(raw.kanbanUpdatedAt),
+        kanbanUpdatedBy: texto(raw.kanbanUpdatedBy),
+        statusOperacional: texto(raw.statusOperacional),
+        statusOperacionalCodigo: texto(raw.statusOperacionalCodigo),
+        dataEmissao: texto(raw.dataEmissao),
+        dataRecebimentoCd: texto(raw.dataRecebimentoCd),
+        dataInicioConferencia: texto(raw.dataInicioConferencia),
+        dataConclusaoConferencia: texto(raw.dataConclusaoConferencia),
+        dataFinalizacao: texto(raw.dataFinalizacao),
+        createdAt: texto(raw.createdAt),
+      };
+    } catch (err: unknown) {
+      ultimoErro = err as Error;
     }
   }
 
-  if (resposta.status === 404) return { found: false };
-  if (!resposta.ok) {
-    const erro = typeof payload === 'object' && payload && 'error' in payload ? String((payload as { error?: unknown }).error ?? '') : '';
-    throw new Error(`API status NF HTTP ${resposta.status}: ${erro || resposta.statusText}`);
+  if (ultimoErro && !ultimoErro.message.includes('404')) {
+    throw ultimoErro;
   }
 
-  const result = typeof payload === 'object' && payload && 'result' in payload
-    ? (payload as { result?: unknown }).result
-    : null;
-
-  if (!result || typeof result !== 'object') {
-    throw new Error('API status NF nao retornou result.');
-  }
-
-  const raw = result as Record<string, unknown>;
-  if (raw.found === false) return { found: false };
-
-  const status = texto(raw.status);
-  const chaveNfe = normalizarChaveNfe(texto(raw.chaveNfe) ?? chave);
-  if (!status) throw new Error('API status NF retornou nota sem status.');
-  if (chaveNfe.length !== 44) throw new Error('API status NF retornou chave invalida.');
-
-  return {
-    found: true,
-    id: texto(raw.id),
-    loja: texto(raw.loja),
-    numero: texto(raw.numero),
-    serie: texto(raw.serie),
-    fornecedor: texto(raw.fornecedor),
-    destinatarioNome: texto(raw.destinatarioNome),
-    chaveNfe,
-    status,
-    kanbanStatus: texto(raw.kanbanStatus),
-    statusOperacional: texto(raw.statusOperacional),
-    statusOperacionalCodigo: texto(raw.statusOperacionalCodigo),
-    kanbanUpdatedAt: texto(raw.kanbanUpdatedAt),
-    kanbanUpdatedBy: texto(raw.kanbanUpdatedBy),
-    dataEmissao: texto(raw.dataEmissao),
-    dataRecebimentoCd: texto(raw.dataRecebimentoCd),
-    dataInicioConferencia: texto(raw.dataInicioConferencia),
-    dataConclusaoConferencia: texto(raw.dataConclusaoConferencia),
-    dataFinalizacao: texto(raw.dataFinalizacao),
-    createdAt: texto(raw.createdAt),
-  };
+  return { found: false };
 }
 
 export async function consultarStatusRecebimentoPorNotaId(notaId: number): Promise<ConsultaStatusRecebimento> {

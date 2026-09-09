@@ -23,6 +23,7 @@ import {
   importarXmlsDaPasta,
   alternarEtiqueta,
   aplicarEtiquetasLote,
+  consultarNotaCompraErp,
   consultarStatusRecebimentoNota,
   consultarStatusRecebimentoLote,
   manifestarNotasLote,
@@ -483,6 +484,10 @@ const ETIQUETAS_PRESET = [
   'Divergência',
   'Pago',
   'Devolvido',
+  'Efetivada',
+  'Pendente a Entrega',
+  'Inconsistente',
+  'Recusada',
   'Urgente',
   ...STATUS_RECEBIMENTO_PRESET,
 ];
@@ -8567,6 +8572,8 @@ function DetalheNota({
   const [msgPagamentoIcms, setMsgPagamentoIcms] = useState<{ ok: boolean; texto: string } | null>(null);
   const [consultandoRecebimento, setConsultandoRecebimento] = useState(false);
   const [msgRecebimento, setMsgRecebimento] = useState<{ ok: boolean; texto: string } | null>(null);
+  const [consultandoErpCompra, setConsultandoErpCompra] = useState(false);
+  const [msgErpCompra, setMsgErpCompra] = useState<{ ok: boolean; texto: string } | null>(null);
   const [preparandoSelagem, setPreparandoSelagem] = useState(false);
   const [enviandoSelagem, setEnviandoSelagem] = useState(false);
   const [previewSelagem, setPreviewSelagem] = useState<TramitaSelagemPreview | null>(null);
@@ -8729,6 +8736,19 @@ function DetalheNota({
     setMsgRecebimento({ ok: res.success, texto: res.message });
     setConsultandoRecebimento(false);
     if (res.success) {
+      const atualizada = await obterNotaPorId(nota.id);
+      if (atualizada) onNotaAtualizada(atualizada);
+    }
+  }
+
+  async function handleConsultarErpCompra() {
+    setConsultandoErpCompra(true);
+    setMsgErpCompra(null);
+    const res = await consultarNotaCompraErp(nota.id);
+    setMsgErpCompra({ ok: res.success, texto: res.message });
+    setConsultandoErpCompra(false);
+    if (res.success) {
+      if (res.etiqueta !== null) setTagsOtimizadas(parseEtiquetas(res.etiqueta));
       const atualizada = await obterNotaPorId(nota.id);
       if (atualizada) onNotaAtualizada(atualizada);
     }
@@ -9147,6 +9167,27 @@ function DetalheNota({
               {msgRecebimento && (
                 <p className={`mt-2 rounded-lg px-3 py-2 text-sm ${msgRecebimento.ok ? 'bg-white/80 text-emerald-800' : 'bg-red-50 text-red-700'}`}>
                   {msgRecebimento.texto}
+                </p>
+              )}
+            </div>
+            <div className="mb-4 rounded-lg border border-sky-200 bg-sky-50 p-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="min-w-[220px] flex-1">
+                  <p className="text-xs font-bold uppercase tracking-wide text-sky-800">ERP Varejo Facil</p>
+                  <p className="mt-1 text-xs text-sky-800">Consulta a NF de compra no Newshop pela chave de acesso.</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleConsultarErpCompra}
+                  disabled={consultandoErpCompra}
+                  className="rounded-lg bg-sky-700 px-4 py-2 text-sm font-bold text-white hover:bg-sky-800 disabled:opacity-50"
+                >
+                  {consultandoErpCompra ? 'Consultando...' : 'Consultar ERP'}
+                </button>
+              </div>
+              {msgErpCompra && (
+                <p className={`mt-2 rounded-lg px-3 py-2 text-sm ${msgErpCompra.ok ? 'bg-white/80 text-sky-800' : 'bg-red-50 text-red-700'}`}>
+                  {msgErpCompra.texto}
                 </p>
               )}
             </div>

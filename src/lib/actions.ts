@@ -81,6 +81,7 @@ import {
   type ConsultaStatusRecebimento,
 } from './nfStatusIntegration';
 export type { ConsultaStatusRecebimento } from './nfStatusIntegration';
+import { consultarNotaFiscalCompraErp } from './varejoFacilNotaCompra';
 import {
   NFSE_CNPJ_AUTORIZADO,
   limparCodigoFiscal,
@@ -107,6 +108,17 @@ export interface ActionResult {
   message: string;
   data?: string;
 }
+
+export type ConsultaNotaCompraErp = {
+  success: boolean;
+  found: boolean;
+  situacao: string | null;
+  etiqueta: string | null;
+  message: string;
+  numero: string | null;
+  serie: string | null;
+  fornecedor: string | null;
+};
 
 export type TramitaSelagemPreview = {
   ok: boolean;
@@ -4751,6 +4763,105 @@ export async function aplicarEtiquetasLote(notaIds: number[], etiquetas: string[
     return { success: true, message: `${tags.length} etiqueta(s) aplicada(s) em ${notas.length} nota(s).` };
   } catch (error: unknown) {
     return { success: false, message: `Erro ao aplicar etiquetas em lote: ${(error as Error).message}` };
+  }
+}
+
+const ETIQUETAS_STATUS_ERP_COMPRA = ['Efetivada', 'Pendente a Entrega', 'Inconsistente', 'Recusada'];
+
+function etiquetaStatusErpCompra(situacao: string | null): string | null {
+  const status = situacao?.trim().toUpperCase();
+  if (status === 'EFETIVADA') return 'Efetivada';
+  if (status === 'PENDENTE' || status === 'PENDENTE_ENTREGA') return 'Pendente a Entrega';
+  if (status === 'INCONSISTENTE') return 'Inconsistente';
+  if (status === 'RECUSADA') return 'Recusada';
+  return null;
+}
+
+function empresaErpCompraPorCnpj(cnpj: string | null | undefined, razaoSocial?: string | null): string {
+  const raiz = String(cnpj ?? '').replace(/\D/g, '').slice(0, 8);
+  const nome = String(razaoSocial ?? '').toUpperCase();
+  if (raiz === '50767035') return 'FACIL';
+  if (raiz === '62803717') return 'SOYE';
+  if (nome.includes('SEFULY')) return 'SEFULY';
+  return 'NEWSHOP';
+}
+
+function atualizarEtiquetaStatusErpCompra(etiquetaAtual: string | null | undefined, etiquetaErp: string): string {
+  const tags = (etiquetaAtual ?? '')
+    .split(',')
+    .map((tag) => tag.trim())
+    .filter((tag) => tag && !ETIQUETAS_STATUS_ERP_COMPRA.includes(tag));
+  if (!tags.includes(etiquetaErp)) tags.push(etiquetaErp);
+  return tags.join(',');
+}
+
+export async function consultarNotaCompraErp(notaId: number): Promise<ConsultaNotaCompraErp> {
+  const usuario = await exigirUsuario();
+  const id = Number(notaId);
+  if (!Number.isFinite(id) || id <= 0) {
+    return { success: false, found: false, situacao: null, etiqueta: null, message: 'Nota invalida.', numero: null, serie: null, fornecedor: null };
+  }
+
+  const nota = await prisma.notaFiscal.findUnique({
+    where: { id },
+    select: {
+      id: true,
+      cnpjId: true,
+      chave: true,
+      etiqueta: true,
+      cnpj: { select: { cnpj: true, razaoSocial: true } },
+    },
+  });
+  if (!nota || !usuarioPodeAcessarCnpj(usuario, nota.cnpjId)) {
+    return { success: false, found: false, situacao: null, etiqueta: null, message: 'Nota nao encontrada.', numero: null, serie: null, fornecedor: null };
+  }
+
+  try {
+    const empresaErp = empresaErpCompraPorCnpj(nota.cnpj.cnpj, nota.cnpj.razaoSocial);
+    const resultado = await consultarNotaFiscalCompraErp(nota.chave, empresaErp);
+    if (!resultado.found) {
+      return { success: true, found: false, situacao: null, etiqueta: nota.etiqueta, message: 'NF nao encontrada no ERP.', numero: null, serie: null, fornecedor: null };
+    }
+
+    const situacao = resultado.nota.situacao;
+    const etiquetaErp = etiquetaStatusErpCompra(situacao);
+    let etiqueta = nota.etiqueta;
+    if (etiquetaErp) {
+      etiqueta = atualizarEtiquetaStatusErpCompra(nota.etiqueta, etiquetaErp);
+      await prisma.notaFiscal.update({
+        where: { id: nota.id },
+        data: { etiqueta },
+      });
+      revalidatePath('/');
+    }
+
+    const numero = resultado.nota.numero;
+    const serie = resultado.nota.serie;
+    const fornecedor = resultado.nota.fornecedor;
+    const referencia = `NF ${numero || '-'} / Serie ${serie || '-'}`;
+    const complemento = fornecedor ? ` - ${fornecedor}` : '';
+    const marcada = etiquetaErp ? ` Etiqueta ${etiquetaErp} aplicada.` : '';
+    return {
+      success: true,
+      found: true,
+      situacao,
+      etiqueta,
+      message: `ERP: ${referencia} - situacao ${situacao || 'sem situacao'}${complemento}.${marcada}`,
+      numero,
+      serie,
+      fornecedor,
+    };
+  } catch (error: unknown) {
+    return {
+      success: false,
+      found: false,
+      situacao: null,
+      etiqueta: nota.etiqueta,
+      message: (error as Error).message || 'Erro ao consultar NF no ERP.',
+      numero: null,
+      serie: null,
+      fornecedor: null,
+    };
   }
 }
 

@@ -1,0 +1,11 @@
+chave,numero_nf,erro
+35260721101478000188550010000856721524285020,85672,"
+Invalid `prisma.notaFiscal.create()` invocation:
+
+
+The column `conferenciaDivergencia` does not exist in the current database."
+35231219712500000184550010000031281111242309,3128,"
+Invalid `prisma.notaFiscal.create()` invocation:
+
+
+The column `conferenciaDivergencia` does not exist in the current database."
