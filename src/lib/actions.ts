@@ -82,6 +82,7 @@ import {
 } from './nfStatusIntegration';
 export type { ConsultaStatusRecebimento } from './nfStatusIntegration';
 import { consultarNotaFiscalCompraErp } from './varejoFacilNotaCompra';
+import { verificarTipoOperacaoErp } from './erpRegrasConferencia';
 import {
   NFSE_CNPJ_AUTORIZADO,
   limparCodigoFiscal,
@@ -118,6 +119,8 @@ export type ConsultaNotaCompraErp = {
   numero: string | null;
   serie: string | null;
   fornecedor: string | null;
+  tipoOperacao: string | null;
+  tipoOperacaoDivergente: boolean;
 };
 
 export type TramitaSelagemPreview = {
@@ -4850,7 +4853,7 @@ export async function consultarNotaCompraErp(notaId: number): Promise<ConsultaNo
   const usuario = await exigirUsuario();
   const id = Number(notaId);
   if (!Number.isFinite(id) || id <= 0) {
-    return { success: false, found: false, situacao: null, etiqueta: null, message: 'Nota invalida.', numero: null, serie: null, fornecedor: null };
+    return { success: false, found: false, situacao: null, etiqueta: null, message: 'Nota invalida.', numero: null, serie: null, fornecedor: null, tipoOperacao: null, tipoOperacaoDivergente: false };
   }
 
   const nota = await prisma.notaFiscal.findUnique({
@@ -4864,14 +4867,14 @@ export async function consultarNotaCompraErp(notaId: number): Promise<ConsultaNo
     },
   });
   if (!nota || !usuarioPodeAcessarCnpj(usuario, nota.cnpjId)) {
-    return { success: false, found: false, situacao: null, etiqueta: null, message: 'Nota nao encontrada.', numero: null, serie: null, fornecedor: null };
+    return { success: false, found: false, situacao: null, etiqueta: null, message: 'Nota nao encontrada.', numero: null, serie: null, fornecedor: null, tipoOperacao: null, tipoOperacaoDivergente: false };
   }
 
   try {
     const empresaErp = empresaErpCompraPorCnpj(nota.cnpj.cnpj, nota.cnpj.razaoSocial);
     const resultado = await consultarNotaFiscalCompraErp(nota.chave, empresaErp);
     if (!resultado.found) {
-      return { success: true, found: false, situacao: null, etiqueta: nota.etiqueta, message: 'NF nao encontrada no ERP.', numero: null, serie: null, fornecedor: null };
+      return { success: true, found: false, situacao: null, etiqueta: nota.etiqueta, message: 'NF nao encontrada no ERP.', numero: null, serie: null, fornecedor: null, tipoOperacao: null, tipoOperacaoDivergente: false };
     }
 
     const situacao = resultado.nota.situacao;
@@ -4889,18 +4892,23 @@ export async function consultarNotaCompraErp(notaId: number): Promise<ConsultaNo
     const numero = resultado.nota.numero;
     const serie = resultado.nota.serie;
     const fornecedor = resultado.nota.fornecedor;
+    const tipoOperacao = resultado.nota.tipoOperacao;
+    const verificacaoTipoOperacao = verificarTipoOperacaoErp(fornecedor, tipoOperacao);
     const referencia = `NF ${numero || '-'} / Serie ${serie || '-'}`;
     const complemento = fornecedor ? ` - ${fornecedor}` : '';
     const marcada = etiquetaErp ? ` Etiqueta ${etiquetaErp} aplicada.` : '';
+    const aviso = verificacaoTipoOperacao.aviso ? ` ATENCAO: ${verificacaoTipoOperacao.aviso}` : '';
     return {
       success: true,
       found: true,
       situacao,
       etiqueta,
-      message: `ERP: ${referencia} - situacao ${situacao || 'sem situacao'}${complemento}.${marcada}`,
+      message: `ERP: ${referencia} - situacao ${situacao || 'sem situacao'}${complemento}.${marcada}${aviso}`,
       numero,
       serie,
       fornecedor,
+      tipoOperacao,
+      tipoOperacaoDivergente: verificacaoTipoOperacao.divergente,
     };
   } catch (error: unknown) {
     return {
@@ -4912,6 +4920,8 @@ export async function consultarNotaCompraErp(notaId: number): Promise<ConsultaNo
       numero: null,
       serie: null,
       fornecedor: null,
+      tipoOperacao: null,
+      tipoOperacaoDivergente: false,
     };
   }
 }
