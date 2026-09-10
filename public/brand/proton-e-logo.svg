@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 170" role="img" aria-labelledby="title desc">
+  <title id="title">Proton-e</title>
+  <desc id="desc">Proton-e logo with atom mark and wordmark</desc>
+  <g transform="translate(-105.4 -83) scale(0.35)" fill="none" stroke="#000" stroke-linecap="round">
+    <g stroke-width="22">
+      <ellipse cx="600" cy="480" rx="285" ry="125" transform="rotate(-34 600 480)"/>
+      <ellipse cx="600" cy="480" rx="285" ry="125" transform="rotate(34 600 480)"/>
+    </g>
+    <circle cx="600" cy="480" r="42" fill="#000" stroke="none"/>
+    <circle cx="825" cy="335" r="27" fill="#000" stroke="none"/>
+  </g>
+  <text x="205" y="109" font-family="Arial, Helvetica, sans-serif" font-size="76" font-weight="700" letter-spacing="1" fill="#000">PROTON-<tspan font-weight="400">e</tspan></text>
+</svg>

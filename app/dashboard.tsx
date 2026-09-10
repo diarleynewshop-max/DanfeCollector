@@ -2514,8 +2514,8 @@ export default function Dashboard({
         <header className="rounded-xl bg-[var(--surface)] border border-[var(--border)] px-3.5 sm:px-5 py-3 sm:py-3.5 mb-3 sm:mb-4 shadow-sm flex justify-between items-center relative">
           <div className="flex min-w-0 items-center">
             <Image
-              src="/brand/danfe-collect-logo.svg"
-              alt="Danfe Collect"
+              src="/brand/proton-e-logo.svg"
+              alt="Proton-e"
               width={720}
               height={170}
               priority
@@ -5431,7 +5431,7 @@ export default function Dashboard({
         )}
 
         <p className="text-center text-xs text-[var(--ink-mut)] mt-8">
-          Danfe Collect - Gestao digital de documentos fiscais
+          Proton-e - Gestao digital de documentos fiscais
         </p>
       </div>
     </div>

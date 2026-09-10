@@ -14,14 +14,14 @@ export default async function LoginPage() {
       <div className="w-full max-w-md rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-6 shadow-sm">
         <div className="mb-6">
           <Image
-            src="/brand/danfe-collect-logo-tagline.svg"
-            alt="Danfe Collect"
+            src="/brand/proton-e-logo-tagline.svg"
+            alt="Proton-e"
             width={720}
             height={205}
             priority
             className="h-auto w-full"
           />
-          <h1 className="sr-only">Danfe Collect</h1>
+          <h1 className="sr-only">Proton-e</h1>
           <p className="mt-4 text-sm text-[var(--ink-mut)]">Acesse com seu usuario.</p>
         </div>
         <LoginForm />

@@ -94,7 +94,7 @@ export default function ApiDocsPage() {
     <main className="min-h-screen bg-[var(--ground)] px-4 py-6">
       <div className="mx-auto max-w-5xl space-y-4">
         <header className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-5 shadow-sm">
-          <p className="text-xs font-bold uppercase tracking-wide text-[var(--ink-mut)]">DanfeCollector</p>
+          <p className="text-xs font-bold uppercase tracking-wide text-[var(--ink-mut)]">Proton-e</p>
           <h1 className="mt-1 text-2xl font-black text-[var(--ink)]">Documentacao da API</h1>
           <p className="mt-2 max-w-3xl text-sm text-[var(--ink-mut)]">
             Use esta API para consultar nota fiscal, status, XML, ICMS/SITRAM, DAE, itens ST/ANTC e IE de fornecedor por chave de acesso.
@@ -119,7 +119,7 @@ GET /api/v1/notas/{chave}?tributoItem=ST`}</BlocoCodigo>
         </Secao>
 
         <Secao titulo="Baixar XML direto">
-          <p>Retorna o XML autorizado quando a nota estiver completa no DanfeCollector.</p>
+          <p>Retorna o XML autorizado quando a nota estiver completa no Proton-e.</p>
           <BlocoCodigo>{`GET /api/v1/notas/{chave}/xml`}</BlocoCodigo>
         </Secao>
 
