@@ -95,6 +95,10 @@ import {
   type FiltroTransferenciaNewshop,
 } from '@/lib/notasNewshop';
 import {
+  notaEhRedFlagDevolucaoFornecedor,
+  REDFLAG_DEVOLUCAO_FORNECEDOR_MENSAGEM,
+} from '@/lib/notasRedFlag';
+import {
   nomeEmpresaCurta,
   nomeEmpresaRelatorioPorRaiz,
   nomeGrupoEmpresa,
@@ -147,7 +151,7 @@ type NotaComCnpj = NotaFiscal & {
 };
 type CnpjComContagem = Cnpj & { _count: { notas: number; ctes: number } };
 type FiltroDaeSitram = 'todos' | 'consultado' | 'sem-consulta' | 'com-dae' | 'a-pagar' | 'em-aberto' | 'pago' | 'duplicidade' | 'sem-dae' | 'nao-encontrada';
-type FiltroSituacaoNota = 'inconsistente' | 'efetivada' | 'denegada' | 'pendente-conferencia' | 'com-erro' | 'pendente-recepcao' | 'cancelada' | 'pendente';
+type FiltroSituacaoNota = 'inconsistente' | 'efetivada' | 'denegada' | 'pendente-conferencia' | 'com-erro' | 'pendente-recepcao' | 'cancelada' | 'pendente' | 'redflag';
 type FiltroOrigemNota = 'proprio' | 'terceiro';
 type FiltroManifestoNota = 'manifestada' | 'nao-manifestada' | 'pendente-processando' | 'com-erros';
 type FiltroModalidadeNota = 'simplificada' | 'estorno' | 'devolucao' | 'transferencia' | 'normal' | 'ajuste-icms';
@@ -252,6 +256,7 @@ const DAE_RELATORIO_OPCOES = [
 const RELATORIO_CAMPO_CONTROLE = 'mt-1 h-9 rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 text-sm text-[var(--ink)] outline-none';
 const RELATORIO_BOTAO_ACAO = 'inline-flex h-9 items-center justify-center rounded-lg px-4 text-sm transition';
 const SITUACOES_NOTA_OPCOES: Array<{ valor: FiltroSituacaoNota; label: string }> = [
+  { valor: 'redflag', label: 'RED FLAG - Devolucao do fornecedor' },
   { valor: 'inconsistente', label: 'Inconsistente' },
   { valor: 'efetivada', label: 'Efetivada' },
   { valor: 'denegada', label: 'Denegada' },
@@ -1530,6 +1535,14 @@ export default function Dashboard({
     setStatus({ success: true, message: 'Busca/filtros aplicados.' });
   }
 
+  function filtrarRedFlagNotas() {
+    const situacoes: FiltroSituacaoNota[] = ['redflag'];
+    setMostrarFiltros(true);
+    setModoFiltroNotas('avancado');
+    setFiltroSituacoes(situacoes);
+    void aplicarFiltrosNotas({ situacoes });
+  }
+
   function filtrarErroImportacaoNotas() {
     const situacoes: FiltroSituacaoNota[] = ['com-erro'];
     setMostrarFiltros(true);
@@ -1955,6 +1968,7 @@ export default function Dashboard({
         if (n.status === 'RESUMO' && n.manifestadaEm) situacoes.push('pendente-recepcao');
         if (situacaoSefaz === 'CANCELADA') situacoes.push('cancelada');
         if (n.status === 'RESUMO') situacoes.push('pendente');
+        if (notaEhRedFlagDevolucaoFornecedor(n)) situacoes.push('redflag');
         if (!filtroSituacoesBusca.some((situacao) => situacoes.includes(situacao))) return false;
       }
 
@@ -2127,6 +2141,11 @@ export default function Dashboard({
 
     return { daeAbertos, daeVencidos, empresasAtivas, empresasComAtencao, ultimaSincronizacao };
   }, [cnpjs, notasAlerta]);
+
+  const redFlagCount = useMemo(
+    () => notas.filter((nota) => notaEhRedFlagDevolucaoFornecedor(nota)).length,
+    [notas]
+  );
 
   const notasRecentesHome = useMemo(
     () => [...notas].sort((a, b) => new Date(b.emitidaEm).getTime() - new Date(a.emitidaEm).getTime()).slice(0, 5),
@@ -2884,6 +2903,7 @@ export default function Dashboard({
                   <span className="rounded-full bg-[var(--surface-2)] px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-[var(--ink-mut)]">Agora</span>
                 </div>
                 <div className="space-y-2">
+                  <HomePendencia titulo="RED FLAG: Devolução do fornecedor" detalhe="Fornecedor emitiu nota de entrada/devolução em nome da empresa (proibido)" valor={redFlagCount} tone="red" onClick={filtrarRedFlagNotas} />
                   <HomePendencia titulo="Manifestações pendentes" detalhe="Resumos sem ciência da operação" valor={resumoInicio.pendentesManifestacao} tone="amber" onClick={() => setSecaoAtual('notas')} />
                   <HomePendencia titulo="XML completo pendente" detalhe="Notas que ainda estão apenas como resumo" valor={Math.max(0, resumoInicio.totalNotas - resumoInicio.notasCompletas)} tone="amber" onClick={() => abrirFilaNotasHome({ status: 'RESUMO' })} />
                   <HomePendencia titulo="DAE em aberto ou a gerar" detalhe="Notas consultadas no SITRAM" valor={resumoOperacionalHome.daeAbertos} tone="red" onClick={() => setSecaoAtual('notas')} />
@@ -8573,6 +8593,7 @@ function MobileCardNota({
 
           {nota.situacaoSefaz === 'CANCELADA' && <Badge tone="orange">CANCELADA</Badge>}
           {nota.conferenciaDivergencia && <Badge tone="red">Divergência</Badge>}
+          {notaEhRedFlagDevolucaoFornecedor(nota) && <Badge tone="red">RED FLAG</Badge>}
 
           {tags.slice(0, 2).map((tag) => (
             <Badge key={tag} tone="indigo">{tag}</Badge>
@@ -8744,6 +8765,7 @@ function CompactFragmentNota({
             {nota.conferenciaTipo && <Badge tone="sky">{nota.conferenciaTipo}</Badge>}
             {nota.conferenciaStatus && <Badge tone={nota.conferenciaDivergencia ? 'red' : 'indigo'}>{nota.conferenciaStatus}</Badge>}
             {nota.conferenciaDivergencia && <Badge tone="red">Divergencia</Badge>}
+            {notaEhRedFlagDevolucaoFornecedor(nota) && <Badge tone="red">RED FLAG</Badge>}
             {tags.slice(0, 2).map((tag) => <Badge key={tag} tone="indigo">{tag}</Badge>)}
             {tags.length > 2 && <Badge tone="gray">+{tags.length - 2}</Badge>}
           </div>
@@ -8845,6 +8867,7 @@ function FragmentNota({
             {nota.recebimentoStatus && (
               <Badge tone={toneRecebimentoStatus(nota.recebimentoStatus)}>{nota.recebimentoStatus}</Badge>
             )}
+            {notaEhRedFlagDevolucaoFornecedor(nota) && <Badge tone="red">RED FLAG</Badge>}
           </div>
         </td>
         <td className="py-3">
@@ -9531,6 +9554,15 @@ function DetalheNota({
                 </p>
               )}
             </div>
+            {notaEhRedFlagDevolucaoFornecedor(nota) && (
+              <div className="mb-4 rounded-lg border border-red-300 bg-red-50 p-3 text-red-900">
+                <div className="mb-1 flex flex-wrap items-center gap-2">
+                  <Badge tone="red">RED FLAG</Badge>
+                  <p className="text-xs font-bold uppercase tracking-wide">Devolução emitida pelo fornecedor</p>
+                </div>
+                <p className="text-sm">{REDFLAG_DEVOLUCAO_FORNECEDOR_MENSAGEM}</p>
+              </div>
+            )}
             {(nota.conferenciaTipo || nota.conferenciaStatus || nota.conferenciaObservacao || nota.conferenciaFonte) && (
               <div className={`mb-4 rounded-lg border p-3 ${nota.conferenciaDivergencia ? 'border-red-200 bg-red-50' : 'border-indigo-200 bg-indigo-50'}`}>
                 <div className="mb-2 flex flex-wrap items-center gap-2">
