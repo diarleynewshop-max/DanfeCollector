@@ -91,6 +91,36 @@ const exemploHexonStatus = `curl -X POST "https://seu-dominio.com/api/v1/integra
   "message": "Status atualizado para CONCLUIDO RECEBIMENTO."
 }`;
 
+const exemploListaCte = `curl -H "Authorization: Bearer SUA_CHAVE_API" \\
+  "https://seu-dominio.com/api/v1/ctes?cnpj=00000000000000&inicio=2026-09-01"
+
+# Resposta 200
+{
+  "success": true,
+  "paginacao": { "pagina": 1, "limite": 50, "total": 1, "totalPaginas": 1 },
+  "data": [
+    {
+      "chave": "23260900000000000000570010000000011000000010",
+      "numero": "1",
+      "status": "COMPLETO",
+      "situacaoSefaz": "AUTORIZADO",
+      "emitidaEm": "2026-09-10T13:00:00.000Z",
+      "empresa": { "cnpj": "00000000000000", "razaoSocial": "EMPRESA LTDA" },
+      "emitente": { "nome": "TRANSPORTADORA LTDA", "cnpj": "11111111111111", "ie": "000000000", "uf": "CE" },
+      "tomador": { "nome": "EMPRESA LTDA", "cnpj": "00000000000000" },
+      "valores": { "total": 350.5, "prestacao": 350.5, "carga": 12000 },
+      "notasVinculadas": [{ "chave": "2326...", "numero": "123", "encontrada": true }],
+      "xmlDisponivel": true,
+      "links": {
+        "consulta": "https://seu-dominio.com/api/v1/ctes/CHAVE_CTE",
+        "xml": "https://seu-dominio.com/api/v1/ctes/CHAVE_CTE/xml",
+        "dacte": "https://seu-dominio.com/api/v1/ctes/CHAVE_CTE/dacte",
+        "dacteImpressao": "https://seu-dominio.com/dacte/CHAVE_CTE"
+      }
+    }
+  ]
+}`;
+
 function BlocoCodigo({ children }: { children: string }) {
   return (
     <pre className="overflow-x-auto rounded-lg border border-[var(--border)] bg-[#1c1813] p-4 text-xs leading-relaxed text-white">
@@ -140,6 +170,42 @@ GET /api/v1/notas/{chave}?tributoItem=ST`}</BlocoCodigo>
         <Secao titulo="Baixar XML direto">
           <p>Retorna o XML autorizado quando a nota estiver completa no Proton-e.</p>
           <BlocoCodigo>{`GET /api/v1/notas/{chave}/xml`}</BlocoCodigo>
+        </Secao>
+
+        <Secao titulo="Listar CT-e (filtro por CNPJ)">
+          <p>Lista os CT-e captados, do mais recente para o mais antigo, com paginacao. Todos os filtros sao opcionais e podem ser combinados.</p>
+          <BlocoCodigo>{`GET /api/v1/ctes?cnpj=00000000000000&inicio=2026-09-01&fim=2026-09-30&pagina=1&limite=50`}</BlocoCodigo>
+          <div className="overflow-x-auto rounded-xl border border-[var(--border)]">
+            <table className="w-full text-left text-sm">
+              <thead className="bg-[var(--surface-2)] text-xs uppercase text-[var(--ink-mut)]">
+                <tr>
+                  <th className="px-3 py-2 font-bold">Parametro</th>
+                  <th className="px-3 py-2 font-bold">Descricao</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[var(--border)]">
+                <tr><td className="px-3 py-2 font-mono font-bold">cnpj</td><td className="px-3 py-2">CNPJ da empresa cadastrada no Proton-e (14 digitos, com ou sem mascara).</td></tr>
+                <tr><td className="px-3 py-2 font-mono font-bold">emitenteCnpj, tomadorCnpj, remetenteCnpj, destinatarioCnpj</td><td className="px-3 py-2">CNPJ exato da transportadora, tomador, remetente ou destinatario.</td></tr>
+                <tr><td className="px-3 py-2 font-mono font-bold">inicio, fim</td><td className="px-3 py-2">Periodo de emissao no formato AAAA-MM-DD (horario de Brasilia).</td></tr>
+                <tr><td className="px-3 py-2 font-mono font-bold">status</td><td className="px-3 py-2">RESUMO ou COMPLETO (COMPLETO tem XML e DACTE).</td></tr>
+                <tr><td className="px-3 py-2 font-mono font-bold">situacao</td><td className="px-3 py-2">AUTORIZADO, CANCELADO ou DENEGADO.</td></tr>
+                <tr><td className="px-3 py-2 font-mono font-bold">nfe</td><td className="px-3 py-2">Chave (44 digitos) de NF-e vinculada ao CT-e.</td></tr>
+                <tr><td className="px-3 py-2 font-mono font-bold">pagina, limite</td><td className="px-3 py-2">Paginacao. Padrao pagina=1 e limite=50; limite maximo 200.</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <BlocoCodigo>{exemploListaCte}</BlocoCodigo>
+        </Secao>
+
+        <Secao titulo="Consultar CT-e, XML e DACTE">
+          <p>Consulta um CT-e pela chave de acesso. Use <strong>?xml=1</strong> para incluir o XML no JSON.</p>
+          <BlocoCodigo>{`GET /api/v1/ctes/{chave}
+GET /api/v1/ctes/{chave}?xml=1`}</BlocoCodigo>
+          <p>XML autorizado do CT-e (somente status COMPLETO):</p>
+          <BlocoCodigo>{`GET /api/v1/ctes/{chave}/xml`}</BlocoCodigo>
+          <p>Dados completos do DACTE em JSON: modal, percurso, protocolo, emitente, remetente, destinatario, expedidor, recebedor, tomador, componentes da prestacao, ICMS, carga, NF-e vinculadas e observacoes.</p>
+          <BlocoCodigo>{`GET /api/v1/ctes/{chave}/dacte`}</BlocoCodigo>
+          <p>O link <strong>links.dacteImpressao</strong> abre o DACTE para impressao e exige login no Proton-e.</p>
         </Secao>
 
         <Secao titulo="Consultar IE de fornecedor">
