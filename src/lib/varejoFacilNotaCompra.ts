@@ -104,7 +104,10 @@ async function obterCookieWeb(empresa: EmpresaErp): Promise<string> {
 
   const cacheKey = sessionCacheKey(empresa);
   const cached = webSessionCache.get(cacheKey);
-  if (cached) return cached;
+  if (cached) {
+    console.log(`[erp-debug] ${empresa}: usando cookie do cache (${cached.slice(-6)})`);
+    return cached;
+  }
 
   const baseUrl = webBaseUrl(empresa);
   const params = new URLSearchParams({ j_username: username, j_password: password });
@@ -132,6 +135,7 @@ async function obterCookieWeb(empresa: EmpresaErp): Promise<string> {
   }
 
   const cookie = `JSESSIONID=${match[1]}`;
+  console.log(`[erp-debug] ${empresa}: login OK http=${resposta.status} location=${location} cookie=...${match[1].slice(-6)} len=${match[1].length}`);
   webSessionCache.set(cacheKey, cookie);
   return cookie;
 }
@@ -206,6 +210,8 @@ export async function consultarNotaFiscalCompraErp(
     cache: 'no-store',
     signal: AbortSignal.timeout(30000),
   });
+
+  console.log(`[erp-debug] ${empresa}: pesquisa http=${resposta.status} cookieUsado=...${cookie.slice(-6)} url=${url.origin}${url.pathname}`);
 
   if ([301, 302, 303, 307, 308].includes(resposta.status)) {
     webSessionCache.delete(sessionCacheKey(empresa));
