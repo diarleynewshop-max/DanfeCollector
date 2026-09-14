@@ -135,6 +135,7 @@ import SitramItensView from './components/SitramItensView';
 import MapaBrasil, { nomeUf, type ValorUf } from './components/MapaBrasil';
 import FornecedorIeConsulta from './components/FornecedorIeConsulta';
 import CteConsulta from './components/CteConsulta';
+import SpedConsulta from './components/SpedConsulta';
 import { useIdioma } from '@/lib/i18n';
 
 type NotaComCnpj = NotaFiscal & {
@@ -156,7 +157,7 @@ type FiltroOrigemNota = 'proprio' | 'terceiro';
 type FiltroManifestoNota = 'manifestada' | 'nao-manifestada' | 'pendente-processando' | 'com-erros';
 type FiltroModalidadeNota = 'simplificada' | 'estorno' | 'devolucao' | 'transferencia' | 'normal' | 'ajuste-icms';
 type FiltroTributoItem = 'todos' | TipoTributoItemSitram;
-type SecaoApp = 'home' | 'notas' | 'relatorios' | 'nfse' | 'cte' | 'ie-fornecedor' | 'empresas' | 'usuarios' | 'configuracao';
+type SecaoApp = 'home' | 'notas' | 'relatorios' | 'nfse' | 'cte' | 'ie-fornecedor' | 'sped' | 'empresas' | 'usuarios' | 'configuracao';
 const NFSE_CNPJ_AUTORIZADO_DASHBOARD = '45998339000329';
 type ColunaRedimensionavel = 'nf' | 'emitente' | 'destinatario' | 'valores' | 'transporte' | 'sitram' | 'status';
 type ModalRelatorioTipo = 'ranking-uf' | 'detalhe-uf' | 'evolucao-mensal' | 'emitentes' | 'daes-pagos' | 'daes-nao-pagos' | 'daes-prioritarios' | 'pendencias';
@@ -2765,6 +2766,7 @@ export default function Dashboard({
             {cnpjNfseAutorizado && <SecaoBotao atual={secaoAtual} alvo="nfse" onClick={setSecaoAtual}>NFS-e</SecaoBotao>}
             <SecaoBotao atual={secaoAtual} alvo="cte" onClick={setSecaoAtual}>CT-e</SecaoBotao>
             <SecaoBotao atual={secaoAtual} alvo="ie-fornecedor" onClick={setSecaoAtual}>IE Fornecedor</SecaoBotao>
+            <SecaoBotao atual={secaoAtual} alvo="sped" onClick={setSecaoAtual}>SPED Fiscal</SecaoBotao>
             <SecaoBotao atual={secaoAtual} alvo="empresas" onClick={setSecaoAtual}>{t('companies')}</SecaoBotao>
             {podeAdministrar && <SecaoBotao atual={secaoAtual} alvo="usuarios" onClick={() => abrirUsuariosAdmin()}>{t('users')}</SecaoBotao>}
             {podeAdministrar && <SecaoBotao atual={secaoAtual} alvo="configuracao" onClick={setSecaoAtual}>{t('settings')}</SecaoBotao>}
@@ -3530,6 +3532,8 @@ export default function Dashboard({
         {secaoAtual === 'cte' && <CteConsulta cnpjs={cnpjs} />}
 
         {secaoAtual === 'ie-fornecedor' && <FornecedorIeConsulta />}
+
+        {secaoAtual === 'sped' && <SpedConsulta cnpjs={cnpjs} />}
 
         {podeAdministrar && secaoAtual === 'configuracao' && (
           <div className="mb-6 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-5 shadow-sm">

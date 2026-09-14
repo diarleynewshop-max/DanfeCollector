@@ -33,6 +33,7 @@ model Cnpj {
   notas        NotaFiscal[]
   ctes         ConhecimentoTransporte[]
   usuarios     UsuarioCnpj[]
+  spedsImportados SpedFiscalImportacao[]
 }
 
 model SyncWorkerStatus {
@@ -290,4 +291,67 @@ model ApiKey {
   criadaPor       Usuario?  @relation(fields: [criadaPorId], references: [id], onDelete: SetNull)
 
   @@index([ativo])
+}
+
+// ─── SPED Fiscal (EFD ICMS/IPI) — Confronto ────────────────────────────
+
+model SpedFiscalImportacao {
+  id                   Int       @id @default(autoincrement())
+  cnpjId               Int
+  cnpj                 Cnpj      @relation(fields: [cnpjId], references: [id])
+  periodo              String    // "2026-01" (YYYY-MM)
+  dtInicio             DateTime
+  dtFim                DateTime
+  finalidade           String    // "ORIGINAL" | "RETIFICADORA"
+  versaoLayout         String
+  arquivoNome          String
+  storageKey           String?
+  status               String    @default("IMPORTADO") // IMPORTADO | PROCESSANDO | CONFRONTADO | ERRO
+  totalRegistros       Int?
+  totalC100            Int?
+  totalC170            Int?
+  totalParticipantes   Int?
+  totalProdutos        Int?
+  resumoDivergencias   String?   // JSON: { total, porTipo: { cadastro: N, cfop: N, ... }, porSeveridade: { ... } }
+  erroMensagem         String?
+  importadoEm          DateTime  @default(now())
+  confrontadoEm        DateTime?
+  updatedAt            DateTime  @updatedAt
+
+  divergencias         SpedDivergencia[]
+
+  @@unique([cnpjId, periodo, finalidade])
+  @@index([cnpjId, periodo])
+  @@index([status])
+}
+
+model SpedDivergencia {
+  id                Int       @id @default(autoincrement())
+  importacaoId      Int
+  importacao        SpedFiscalImportacao @relation(fields: [importacaoId], references: [id], onDelete: Cascade)
+  tipo              String    // CADASTRO_CNPJ | CADASTRO_IE | CADASTRO_UF | CFOP | CST_ICMS | VALOR_ICMS | BASE_CALCULO | ALIQUOTA | VALOR_NF | CHAVE_INEXISTENTE | NF_AUSENTE_SPED | IE_DIVERGENTE | NCM_DIVERGENTE | VALOR_ST | VALOR_IPI | APURACAO | DEVOLUCAO_IRREGULAR | TIPO_OPERACAO | NF_CANCELADA | NF_DENEGADA | VALOR_FRETE | VALOR_DESCONTO | DATA_EMISSAO | QUANTIDADE | VALOR_UNITARIO | PIS_COFINS | ALIQUOTA_INTER | ST_SEM_DESTAQUE | CREDITO_INDEVIDO | SIMPLES_NACIONAL
+  severidade        String    // CRITICA | ALTA | MEDIA | BAIXA | INFO
+  codigoRegra       String    // R-CAD-01, R-DOC-01, R-ITEM-01, etc.
+  chaveNfe          String?   // chave 44 dígitos, quando aplicável
+  registroSped      String?   // "C100" | "C170" | "0150" etc.
+  linhaSped         Int?      // linha do arquivo onde o registro está
+  campo             String?   // nome do campo divergente (ex: "vICMS", "CFOP", "IE")
+  valorSped         String?   // valor que consta no SPED
+  valorDanfe        String?   // valor que consta no XML/DANFE
+  descricao         String    // descrição humana da divergência
+  participanteCod   String?   // código do participante no 0150
+  produtoCod        String?   // código do produto no 0200
+  fornecedorNome    String?   // nome do fornecedor (para facilitar filtros)
+  fornecedorCnpj    String?   // CNPJ do fornecedor
+  resolvida         Boolean   @default(false)
+  resolvidaEm       DateTime?
+  resolvidaPor      String?
+  observacao         String?   // nota do operador
+  createdAt         DateTime  @default(now())
+
+  @@index([importacaoId, tipo])
+  @@index([importacaoId, severidade])
+  @@index([importacaoId, resolvida])
+  @@index([chaveNfe])
+  @@index([fornecedorCnpj])
 }
