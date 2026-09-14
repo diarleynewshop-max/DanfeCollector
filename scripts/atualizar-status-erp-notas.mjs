@@ -126,12 +126,11 @@ function normalizarCookie(valor) {
 }
 
 async function obterCookieWeb(empresa) {
-  const configured = normalizarCookie(envErp(empresa, 'WEB_COOKIE') || envErp(empresa, 'SESSION_COOKIE'));
-  if (configured) return configured;
-
   const username = envErp(empresa, 'USERNAME');
   const password = envErp(empresa, 'PASSWORD');
   if (!username || !password) {
+    const configured = normalizarCookie(envErp(empresa, 'WEB_COOKIE') || envErp(empresa, 'SESSION_COOKIE'));
+    if (configured) return configured;
     throw new Error(`Credenciais ERP nao configuradas para ${empresa}.`);
   }
 

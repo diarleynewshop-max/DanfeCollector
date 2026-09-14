@@ -82,6 +82,9 @@ function webBaseUrl(empresa: EmpresaErp): string {
   return configurada.endsWith('/api') ? configurada.slice(0, -4) : configurada;
 }
 
+const USER_AGENT_BROWSER =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36';
+
 function sessionCacheKey(empresa: EmpresaErp): string {
   return `${empresa}:${webBaseUrl(empresa)}:${envErp(empresa, 'USERNAME')}`;
 }
@@ -92,21 +95,26 @@ function normalizarCookie(valor: string): string {
   return cookie.includes('=') ? cookie : `JSESSIONID=${cookie}`;
 }
 
-async function obterCookieWeb(empresa: EmpresaErp): Promise<string> {
-  const configurado = normalizarCookie(envErp(empresa, 'WEB_COOKIE') || envErp(empresa, 'SESSION_COOKIE'));
-  if (configurado) return configurado;
+async function obterCookieWeb(empresa: EmpresaErp, forcarNovo = false): Promise<string> {
+  const cacheKey = sessionCacheKey(empresa);
+
+  if (!forcarNovo) {
+    const cached = webSessionCache.get(cacheKey);
+    if (cached) {
+      console.log(`[erp-debug] ${empresa}: usando cookie do cache (${cached.slice(-6)})`);
+      return cached;
+    }
+  }
 
   const username = envErp(empresa, 'USERNAME');
   const password = envErp(empresa, 'PASSWORD');
-  if (!username || !password) {
-    throw new Error(`Credenciais ERP nao configuradas para ${empresa}. Configure ERP_WEB_COOKIE_${empresa} ou ERP_USERNAME_${empresa}/ERP_PASSWORD_${empresa}.`);
-  }
 
-  const cacheKey = sessionCacheKey(empresa);
-  const cached = webSessionCache.get(cacheKey);
-  if (cached) {
-    console.log(`[erp-debug] ${empresa}: usando cookie do cache (${cached.slice(-6)})`);
-    return cached;
+  if (!username || !password) {
+    const configurado = normalizarCookie(envErp(empresa, 'WEB_COOKIE') || envErp(empresa, 'SESSION_COOKIE'));
+    if (configurado) return configurado;
+    throw new Error(
+      `Credenciais ERP nao configuradas para ${empresa}. Configure ERP_USERNAME_${empresa}/ERP_PASSWORD_${empresa}.`
+    );
   }
 
   const baseUrl = webBaseUrl(empresa);
@@ -118,13 +126,18 @@ async function obterCookieWeb(empresa: EmpresaErp): Promise<string> {
       Accept: 'application/json, text/plain, */*',
       'Content-Type': 'application/x-www-form-urlencoded',
       Referer: `${baseUrl}/login`,
+      'User-Agent': USER_AGENT_BROWSER,
     },
     cache: 'no-store',
     signal: AbortSignal.timeout(30000),
   });
 
-  const setCookie = resposta.headers.get('set-cookie') || '';
-  const match = setCookie.match(/JSESSIONID=([^;]+)/);
+  const getSetCookieFn = (resposta.headers as unknown as { getSetCookie?: () => string[] }).getSetCookie;
+  const setCookieHeaders = typeof getSetCookieFn === 'function'
+    ? getSetCookieFn.call(resposta.headers)
+    : [resposta.headers.get('set-cookie') || ''];
+  const setCookieStr = setCookieHeaders.join('; ');
+  const match = setCookieStr.match(/JSESSIONID=([^;]+)/);
   if (!match?.[1]) {
     throw new Error(`ERP nao retornou sessao web para ${empresa} (HTTP ${resposta.status}).`);
   }
@@ -179,44 +192,62 @@ export async function consultarNotaFiscalCompraErp(
 
   const empresa = normalizarEmpresa(empresaInput);
   const baseUrl = webBaseUrl(empresa);
-  const cookie = await obterCookieWeb(empresa);
-  const url = new URL(`${baseUrl}/notaFiscalCompra/pesquisa`);
-  url.searchParams.set('filtro.notaFiscal.loja.codigo', '');
-  url.searchParams.set('filtro.notaFiscal.pessoa.codigo', '');
-  url.searchParams.set('filtro.intervaloEmissao.inicio', '');
-  url.searchParams.set('filtro.intervaloEmissao.termino', '');
-  url.searchParams.set('filtro.notaFiscal.chaveDaNfe', chaveLimpa);
-  url.searchParams.set('filtro.notaFiscal.serie', '');
-  url.searchParams.set('filtro.notaFiscal.numeroDoDocumento', '');
-  url.searchParams.set('filtro.intervaloEntrada.inicio', '');
-  url.searchParams.set('filtro.intervaloEntrada.termino', '');
-  url.searchParams.set('filtro.skipPagina', '0');
-  url.searchParams.set('filtro.pageSize', '10');
-  url.searchParams.set('filtro.totalPagina', '-1');
-  url.searchParams.set('filtro.ordem', 'DATADAEMISSAO');
-  url.searchParams.set('filtro.direcao', 'desc');
-  url.searchParams.set('_', String(Date.now()));
 
-  const resposta = await fetch(url, {
-    method: 'GET',
-    redirect: 'manual',
-    headers: {
-      Accept: 'application/json, text/javascript, */*; q=0.01',
-      'X-Requested-With': 'XMLHttpRequest',
-      Referer: `${baseUrl}/notaFiscalCompra/index`,
-      Cookie: cookie,
-      'User-Agent': 'DanfeCollector/1.0',
-    },
-    cache: 'no-store',
-    signal: AbortSignal.timeout(30000),
-  });
+  const executarRequisicaoPesquisa = async (cookieUsado: string) => {
+    const url = new URL(`${baseUrl}/notaFiscalCompra/pesquisa`);
+    url.searchParams.set('filtro.notaFiscal.loja.codigo', '');
+    url.searchParams.set('filtro.notaFiscal.pessoa.codigo', '');
+    url.searchParams.set('filtro.intervaloEmissao.inicio', '');
+    url.searchParams.set('filtro.intervaloEmissao.termino', '');
+    url.searchParams.set('filtro.notaFiscal.chaveDaNfe', chaveLimpa);
+    url.searchParams.set('filtro.notaFiscal.serie', '');
+    url.searchParams.set('filtro.notaFiscal.numeroDoDocumento', '');
+    url.searchParams.set('filtro.intervaloEntrada.inicio', '');
+    url.searchParams.set('filtro.intervaloEntrada.termino', '');
+    url.searchParams.set('filtro.skipPagina', '0');
+    url.searchParams.set('filtro.pageSize', '10');
+    url.searchParams.set('filtro.totalPagina', '-1');
+    url.searchParams.set('filtro.ordem', 'DATADAEMISSAO');
+    url.searchParams.set('filtro.direcao', 'desc');
+    url.searchParams.set('_', String(Date.now()));
 
-  console.log(`[erp-debug] ${empresa}: pesquisa http=${resposta.status} cookieUsado=...${cookie.slice(-6)} url=${url.origin}${url.pathname}`);
+    return fetch(url, {
+      method: 'GET',
+      redirect: 'manual',
+      headers: {
+        Accept: 'application/json, text/javascript, */*; q=0.01',
+        'X-Requested-With': 'XMLHttpRequest',
+        Referer: `${baseUrl}/notaFiscalCompra/index`,
+        Cookie: cookieUsado,
+        'User-Agent': USER_AGENT_BROWSER,
+      },
+      cache: 'no-store',
+      signal: AbortSignal.timeout(30000),
+    });
+  };
+
+  let cookie = await obterCookieWeb(empresa);
+  let resposta = await executarRequisicaoPesquisa(cookie);
+
+  console.log(`[erp-debug] ${empresa}: pesquisa http=${resposta.status} cookieUsado=...${cookie.slice(-6)}`);
+
+  // Se a sessao expirou (redirecionou para login), limpa o cache, reautentica e tenta mais uma vez
+  if ([301, 302, 303, 307, 308].includes(resposta.status)) {
+    webSessionCache.delete(sessionCacheKey(empresa));
+    console.log(`[erp-debug] ${empresa}: sessao expirada (HTTP ${resposta.status}), reautenticando...`);
+    try {
+      cookie = await obterCookieWeb(empresa, true);
+      resposta = await executarRequisicaoPesquisa(cookie);
+      console.log(`[erp-debug] ${empresa}: retry http=${resposta.status} cookieUsado=...${cookie.slice(-6)}`);
+    } catch (errAuth) {
+      console.error(`[erp-debug] ${empresa}: falha na reautenticacao:`, errAuth);
+    }
+  }
 
   if ([301, 302, 303, 307, 308].includes(resposta.status)) {
     webSessionCache.delete(sessionCacheKey(empresa));
     const destino = resposta.headers.get('location') || '';
-    throw new Error(`Sessao ERP expirada (HTTP ${resposta.status} para ${destino || 'destino desconhecido'}). Atualize o cookie ou credenciais.`);
+    throw new Error(`Sessao ERP expirada (HTTP ${resposta.status} para ${destino || 'destino desconhecido'}). Atualize as credenciais.`);
   }
 
   const body = await resposta.text();
