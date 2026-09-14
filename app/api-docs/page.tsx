@@ -72,6 +72,25 @@ const exemploFornecedorIe = `{
   }
 }`;
 
+const exemploHexonStatus = `curl -X POST "https://seu-dominio.com/api/v1/integracoes/hexon/status-nf" \\
+  -H "Authorization: Bearer SUA_CHAVE_API" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "chave": "23260700000000000000550010000000011000000010",
+    "status": "CONCLUIDO RECEBIMENTO",
+    "atualizadoEm": "2026-09-14T10:30:00-03:00",
+    "atualizadoPor": "joao.silva"
+  }'
+
+# Resposta 200
+{
+  "success": true,
+  "codigo": "ATUALIZADO",
+  "chave": "23260700000000000000550010000000011000000010",
+  "status": "CONCLUIDO RECEBIMENTO",
+  "message": "Status atualizado para CONCLUIDO RECEBIMENTO."
+}`;
+
 function BlocoCodigo({ children }: { children: string }) {
   return (
     <pre className="overflow-x-auto rounded-lg border border-[var(--border)] bg-[#1c1813] p-4 text-xs leading-relaxed text-white">
@@ -130,6 +149,15 @@ GET /api/v1/notas/{chave}?tributoItem=ST`}</BlocoCodigo>
           <BlocoCodigo>{`curl -H "Authorization: Bearer SUA_CHAVE_API" \\
   "https://seu-dominio.com/api/v1/fornecedor-ie?cnpj=14794749000162&uf=AC"`}</BlocoCodigo>
           <p>Status possiveis no campo <strong>data.ie.status</strong>: Contribuinte, Nao contribuinte, UF nao atendida pelo WebService, Sem IE retornada ou Nao consultado.</p>
+        </Secao>
+
+        <Secao titulo="Receber status da NF (Hexon → Proton-e)">
+          <p>Webhook: o Hexon envia o status da NF sempre que mudar. Use uma chave de API com o nome Hexon. Aceita nota unica ou lote com ate 100 notas em <strong>notas</strong>.</p>
+          <BlocoCodigo>{`POST /api/v1/integracoes/hexon/status-nf`}</BlocoCodigo>
+          <BlocoCodigo>{exemploHexonStatus}</BlocoCodigo>
+          <p>Obrigatorios: <strong>chave</strong> (44 digitos) e <strong>status</strong>. Envie <strong>atualizadoEm</strong> (ISO 8601) para que status antigos entregues fora de ordem sejam ignorados. Campo opcional omitido mantem o valor atual; <strong>null</strong> limpa.</p>
+          <p>Codigos em <strong>codigo</strong>: ATUALIZADO, SEM_ALTERACAO, IGNORADO_DESATUALIZADO (200) · INVALIDO (400) · NOTA_NAO_ENCONTRADA (404, reenviar depois) · LOTE_GRANDE (413). Em lote a resposta e 200 com o resultado por item em <strong>resultados</strong>.</p>
+          <p>Documentacao completa: docs/api-hexon-status-nf.md</p>
         </Secao>
 
         <Secao titulo="Codigos HTTP">

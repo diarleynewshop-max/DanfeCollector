@@ -101,7 +101,7 @@ function etiquetasSemStatusRecebimento(etiquetaAtual: string | null | undefined,
     .filter((tag) => tag && !remover.has(tag));
 }
 
-function etiquetaComStatusRecebimento(etiquetaAtual: string | null | undefined, statusAnterior: string | null | undefined, statusNovo: string | null): string | null {
+export function etiquetaComStatusRecebimento(etiquetaAtual: string | null | undefined, statusAnterior: string | null | undefined, statusNovo: string | null): string | null {
   const tags = etiquetasSemStatusRecebimento(etiquetaAtual, statusAnterior);
   if (statusNovo && !tags.includes(statusNovo)) tags.push(statusNovo);
   return tags.length > 0 ? tags.join(',') : null;
