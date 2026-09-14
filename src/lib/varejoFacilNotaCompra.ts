@@ -123,7 +123,12 @@ async function obterCookieWeb(empresa: EmpresaErp): Promise<string> {
   const setCookie = resposta.headers.get('set-cookie') || '';
   const match = setCookie.match(/JSESSIONID=([^;]+)/);
   if (!match?.[1]) {
-    throw new Error(`ERP nao retornou sessao web para ${empresa}.`);
+    throw new Error(`ERP nao retornou sessao web para ${empresa} (HTTP ${resposta.status}).`);
+  }
+
+  const location = resposta.headers.get('location') || '';
+  if (/\/login(\b|[/?#])/i.test(location)) {
+    throw new Error(`Login no ERP falhou para ${empresa}. Verifique usuario/senha (ERP_USERNAME_${empresa}/ERP_PASSWORD_${empresa}).`);
   }
 
   const cookie = `JSESSIONID=${match[1]}`;
@@ -204,7 +209,8 @@ export async function consultarNotaFiscalCompraErp(
 
   if ([301, 302, 303, 307, 308].includes(resposta.status)) {
     webSessionCache.delete(sessionCacheKey(empresa));
-    throw new Error('Sessao ERP expirada. Atualize o cookie ou credenciais.');
+    const destino = resposta.headers.get('location') || '';
+    throw new Error(`Sessao ERP expirada (HTTP ${resposta.status} para ${destino || 'destino desconhecido'}). Atualize o cookie ou credenciais.`);
   }
 
   const body = await resposta.text();

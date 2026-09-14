@@ -1,0 +1,27 @@
+{
+  "patterns": {},
+  "memories": [],
+  "trajectories": [],
+  "errors": {},
+  "file_sequences": [],
+  "agents": {},
+  "edges": [],
+  "stats": {
+    "total_patterns": 0,
+    "total_memories": 0,
+    "total_trajectories": 0,
+    "total_errors": 0,
+    "session_count": 0,
+    "last_session": 0
+  },
+  "activeTrajectories": {
+    "traj_1789395279860_ruhoajiuf": {
+      "id": "traj_1789395279860_ruhoajiuf",
+      "context": "20260914141439-login-no-erp-varejofacil-facil-p: Login no ERP VarejoFacil (FACIL) para diagnosticar erro de sessao expirada",
+      "agent": "browser-session",
+      "file": null,
+      "steps": [],
+      "startTime": 1789395279860
+    }
+  }
+}
