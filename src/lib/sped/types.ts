@@ -266,6 +266,8 @@ export interface SpedEstatisticasParsing {
   totalC170: number;
   totalC190: number;
   totalE110: number;
+  /** Quantidade de linhas por código de registro (inclusive os que não são interpretados) */
+  contagemRegistros: Record<string, number>;
   registrosDesconhecidos: string[];
   erros: SpedErroParsing[];
 }

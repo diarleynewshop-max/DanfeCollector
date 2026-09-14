@@ -141,55 +141,65 @@ export async function POST(req: Request) {
 
     if (dtInicio && dtFim) {
       try {
-        // Estende o final do dia para 23:59:59.999
-        const dtFimAjustada = new Date(dtFim);
-        dtFimAjustada.setHours(23, 59, 59, 999);
+        // Período no fuso do Ceará (UTC-3): 00:00 do 1º dia até 23:59:59.999 do último
+        const inicioUtc = new Date(Date.UTC(dtInicio.getFullYear(), dtInicio.getMonth(), dtInicio.getDate(), 3, 0, 0, 0));
+        const fimUtc = new Date(Date.UTC(dtFim.getFullYear(), dtFim.getMonth(), dtFim.getDate() + 1, 2, 59, 59, 999));
 
-        // Se encontrou a empresa, busca as notas dessa empresa ou todas no período
-        const whereClause: any = {
-          emitidaEm: {
-            gte: dtInicio,
-            lte: dtFimAjustada,
-          },
-        };
-
+        const periodoWhere: any = { emitidaEm: { gte: inicioUtc, lte: fimUtc } };
         if (empresaDb) {
-          whereClause.cnpjId = empresaDb.id;
+          periodoWhere.cnpjId = empresaDb.id;
         } else if (cnpjSpedLimpo) {
-          whereClause.OR = [
+          periodoWhere.OR = [
             { destCnpj: cnpjSpedLimpo },
             { emitenteCnpj: cnpjSpedLimpo },
           ];
         }
 
-        const notas = await prisma.notaFiscal.findMany({
-          where: whereClause,
-          select: {
-            chave: true,
-            numero: true,
-            serie: true,
-            emitidaEm: true,
-            tipoOperacao: true,
-            naturezaOp: true,
-            emitenteNome: true,
-            emitenteCnpj: true,
-            emitenteIe: true,
-            emitenteUf: true,
-            destNome: true,
-            destCnpj: true,
-            valorTotal: true,
-            valorProdutos: true,
-            valorFrete: true,
-            valorDesconto: true,
-            valorIcms: true,
-            status: true,
-            situacaoSefaz: true,
-            xmlPath: true,
-          },
-        });
+        // O SPED escritura compras pela data de ENTRADA: uma nota emitida em abril pode
+        // estar no SPED de agosto. Por isso as notas do SPED são buscadas também pela chave.
+        const chavesSped = Array.from(new Set(
+          spedParsed.notasFiscais
+            .map((c) => (c.chaveNfe ?? '').replace(/\D/g, ''))
+            .filter((c) => c.length === 44)
+        ));
+
+        const selectNota = {
+          chave: true,
+          numero: true,
+          serie: true,
+          emitidaEm: true,
+          tipoOperacao: true,
+          naturezaOp: true,
+          emitenteNome: true,
+          emitenteCnpj: true,
+          emitenteIe: true,
+          emitenteUf: true,
+          destNome: true,
+          destCnpj: true,
+          valorTotal: true,
+          valorProdutos: true,
+          valorFrete: true,
+          valorDesconto: true,
+          valorIcms: true,
+          status: true,
+          situacaoSefaz: true,
+          xmlPath: true,
+        } as const;
+
+        const [notasPeriodo, notasPorChave] = await Promise.all([
+          prisma.notaFiscal.findMany({ where: periodoWhere, select: selectNota }),
+          chavesSped.length > 0
+            ? prisma.notaFiscal.findMany({ where: { chave: { in: chavesSped } }, select: selectNota })
+            : Promise.resolve([]),
+        ]);
+
+        const chavesDoPeriodo = new Set(notasPeriodo.map((n) => n.chave));
+        const chavesSpedSet = new Set(chavesSped);
+        const notas = [...notasPeriodo, ...notasPorChave.filter((n) => !chavesDoPeriodo.has(n.chave))];
 
         for (const nf of notas) {
           notasMap.set(nf.chave, {
+            emitidaNoPeriodo: chavesDoPeriodo.has(nf.chave),
             chave: nf.chave,
             numero: nf.numero,
             serie: nf.serie,
@@ -211,8 +221,8 @@ export async function POST(req: Request) {
             situacaoSefaz: nf.situacaoSefaz,
           });
 
-          // Se tem arquivo XML local e é nota completa, tenta ler para cruzamento de itens
-          if (nf.xmlPath && fs.existsSync(nf.xmlPath)) {
+          // XML só é necessário para conferir os itens das notas que estão no SPED
+          if (chavesSpedSet.has(nf.chave) && nf.xmlPath && fs.existsSync(nf.xmlPath)) {
             try {
               const xmlContent = await fs.promises.readFile(nf.xmlPath, 'utf-8');
               xmlsPorChave.set(nf.chave, xmlContent);
@@ -237,6 +247,7 @@ export async function POST(req: Request) {
 
     // 5. Persistência opcional no banco (se empresaDb estiver disponível)
     let importacaoId: number | null = null;
+    const divergenciaIds: Array<number | null> = resultado.divergencias.map(() => null);
     if (empresaDb) {
       try {
         const finalidadeStr = abertura.codigoFinalidade === '1' ? 'RETIFICADORA' : 'ORIGINAL';
@@ -289,10 +300,11 @@ export async function POST(req: Request) {
         });
 
         if (resultado.divergencias.length > 0) {
-          // Lote de até 500 por createMany
+          // Lote de até 500; os IDs voltam para a tela poder marcar "resolvida" no banco
           const batchSize = 500;
           for (let i = 0; i < resultado.divergencias.length; i += batchSize) {
-            const batch = resultado.divergencias.slice(i, i + batchSize).map((d) => ({
+            const fatia = resultado.divergencias.slice(i, i + batchSize);
+            const batch = fatia.map((d) => ({
               importacaoId: importacao.id,
               tipo: d.tipo,
               severidade: d.severidade,
@@ -310,8 +322,15 @@ export async function POST(req: Request) {
               fornecedorCnpj: d.fornecedorCnpj || null,
             }));
 
-            await prisma.spedDivergencia.createMany({
+            const criadas = await prisma.spedDivergencia.createManyAndReturn({
               data: batch,
+              select: { id: true, codigoRegra: true, linhaSped: true, campo: true },
+            });
+            criadas.forEach((c, idx) => {
+              const d = fatia[idx];
+              if (d && d.codigoRegra === c.codigoRegra && (d.linhaSped || null) === c.linhaSped && (d.campo || null) === c.campo) {
+                divergenciaIds[i + idx] = c.id;
+              }
             });
           }
         }
@@ -338,7 +357,10 @@ export async function POST(req: Request) {
       },
       empresaVinculada: empresaDb,
       todasEmpresas,
-      resultado,
+      resultado: {
+        ...resultado,
+        divergencias: resultado.divergencias.map((d, idx) => ({ ...d, id: divergenciaIds[idx] })),
+      },
     });
   } catch (error: any) {
     console.error('[SPED Confronto] Erro geral:', error);

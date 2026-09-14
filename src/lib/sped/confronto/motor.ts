@@ -7,9 +7,10 @@
  */
 
 import type { SpedFiscalParsed, SpedRegistro0150, SpedRegistro0200 } from '../types';
-import { limparCnpjSped, periodoSped, dataSpedParaDate } from '../parser';
+import { SpedIndicadorOperacao } from '../types';
+import { limparCnpjSped, periodoSped } from '../parser';
 import { confrontarCadastros, type NotaDanfe, type ConsultaIeResult } from './cadastro';
-import { confrontarDocumentos, type NotaDanfeCompleta } from './documentos';
+import { confrontarDocumentos, tipoOperacaoNaVisaoDaEmpresa, type NotaDanfeCompleta } from './documentos';
 import { confrontarItens } from './itens';
 import { confrontarApuracao } from './apuracao';
 import { confrontarInteligente } from './inteligente';
@@ -61,7 +62,18 @@ export interface ResultadoConfronto {
   resumo: ResumoDivergencias;
   estatisticasSped: SpedFiscalParsed['estatisticas'];
   totalNotasSped: number;
+  /** Notas do Proton-e emitidas no período do SPED */
   totalNotasDanfe: number;
+  /** Quantas notas do SPED têm XML no Proton-e (independente da data de emissão) */
+  notasSpedEncontradas: number;
+  notasEntradaSped: number;
+  notasSaidaSped: number;
+  apuracao: {
+    debitos: number;
+    creditos: number;
+    icmsRecolher: number;
+    saldoCredorTransportar: number;
+  } | null;
   executadoEm: Date;
 }
 
@@ -158,17 +170,14 @@ export function executarConfronto(
   }
 
   // 4. Apuração
-  // Calcular totais de ICMS dos XMLs por tipo de operação
+  // ICMS dos XMLs de SAÍDA emitidos pela própria empresa no período (visão da empresa, não do tpNF)
   let totalIcmsXmlEntradas = 0;
   let totalIcmsXmlSaidas = 0;
   for (const nota of Array.from(dados.notas.values())) {
-    if (nota.valorIcms && nota.situacaoSefaz === 'AUTORIZADA') {
-      if (nota.tipoOperacao === 'Entrada') {
-        totalIcmsXmlEntradas += nota.valorIcms;
-      } else {
-        totalIcmsXmlSaidas += nota.valorIcms;
-      }
-    }
+    if (!nota.valorIcms || nota.situacaoSefaz !== 'AUTORIZADA' || nota.emitidaNoPeriodo === false) continue;
+    const tipo = tipoOperacaoNaVisaoDaEmpresa(nota, cnpjEmpresa);
+    if (tipo === 'Entrada') totalIcmsXmlEntradas += nota.valorIcms;
+    else if (tipo === 'Saída') totalIcmsXmlSaidas += nota.valorIcms;
   }
   const divApuracao = confrontarApuracao(sped, totalIcmsXmlEntradas, totalIcmsXmlSaidas);
   todas.push(...divApuracao);
@@ -180,6 +189,11 @@ export function executarConfronto(
   // Gerar resumo
   const resumo = gerarResumo(todas);
 
+  const chavesSped = sped.notasFiscais
+    .map((c) => (c.chaveNfe ?? '').replace(/\D/g, ''))
+    .filter((c) => c.length === 44);
+  const e110 = sped.apuracoesIcms[0];
+
   return {
     periodo,
     cnpjEmpresa,
@@ -188,7 +202,18 @@ export function executarConfronto(
     resumo,
     estatisticasSped: sped.estatisticas,
     totalNotasSped: sped.notasFiscais.length,
-    totalNotasDanfe: dados.notas.size,
+    totalNotasDanfe: Array.from(dados.notas.values()).filter((n) => n.emitidaNoPeriodo !== false).length,
+    notasSpedEncontradas: chavesSped.filter((c) => dados.notas.has(c)).length,
+    notasEntradaSped: sped.notasFiscais.filter((c) => c.indicadorOperacao === SpedIndicadorOperacao.ENTRADA).length,
+    notasSaidaSped: sped.notasFiscais.filter((c) => c.indicadorOperacao === SpedIndicadorOperacao.SAIDA).length,
+    apuracao: e110
+      ? {
+          debitos: e110.valorTotalDebitos,
+          creditos: e110.valorTotalCreditos,
+          icmsRecolher: e110.valorIcmsRecolher,
+          saldoCredorTransportar: e110.saldoCredorTransportar,
+        }
+      : null,
     executadoEm: new Date(),
   };
 }

@@ -133,26 +133,8 @@ export function confrontarCadastros(
     cnpjParticipantesUsados.add(cnpjPart);
     const notasDoFornecedor = notasPorEmitenteCnpj.get(cnpjPart) ?? [];
 
-    // R-CAD-01: Participante sem NF no DanfeCollector
-    // Verificar se alguma nota no SPED usa este participante
-    const usadoEmC100 = sped.notasFiscais.some(c => c.codigoParticipante === part.codigoParticipante);
-    if (usadoEmC100 && notasDoFornecedor.length === 0) {
-      divergencias.push({
-        codigoRegra: 'R-CAD-01',
-        tipo: 'CADASTRO_CNPJ',
-        severidade: 'MEDIA',
-        registroSped: '0150',
-        linhaSped: part.linha,
-        campo: 'CNPJ',
-        valorSped: cnpjPart,
-        valorDanfe: '(nenhuma NF encontrada)',
-        descricao: `Participante "${part.nome}" (${cnpjPart}) declarado no SPED e usado em NF, mas sem nenhuma NF-e correspondente no DanfeCollector. Pode ser nota não sincronizada ou cadastro fantasma.`,
-        participanteCod: part.codigoParticipante,
-        fornecedorNome: part.nome,
-        fornecedorCnpj: cnpjPart,
-      });
-    }
-
+    // R-CAD-01 (participante sem NF no DanfeCollector) foi removida: repetia, por fornecedor,
+    // o mesmo aviso que a R-DOC-01 já dá por nota.
     if (notasDoFornecedor.length === 0) continue;
     const primeiraNotaXml = notasDoFornecedor[0];
 

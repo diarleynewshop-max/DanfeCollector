@@ -2,11 +2,16 @@
  * Regras de confronto de DOCUMENTOS FISCAIS (Bloco C) — R-DOC-01 a R-DOC-15
  *
  * Cruza os registros C100 do SPED com as NotaFiscal do DanfeCollector.
+ *
+ * Atenção à "visão" de cada lado: o XML é escrito por quem EMITIU a nota,
+ * o SPED é escrito por quem ESCRITUROU. Numa compra (IND_EMIT = 1, terceiros)
+ * o XML diz "Saída" e traz o ICMS destacado pelo fornecedor, enquanto o SPED
+ * diz "Entrada" e traz o ICMS efetivamente creditado — que pode ser menor ou zero.
  */
 
-import type { SpedFiscalParsed, SpedRegistroC100, SpedRegistro0150 } from '../types';
-import { SpedCodigoSituacao, SpedIndicadorOperacao } from '../types';
-import { limparCnpjSped, dataSpedParaDate } from '../parser';
+import type { SpedFiscalParsed, SpedRegistro0150 } from '../types';
+import { SpedCodigoSituacao, SpedIndicadorEmitente, SpedIndicadorOperacao } from '../types';
+import { limparCnpjSped, dataSpedIso, dataIsoBrasil } from '../parser';
 
 // ─── Tipos ──────────────────────────────────────────────────────────────
 
@@ -31,7 +36,7 @@ export interface NotaDanfeCompleta {
   numero: string | null;
   serie: string | null;
   emitidaEm: Date;
-  tipoOperacao: string | null; // "Entrada" | "Saída"
+  tipoOperacao: string | null; // tpNF do XML, na visão do EMITENTE: "Entrada" | "Saída"
   naturezaOp: string | null;
   emitenteNome: string | null;
   emitenteCnpj: string | null;
@@ -46,12 +51,17 @@ export interface NotaDanfeCompleta {
   valorIcms: number | null;
   status: string;           // RESUMO | COMPLETA
   situacaoSefaz: string;    // AUTORIZADA | CANCELADA | DENEGADA
+  /** true se a nota foi emitida dentro do período do SPED (false = veio só pela chave) */
+  emitidaNoPeriodo?: boolean;
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────
 
 /** Tolerância padrão para comparação de valores monetários (centavos) */
 const TOLERANCIA_VALOR = 0.05;
+
+/** Notas emitidas nos últimos N dias do período podem ter entrada só no mês seguinte */
+const DIAS_FIM_PERIODO = 10;
 
 function valorDivergente(valorSped: number, valorDanfe: number | null, tolerancia = TOLERANCIA_VALOR): boolean {
   if (valorDanfe === null || valorDanfe === undefined) return false;
@@ -72,11 +82,18 @@ function formatarValor(v: number | null | undefined): string {
   return v.toFixed(2);
 }
 
-function dataSpedStr(d: string): string {
-  // dd/mm/aaaa ou ddmmaaaa → YYYY-MM-DD
-  const limpo = d.replace(/\//g, '');
-  if (limpo.length !== 8) return d;
-  return `${limpo.slice(4, 8)}-${limpo.slice(2, 4)}-${limpo.slice(0, 2)}`;
+/**
+ * Tipo de operação da nota na visão da EMPRESA do SPED.
+ * O tpNF do XML é na visão do emitente — se a empresa é a destinatária, inverte.
+ */
+export function tipoOperacaoNaVisaoDaEmpresa(nota: NotaDanfeCompleta, cnpjEmpresa: string): 'Entrada' | 'Saída' | null {
+  if (!nota.tipoOperacao) return null;
+  const emitente = (nota.emitenteCnpj ?? '').replace(/\D/g, '');
+  const dest = (nota.destCnpj ?? '').replace(/\D/g, '');
+  const tp = nota.tipoOperacao === 'Entrada' ? 'Entrada' : 'Saída';
+  if (emitente && emitente === cnpjEmpresa) return tp;
+  if (dest && dest === cnpjEmpresa) return tp === 'Saída' ? 'Entrada' : 'Saída';
+  return null;
 }
 
 // ─── Regras ─────────────────────────────────────────────────────────────
@@ -85,9 +102,9 @@ function dataSpedStr(d: string): string {
  * Confronta os documentos fiscais (C100) do SPED com as NF-e do DanfeCollector.
  *
  * @param sped - SPED parseado
- * @param notasDanfe - Map de chave → NotaDanfeCompleta (notas do período no DanfeCollector)
+ * @param notasDanfe - Map de chave → NotaDanfeCompleta (notas do período + notas buscadas pela chave do SPED)
  * @param participantesPorCodigo - Map de COD_PART → SpedRegistro0150
- * @param cnpjEmpresa - CNPJ da empresa (raiz ou completo) para identificar notas próprias
+ * @param cnpjEmpresa - CNPJ completo da empresa do SPED
  */
 export function confrontarDocumentos(
   sped: SpedFiscalParsed,
@@ -101,38 +118,42 @@ export function confrontarDocumentos(
   for (const c100 of sped.notasFiscais) {
     const chave = (c100.chaveNfe ?? '').replace(/\D/g, '');
     if (!chave || chave.length !== 44) continue;
+    chavesNoSped.add(chave);
 
     // Pular NF-e com situação cancelada/inutilizada no SPED (não geram confronto)
     if (c100.codigoSituacao === SpedCodigoSituacao.CANCELADO ||
         c100.codigoSituacao === SpedCodigoSituacao.CANCELADO_EXTEMPORANEO ||
         c100.codigoSituacao === SpedCodigoSituacao.NUMERACAO_INUTILIZADA) {
-      chavesNoSped.add(chave);
       continue;
     }
 
-    chavesNoSped.add(chave);
     const participante = participantesPorCodigo.get(c100.codigoParticipante);
-    const nomeForncedor = participante?.nome ?? '';
+    const nomeFornecedor = participante?.nome ?? '';
     const cnpjFornecedor = participante ? limparCnpjSped(participante.cnpj) : '';
+    const numeroNf = c100.numero ? String(Number(c100.numero)) : chave;
+    const notaDeTerceiros = c100.indicadorEmitente === SpedIndicadorEmitente.TERCEIROS;
+    const base = {
+      registroSped: 'C100',
+      linhaSped: c100.linha,
+      chaveNfe: chave,
+      participanteCod: c100.codigoParticipante,
+      fornecedorNome: nomeFornecedor,
+      fornecedorCnpj: cnpjFornecedor,
+    };
 
     const notaDanfe = notasDanfe.get(chave);
 
     // R-DOC-01: NF no SPED sem XML no DanfeCollector
     if (!notaDanfe) {
       divergencias.push({
+        ...base,
         codigoRegra: 'R-DOC-01',
         tipo: 'CHAVE_INEXISTENTE',
-        severidade: 'CRITICA',
-        registroSped: 'C100',
-        linhaSped: c100.linha,
+        severidade: 'MEDIA',
         campo: 'CHV_NFE',
         valorSped: chave,
-        valorDanfe: '(nota não encontrada)',
-        descricao: `NF-e ${c100.numero || chave} de "${nomeForncedor}" declarada no SPED mas NÃO existe no DanfeCollector. Pode ser nota fantasma ou falha de sincronização.`,
-        chaveNfe: chave,
-        participanteCod: c100.codigoParticipante,
-        fornecedorNome: nomeForncedor,
-        fornecedorCnpj: cnpjFornecedor,
+        valorDanfe: '(não está no Proton-e)',
+        descricao: `NF ${numeroNf} de "${nomeFornecedor}" (emitida em ${dataSpedIso(c100.dataDocumento)}) está no SPED, mas o XML não está no Proton-e — por isso ela não pôde ser conferida. Importe a nota pela chave para confrontar.`,
       });
       continue;
     }
@@ -140,59 +161,44 @@ export function confrontarDocumentos(
     // R-DOC-12: NF cancelada escriturada como ativa no SPED
     if (notaDanfe.situacaoSefaz === 'CANCELADA') {
       divergencias.push({
+        ...base,
         codigoRegra: 'R-DOC-12',
         tipo: 'NF_CANCELADA',
         severidade: 'CRITICA',
-        registroSped: 'C100',
-        linhaSped: c100.linha,
         campo: 'COD_SIT',
         valorSped: `${c100.codigoSituacao} (${c100.codigoSituacao === '00' ? 'Regular' : c100.codigoSituacao})`,
         valorDanfe: 'CANCELADA na SEFAZ',
-        descricao: `NF-e ${c100.numero || chave} está CANCELADA na SEFAZ mas escriturada como regular no SPED. Remover do SPED ou retificar.`,
-        chaveNfe: chave,
-        participanteCod: c100.codigoParticipante,
-        fornecedorNome: nomeForncedor,
-        fornecedorCnpj: cnpjFornecedor,
+        descricao: `NF ${numeroNf} está CANCELADA na SEFAZ, mas foi escriturada como regular no SPED.`,
       });
     }
 
     // R-DOC-13: NF denegada escriturada
     if (notaDanfe.situacaoSefaz === 'DENEGADA') {
       divergencias.push({
+        ...base,
         codigoRegra: 'R-DOC-13',
         tipo: 'NF_DENEGADA',
         severidade: 'CRITICA',
-        registroSped: 'C100',
-        linhaSped: c100.linha,
         campo: 'COD_SIT',
         valorSped: `${c100.codigoSituacao}`,
         valorDanfe: 'DENEGADA na SEFAZ',
-        descricao: `NF-e ${c100.numero || chave} foi DENEGADA pela SEFAZ mas está escriturada no SPED.`,
-        chaveNfe: chave,
-        participanteCod: c100.codigoParticipante,
-        fornecedorNome: nomeForncedor,
-        fornecedorCnpj: cnpjFornecedor,
+        descricao: `NF ${numeroNf} foi DENEGADA pela SEFAZ, mas está escriturada no SPED.`,
       });
     }
 
-    // R-DOC-14: Tipo operação invertido
-    const tipoSpedEntrada = c100.indicadorOperacao === SpedIndicadorOperacao.ENTRADA;
-    const tipoXmlEntrada = notaDanfe.tipoOperacao === 'Entrada';
-    if (notaDanfe.tipoOperacao && tipoSpedEntrada !== tipoXmlEntrada) {
+    // R-DOC-14: Tipo operação invertido (comparando na visão da empresa)
+    const tipoSped = c100.indicadorOperacao === SpedIndicadorOperacao.ENTRADA ? 'Entrada' : 'Saída';
+    const tipoXml = tipoOperacaoNaVisaoDaEmpresa(notaDanfe, cnpjEmpresa);
+    if (tipoXml && tipoSped !== tipoXml) {
       divergencias.push({
+        ...base,
         codigoRegra: 'R-DOC-14',
         tipo: 'TIPO_OPERACAO',
         severidade: 'CRITICA',
-        registroSped: 'C100',
-        linhaSped: c100.linha,
         campo: 'IND_OPER',
-        valorSped: tipoSpedEntrada ? '0 (Entrada)' : '1 (Saída)',
-        valorDanfe: notaDanfe.tipoOperacao,
-        descricao: `NF-e ${c100.numero || chave}: tipo operação no SPED (${tipoSpedEntrada ? 'Entrada' : 'Saída'}) diverge do XML (${notaDanfe.tipoOperacao}). Operação escriturada invertida.`,
-        chaveNfe: chave,
-        participanteCod: c100.codigoParticipante,
-        fornecedorNome: nomeForncedor,
-        fornecedorCnpj: cnpjFornecedor,
+        valorSped: tipoSped,
+        valorDanfe: tipoXml,
+        descricao: `NF ${numeroNf} foi escriturada como ${tipoSped}, mas pelo XML ela é uma ${tipoXml} para a empresa.`,
       });
     }
 
@@ -203,19 +209,14 @@ export function confrontarDocumentos(
     if (valorDivergente(c100.valorDocumento, notaDanfe.valorTotal)) {
       const diff = c100.valorDocumento - (notaDanfe.valorTotal ?? 0);
       divergencias.push({
+        ...base,
         codigoRegra: 'R-DOC-03',
         tipo: 'VALOR_NF',
         severidade: severidadeValor(diff),
-        registroSped: 'C100',
-        linhaSped: c100.linha,
         campo: 'VL_DOC',
         valorSped: formatarValor(c100.valorDocumento),
         valorDanfe: formatarValor(notaDanfe.valorTotal),
-        descricao: `NF-e ${c100.numero || chave}: valor total no SPED (R$ ${formatarValor(c100.valorDocumento)}) diverge do XML (R$ ${formatarValor(notaDanfe.valorTotal)}). Diferença: R$ ${formatarValor(diff)}.`,
-        chaveNfe: chave,
-        participanteCod: c100.codigoParticipante,
-        fornecedorNome: nomeForncedor,
-        fornecedorCnpj: cnpjFornecedor,
+        descricao: `NF ${numeroNf}: valor total no SPED (R$ ${formatarValor(c100.valorDocumento)}) diferente do XML (R$ ${formatarValor(notaDanfe.valorTotal)}). Diferença de R$ ${formatarValor(diff)}.`,
       });
     }
 
@@ -223,121 +224,112 @@ export function confrontarDocumentos(
     if (valorDivergente(c100.valorMercadorias, notaDanfe.valorProdutos)) {
       const diff = c100.valorMercadorias - (notaDanfe.valorProdutos ?? 0);
       divergencias.push({
+        ...base,
         codigoRegra: 'R-DOC-04',
         tipo: 'VALOR_NF',
         severidade: severidadeValor(diff),
-        registroSped: 'C100',
-        linhaSped: c100.linha,
         campo: 'VL_MERC',
         valorSped: formatarValor(c100.valorMercadorias),
         valorDanfe: formatarValor(notaDanfe.valorProdutos),
-        descricao: `NF-e ${c100.numero || chave}: valor de mercadorias no SPED (R$ ${formatarValor(c100.valorMercadorias)}) diverge do XML (R$ ${formatarValor(notaDanfe.valorProdutos)}).`,
-        chaveNfe: chave,
-        participanteCod: c100.codigoParticipante,
-        fornecedorNome: nomeForncedor,
-        fornecedorCnpj: cnpjFornecedor,
+        descricao: `NF ${numeroNf}: valor das mercadorias no SPED (R$ ${formatarValor(c100.valorMercadorias)}) diferente do XML (R$ ${formatarValor(notaDanfe.valorProdutos)}).`,
       });
     }
 
     // R-DOC-05: Valor de ICMS divergente
-    if (valorDivergente(c100.valorIcms, notaDanfe.valorIcms)) {
-      const diff = c100.valorIcms - (notaDanfe.valorIcms ?? 0);
+    // Nota própria: SPED e XML devem ser iguais.
+    // Nota de terceiros: o crédito pode ser MENOR que o destacado (ST, uso e consumo,
+    // Simples Nacional) — só é erro se o crédito for MAIOR que o destacado.
+    const icmsXml = notaDanfe.valorIcms ?? 0;
+    const icmsErro = notaDeTerceiros
+      ? notaDanfe.valorIcms !== null && c100.valorIcms > icmsXml + TOLERANCIA_VALOR
+      : valorDivergente(c100.valorIcms, notaDanfe.valorIcms);
+    if (icmsErro) {
+      const diff = c100.valorIcms - icmsXml;
       divergencias.push({
+        ...base,
         codigoRegra: 'R-DOC-05',
-        tipo: 'VALOR_ICMS',
+        tipo: notaDeTerceiros ? 'CREDITO_INDEVIDO' : 'VALOR_ICMS',
         severidade: 'CRITICA',
-        registroSped: 'C100',
-        linhaSped: c100.linha,
         campo: 'VL_ICMS',
         valorSped: formatarValor(c100.valorIcms),
         valorDanfe: formatarValor(notaDanfe.valorIcms),
-        descricao: `NF-e ${c100.numero || chave}: ICMS no SPED (R$ ${formatarValor(c100.valorIcms)}) diverge do XML (R$ ${formatarValor(notaDanfe.valorIcms)}). Diferença: R$ ${formatarValor(diff)}. Afeta diretamente a apuração.`,
-        chaveNfe: chave,
-        participanteCod: c100.codigoParticipante,
-        fornecedorNome: nomeForncedor,
-        fornecedorCnpj: cnpjFornecedor,
+        descricao: notaDeTerceiros
+          ? `NF ${numeroNf}: crédito de ICMS no SPED (R$ ${formatarValor(c100.valorIcms)}) é MAIOR que o ICMS destacado pelo fornecedor (R$ ${formatarValor(icmsXml)}). Crédito a maior de R$ ${formatarValor(diff)}.`
+          : `NF ${numeroNf}: ICMS no SPED (R$ ${formatarValor(c100.valorIcms)}) diferente do XML (R$ ${formatarValor(icmsXml)}). Diferença de R$ ${formatarValor(diff)}.`,
       });
     }
 
     // R-DOC-09: Valor frete divergente
     if (valorDivergente(c100.valorFrete, notaDanfe.valorFrete)) {
-      const diff = c100.valorFrete - (notaDanfe.valorFrete ?? 0);
       divergencias.push({
+        ...base,
         codigoRegra: 'R-DOC-09',
         tipo: 'VALOR_FRETE',
         severidade: 'MEDIA',
-        registroSped: 'C100',
-        linhaSped: c100.linha,
         campo: 'VL_FRT',
         valorSped: formatarValor(c100.valorFrete),
         valorDanfe: formatarValor(notaDanfe.valorFrete),
-        descricao: `NF-e ${c100.numero || chave}: valor de frete no SPED (R$ ${formatarValor(c100.valorFrete)}) diverge do XML (R$ ${formatarValor(notaDanfe.valorFrete)}).`,
-        chaveNfe: chave,
-        participanteCod: c100.codigoParticipante,
-        fornecedorNome: nomeForncedor,
-        fornecedorCnpj: cnpjFornecedor,
+        descricao: `NF ${numeroNf}: frete no SPED (R$ ${formatarValor(c100.valorFrete)}) diferente do XML (R$ ${formatarValor(notaDanfe.valorFrete)}).`,
       });
     }
 
     // R-DOC-10: Valor desconto divergente
     if (valorDivergente(c100.valorDesconto, notaDanfe.valorDesconto)) {
-      const diff = c100.valorDesconto - (notaDanfe.valorDesconto ?? 0);
       divergencias.push({
+        ...base,
         codigoRegra: 'R-DOC-10',
         tipo: 'VALOR_DESCONTO',
         severidade: 'MEDIA',
-        registroSped: 'C100',
-        linhaSped: c100.linha,
         campo: 'VL_DESC',
         valorSped: formatarValor(c100.valorDesconto),
         valorDanfe: formatarValor(notaDanfe.valorDesconto),
-        descricao: `NF-e ${c100.numero || chave}: valor de desconto no SPED (R$ ${formatarValor(c100.valorDesconto)}) diverge do XML (R$ ${formatarValor(notaDanfe.valorDesconto)}).`,
-        chaveNfe: chave,
-        participanteCod: c100.codigoParticipante,
-        fornecedorNome: nomeForncedor,
-        fornecedorCnpj: cnpjFornecedor,
+        descricao: `NF ${numeroNf}: desconto no SPED (R$ ${formatarValor(c100.valorDesconto)}) diferente do XML (R$ ${formatarValor(notaDanfe.valorDesconto)}).`,
       });
     }
 
-    // R-DOC-11: Data emissão divergente
-    const dataSpedDate = dataSpedParaDate(c100.dataDocumento);
-    if (dataSpedDate && notaDanfe.emitidaEm) {
-      const diffDias = Math.abs(dataSpedDate.getTime() - notaDanfe.emitidaEm.getTime()) / (1000 * 60 * 60 * 24);
-      if (diffDias > 1) { // mais de 1 dia de diferença
-        divergencias.push({
-          codigoRegra: 'R-DOC-11',
-          tipo: 'DATA_EMISSAO',
-          severidade: 'MEDIA',
-          registroSped: 'C100',
-          linhaSped: c100.linha,
-          campo: 'DT_DOC',
-          valorSped: dataSpedStr(c100.dataDocumento),
-          valorDanfe: notaDanfe.emitidaEm.toISOString().slice(0, 10),
-          descricao: `NF-e ${c100.numero || chave}: data no SPED (${dataSpedStr(c100.dataDocumento)}) diverge do XML (${notaDanfe.emitidaEm.toISOString().slice(0, 10)}). Pode causar apuração no mês errado.`,
-          chaveNfe: chave,
-          participanteCod: c100.codigoParticipante,
-          fornecedorNome: nomeForncedor,
-          fornecedorCnpj: cnpjFornecedor,
-        });
-      }
+    // R-DOC-11: Data emissão divergente (compara só a data, no fuso do Brasil)
+    const dataSped = dataSpedIso(c100.dataDocumento);
+    const dataXml = notaDanfe.emitidaEm ? dataIsoBrasil(notaDanfe.emitidaEm) : '';
+    if (dataSped.length === 10 && dataXml && dataSped !== dataXml) {
+      divergencias.push({
+        ...base,
+        codigoRegra: 'R-DOC-11',
+        tipo: 'DATA_EMISSAO',
+        severidade: 'MEDIA',
+        campo: 'DT_DOC',
+        valorSped: dataSped,
+        valorDanfe: dataXml,
+        descricao: `NF ${numeroNf}: data de emissão no SPED (${dataSped}) diferente do XML (${dataXml}).`,
+      });
     }
   }
 
-  // R-DOC-02: NF no DanfeCollector ausente no SPED
+  // R-DOC-02: NF emitida no período, no DanfeCollector, ausente no SPED
+  const fimPeriodo = dataSpedIso(sped.abertura.dataFinal);
   for (const [chave, nota] of Array.from(notasDanfe)) {
     if (chavesNoSped.has(chave)) continue;
+    if (nota.emitidaNoPeriodo === false) continue;
     if (nota.situacaoSefaz === 'CANCELADA' || nota.situacaoSefaz === 'DENEGADA') continue;
+
+    const emissao = dataIsoBrasil(nota.emitidaEm);
+    const diasAteFim = (Date.parse(fimPeriodo) - Date.parse(emissao)) / 86_400_000;
+    // Só compras podem ter entrada no mês seguinte; nota própria de saída entra na data de emissão.
+    const empresaEhDestinataria = (nota.destCnpj ?? '').replace(/\D/g, '') === cnpjEmpresa;
+    const pertoDoFim = empresaEhDestinataria && Number.isFinite(diasAteFim) && diasAteFim <= DIAS_FIM_PERIODO;
+    const numeroNf = nota.numero || chave;
 
     divergencias.push({
       codigoRegra: 'R-DOC-02',
       tipo: 'NF_AUSENTE_SPED',
-      severidade: 'ALTA',
+      severidade: pertoDoFim ? 'BAIXA' : 'ALTA',
       registroSped: 'C100',
       linhaSped: 0,
       campo: 'CHV_NFE',
-      valorSped: '(não encontrada no SPED)',
+      valorSped: '(não escriturada)',
       valorDanfe: chave,
-      descricao: `NF-e ${nota.numero || chave} de "${nota.emitenteNome || nota.emitenteCnpj}" (${nota.situacaoSefaz}) existe no DanfeCollector mas NÃO foi escriturada no SPED. Nota "perdida" pelo ERP.`,
+      descricao: pertoDoFim
+        ? `NF ${numeroNf} de "${nota.emitenteNome || nota.emitenteCnpj}" foi emitida em ${emissao} e não está neste SPED. Como foi no fim do mês, provavelmente a entrada será no mês seguinte — confira.`
+        : `NF ${numeroNf} de "${nota.emitenteNome || nota.emitenteCnpj}" foi emitida em ${emissao}, está autorizada na SEFAZ, mas não foi escriturada neste SPED.`,
       chaveNfe: chave,
       fornecedorNome: nota.emitenteNome ?? undefined,
       fornecedorCnpj: nota.emitenteCnpj ?? undefined,

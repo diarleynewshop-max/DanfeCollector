@@ -5,9 +5,9 @@
  * avançado para detectar inconsistências que regras simples não pegam.
  */
 
-import type { SpedFiscalParsed, SpedRegistroC100, SpedRegistroC170, SpedRegistro0150 } from '../types';
+import type { SpedFiscalParsed, SpedRegistro0150 } from '../types';
 import { SpedIndicadorOperacao } from '../types';
-import { limparCnpjSped } from '../parser';
+import { limparCnpjSped, normalizarCst } from '../parser';
 import type { ConsultaIeResult } from './cadastro';
 
 // ─── Tipos ──────────────────────────────────────────────────────────────
@@ -49,7 +49,7 @@ function ufDoParticipante(part: SpedRegistro0150 | undefined): string | null {
 // Alíquotas interestaduais válidas
 const ALIQUOTAS_INTERESTADUAIS = [4, 7, 12];
 
-// CFOPs interestaduais (2xxx) e internas (1xxx)
+// CFOPs interestaduais (2xxx/6xxx) e internas (1xxx/5xxx)
 function cfopInterestadual(cfop: string): boolean {
   return cfop.startsWith('2') || cfop.startsWith('6');
 }
@@ -62,6 +62,13 @@ function cfopInterna(cfop: string): boolean {
 function cfopSubstituicaoTributaria(cfop: string): boolean {
   const ultimos3 = cfop.slice(-3);
   return ['401', '403', '405', '406', '408', '411', '413'].includes(ultimos3);
+}
+
+// CSTs (2 dígitos, sem a origem) que envolvem ST
+const CST_ST = ['10', '30', '60', '70'];
+
+function formatarValor(v: number): string {
+  return v.toFixed(2);
 }
 
 // ─── Regras ─────────────────────────────────────────────────────────────
@@ -81,7 +88,6 @@ export function confrontarInteligente(
   const divergencias: DivergenciaInteligente[] = [];
   const ufEmp = (ufEmpresa ?? sped.abertura.uf ?? '').toUpperCase();
 
-  // Mapa de participantes
   const participantesPorCodigo = new Map<string, SpedRegistro0150>();
   for (const p of sped.participantes) {
     participantesPorCodigo.set(p.codigoParticipante, p);
@@ -91,108 +97,83 @@ export function confrontarInteligente(
     if (c100.codigoSituacao !== '00') continue; // Só notas regulares
     const participante = participantesPorCodigo.get(c100.codigoParticipante);
     const cnpjFornecedor = participante ? limparCnpjSped(participante.cnpj) : '';
-    const nomeForncedor = participante?.nome ?? '';
+    const nomeFornecedor = participante?.nome ?? '';
     const ufFornecedor = ufDoParticipante(participante);
     const operacaoInterestadual = ufFornecedor && ufEmp && ufFornecedor !== ufEmp;
     const operacaoInterna = ufFornecedor && ufEmp && ufFornecedor === ufEmp;
+    const entrada = c100.indicadorOperacao === SpedIndicadorOperacao.ENTRADA;
+    const numeroNf = c100.numero ? String(Number(c100.numero)) : c100.chaveNfe;
 
     for (const c170 of c100.itens) {
       const cfop = (c170.cfop ?? '').trim();
       const aliq = c170.aliquotaIcms;
-      const cst = (c170.cstIcms ?? '').trim();
+      const cst = normalizarCst(c170.cstIcms);
+      const base = {
+        registroSped: 'C170',
+        linhaSped: c170.linha,
+        chaveNfe: c100.chaveNfe,
+        participanteCod: c100.codigoParticipante,
+        produtoCod: c170.codigoItem,
+        fornecedorNome: nomeFornecedor,
+        fornecedorCnpj: cnpjFornecedor,
+      };
+      const rotulo = `NF ${numeroNf}, item ${c170.numeroItem} (${c170.descricao})`;
 
-      // R-INT-02: CFOP interestadual com alíquota interna
-      if (cfopInterestadual(cfop) && aliq > 0 && !ALIQUOTAS_INTERESTADUAIS.includes(aliq)) {
-        // Verificar se realmente é interestadual pela UF do participante
-        if (operacaoInterestadual) {
-          divergencias.push({
-            codigoRegra: 'R-INT-02',
-            tipo: 'ALIQUOTA_INTER',
-            severidade: 'CRITICA',
-            registroSped: 'C170',
-            linhaSped: c170.linha,
-            campo: 'ALIQ_ICMS + CFOP',
-            valorSped: `CFOP ${cfop} (interestadual) + alíquota ${aliq}%`,
-            valorDanfe: `Alíquotas interestaduais válidas: 4%, 7% ou 12%`,
-            descricao: `Item ${c170.numeroItem} da NF-e ${c100.numero}: CFOP ${cfop} (interestadual, fornecedor UF ${ufFornecedor}) com alíquota ${aliq}%. Operações interestaduais só admitem 4%, 7% ou 12%.`,
-            chaveNfe: c100.chaveNfe,
-            participanteCod: c100.codigoParticipante,
-            produtoCod: c170.codigoItem,
-            fornecedorNome: nomeForncedor,
-            fornecedorCnpj: cnpjFornecedor,
-          });
-        }
+      // R-INT-02: CFOP interestadual com alíquota que não é interestadual
+      if (cfopInterestadual(cfop) && aliq > 0 && !ALIQUOTAS_INTERESTADUAIS.includes(aliq) && operacaoInterestadual) {
+        divergencias.push({
+          ...base,
+          codigoRegra: 'R-INT-02',
+          tipo: 'ALIQUOTA_INTER',
+          severidade: 'ALTA',
+          campo: 'ALIQ_ICMS + CFOP',
+          valorSped: `CFOP ${cfop} + alíquota ${aliq}%`,
+          valorDanfe: 'Interestadual: 4%, 7% ou 12%',
+          descricao: `${rotulo}: CFOP ${cfop} é interestadual (fornecedor em ${ufFornecedor}), mas a alíquota escriturada é ${aliq}%. Operação interestadual só admite 4%, 7% ou 12%.`,
+        });
       }
 
-      // R-INT-03: CFOP intraestadual com alíquota interestadual
-      if (cfopInterna(cfop) && ALIQUOTAS_INTERESTADUAIS.includes(aliq) && aliq < 18) {
-        if (operacaoInterna) {
-          divergencias.push({
-            codigoRegra: 'R-INT-03',
-            tipo: 'ALIQUOTA_INTER',
-            severidade: 'ALTA',
-            registroSped: 'C170',
-            linhaSped: c170.linha,
-            campo: 'ALIQ_ICMS + CFOP',
-            valorSped: `CFOP ${cfop} (interna) + alíquota ${aliq}%`,
-            valorDanfe: `Operação interna (mesma UF: ${ufEmp}) deveria ter alíquota interna`,
-            descricao: `Item ${c170.numeroItem} da NF-e ${c100.numero}: CFOP ${cfop} (interna) com alíquota ${aliq}% que parece interestadual. Fornecedor e empresa estão na mesma UF (${ufEmp}).`,
-            chaveNfe: c100.chaveNfe,
-            participanteCod: c100.codigoParticipante,
-            produtoCod: c170.codigoItem,
-            fornecedorNome: nomeForncedor,
-            fornecedorCnpj: cnpjFornecedor,
-          });
-        }
+      // R-INT-03: CFOP interno com alíquota de cara interestadual
+      if (cfopInterna(cfop) && ALIQUOTAS_INTERESTADUAIS.includes(aliq) && operacaoInterna) {
+        divergencias.push({
+          ...base,
+          codigoRegra: 'R-INT-03',
+          tipo: 'ALIQUOTA_INTER',
+          severidade: 'MEDIA',
+          campo: 'ALIQ_ICMS + CFOP',
+          valorSped: `CFOP ${cfop} + alíquota ${aliq}%`,
+          valorDanfe: `Operação interna (${ufEmp})`,
+          descricao: `${rotulo}: operação dentro do ${ufEmp} (CFOP ${cfop}) com alíquota de ${aliq}%, que é típica de operação interestadual. Confirme se há redução de base ou benefício que justifique.`,
+        });
       }
 
-      // R-INT-04: CFOP de ST sem destaque de ICMS-ST
-      if (cfopSubstituicaoTributaria(cfop) && c170.valorIcmsSt === 0 && c170.valorBaseIcmsSt === 0) {
-        // CST 10, 30, 60, 70 são os que envolvem ST
-        const cstSt = ['10', '30', '60', '70', '110', '130', '160', '170'];
-        if (!cstSt.includes(cst)) {
-          divergencias.push({
-            codigoRegra: 'R-INT-04',
-            tipo: 'ST_SEM_DESTAQUE',
-            severidade: 'ALTA',
-            registroSped: 'C170',
-            linhaSped: c170.linha,
-            campo: 'CFOP + VL_ICMS_ST',
-            valorSped: `CFOP ${cfop} (ST) + CST ${cst} + ICMS-ST = R$ 0,00`,
-            valorDanfe: 'CFOP de ST deveria ter CST de ST e/ou ICMS-ST destacado',
-            descricao: `Item ${c170.numeroItem} da NF-e ${c100.numero}: CFOP ${cfop} indica substituição tributária mas CST é ${cst} e ICMS-ST é zero. Inconsistência fiscal.`,
-            chaveNfe: c100.chaveNfe,
-            participanteCod: c100.codigoParticipante,
-            produtoCod: c170.codigoItem,
-            fornecedorNome: nomeForncedor,
-            fornecedorCnpj: cnpjFornecedor,
-          });
-        }
+      // R-INT-04: Venda com CFOP de ST sem CST de ST nem ICMS-ST (só saídas —
+      // na compra o ST já foi retido pelo fornecedor e o ICMS-ST do C170 fica zerado mesmo)
+      if (!entrada && cfopSubstituicaoTributaria(cfop) && c170.valorIcmsSt === 0 && !CST_ST.includes(cst)) {
+        divergencias.push({
+          ...base,
+          codigoRegra: 'R-INT-04',
+          tipo: 'ST_SEM_DESTAQUE',
+          severidade: 'ALTA',
+          campo: 'CFOP + CST',
+          valorSped: `CFOP ${cfop} + CST ${c170.cstIcms}`,
+          valorDanfe: 'CFOP de ST pede CST 10/30/60/70',
+          descricao: `${rotulo}: saída com CFOP ${cfop} (substituição tributária), mas o CST ${c170.cstIcms} não é de ST e não há ICMS-ST.`,
+        });
       }
 
-      // R-INT-05: Crédito sobre mercadoria com ST (CST 60 = ICMS pago por ST)
-      // Se o ERP escriturou como CST 00/20 (tributação normal com crédito) mas deveria ser 60
-      if (cst === '00' || cst === '20') {
-        // Verificar se o CFOP é de mercadoria para revenda com ST (x403, x405)
-        const ultimos3 = cfop.slice(-3);
-        if (['403', '405'].includes(ultimos3)) {
-          divergencias.push({
-            codigoRegra: 'R-INT-05',
-            tipo: 'CREDITO_INDEVIDO',
-            severidade: 'CRITICA',
-            registroSped: 'C170',
-            linhaSped: c170.linha,
-            campo: 'CST_ICMS + CFOP',
-            valorSped: `CST ${cst} (crédito) + CFOP ${cfop} (ST)`,
-            valorDanfe: 'CST deveria ser 60 (ICMS pago anteriormente por ST)',
-            descricao: `Item ${c170.numeroItem} da NF-e ${c100.numero}: CFOP ${cfop} (mercadoria com ST) com CST ${cst} gerando crédito. Deveria ser CST 60 (ICMS cobrado anteriormente por substituição tributária) — crédito INDEVIDO.`,
-            chaveNfe: c100.chaveNfe,
-            participanteCod: c100.codigoParticipante,
-            produtoCod: c170.codigoItem,
-            fornecedorNome: nomeForncedor,
-            fornecedorCnpj: cnpjFornecedor,
-          });
-        }
+      // R-INT-05: Compra de mercadoria com ST (x403) tomando crédito de ICMS
+      if (entrada && ['00', '20'].includes(cst) && cfop.slice(-3) === '403' && c170.valorIcms > 0) {
+        divergencias.push({
+          ...base,
+          codigoRegra: 'R-INT-05',
+          tipo: 'CREDITO_INDEVIDO',
+          severidade: 'ALTA',
+          campo: 'CST + CFOP + VL_ICMS',
+          valorSped: `CST ${c170.cstIcms} + CFOP ${cfop} + crédito R$ ${formatarValor(c170.valorIcms)}`,
+          valorDanfe: 'Mercadoria com ST normalmente não gera crédito',
+          descricao: `${rotulo}: compra com CFOP ${cfop} (mercadoria sujeita a ST) escriturada com CST ${c170.cstIcms} e crédito de R$ ${formatarValor(c170.valorIcms)}. Em regra, quem compra com ST não se credita do ICMS — confirme com o contador se há regime especial.`,
+        });
       }
     }
 
@@ -204,13 +185,13 @@ export function confrontarInteligente(
         severidade: 'INFO',
         registroSped: 'C100',
         linhaSped: c100.linha,
-        campo: 'VL_MERC + det',
-        valorSped: `Modelo ${c100.codigoModelo}, VL_MERC = 0, sem itens (C170)`,
+        campo: 'VL_MERC + itens',
+        valorSped: `Modelo ${c100.codigoModelo}, sem itens`,
         valorDanfe: '',
-        descricao: `NF-e ${c100.numero || c100.chaveNfe}: NF-e modelo 55 sem itens e sem valor de mercadorias. Pode ser nota de ajuste/complementar.`,
+        descricao: `NF ${numeroNf}: NF-e sem itens e sem valor de mercadorias. Normalmente é nota de ajuste ou complementar.`,
         chaveNfe: c100.chaveNfe,
         participanteCod: c100.codigoParticipante,
-        fornecedorNome: nomeForncedor,
+        fornecedorNome: nomeFornecedor,
         fornecedorCnpj: cnpjFornecedor,
       });
     }
@@ -238,7 +219,6 @@ export function confrontarInteligente(
         consulta.inscricoesEstaduais.every(ie => !ie.ativo);
 
       if (todasInativas) {
-        // Contar notas deste participante no período
         const notasCount = sped.notasFiscais.filter(
           c => c.codigoParticipante === codPart && c.codigoSituacao === '00'
         ).length;
@@ -252,7 +232,7 @@ export function confrontarInteligente(
           campo: 'IE (todas inativas)',
           valorSped: `${consulta.inscricoesEstaduais.map(ie => ie.inscricao).join(', ')} — TODAS INATIVAS`,
           valorDanfe: `${notasCount} NF-e no período`,
-          descricao: `Fornecedor "${part.nome}" (${cnpj}) tem ${notasCount} NF-e no período mas TODAS as IEs estão inativas na SEFAZ. Operação irregular — créditos serão glosados.`,
+          descricao: `Fornecedor "${part.nome}" (${cnpj}) tem ${notasCount} NF-e no período, mas todas as IEs estão inativas na SEFAZ. Os créditos dessas notas podem ser glosados.`,
           participanteCod: codPart,
           fornecedorNome: part.nome,
           fornecedorCnpj: cnpj,

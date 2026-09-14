@@ -204,15 +204,18 @@ function parsearC170(campos: string[], linha: number): SpedRegistroC170 {
     valorBaseIpi: num(campos, 21),
     aliquotaIpi: num(campos, 22),
     valorIpi: num(campos, 23),
+    // Layout C170: ... CST_PIS(24) VL_BC_PIS ALIQ_PIS QUANT_BC_PIS ALIQ_PIS_QUANT VL_PIS(29)
+    // CST_COFINS(30) VL_BC_COFINS ALIQ_COFINS QUANT_BC_COFINS ALIQ_COFINS_QUANT VL_COFINS(35)
     cstPis: str(campos, 24),
     valorBasePis: num(campos, 25),
     aliquotaPis: num(campos, 26),
-    valorPis: num(campos, 27),
-    cstCofins: str(campos, 28),
-    valorBaseCofins: num(campos, 29),
-    aliquotaCofins: num(campos, 30),
-    valorCofins: num(campos, 31),
-    codigoNcm: str(campos, 32),
+    valorPis: num(campos, 29),
+    cstCofins: str(campos, 30),
+    valorBaseCofins: num(campos, 31),
+    aliquotaCofins: num(campos, 32),
+    valorCofins: num(campos, 35),
+    // O C170 não tem campo de NCM — o NCM do item vem do 0200.
+    codigoNcm: '',
     linha,
   };
 }
@@ -228,8 +231,8 @@ function parsearC190(campos: string[], linha: number): SpedRegistroC190 {
     valorIcms: num(campos, 6),
     valorBaseIcmsSt: num(campos, 7),
     valorIcmsSt: num(campos, 8),
-    valorIpi: num(campos, 9),
-    valorIcmsDesonerado: num(campos, 10),
+    valorIcmsDesonerado: num(campos, 9), // VL_RED_BC
+    valorIpi: num(campos, 10),
     linha,
   };
 }
@@ -327,6 +330,7 @@ export function parsearSpedFiscal(conteudo: string): SpedFiscalParsed {
   const apuracoesIcms: SpedRegistroE110[] = [];
   const erros: SpedErroParsing[] = [];
   const registrosDesconhecidosSet = new Set<string>();
+  const contagemRegistros: Record<string, number> = {};
 
   // Contexto de vinculação hierárquica
   let ultimoC100: SpedRegistroC100 | null = null;
@@ -344,6 +348,7 @@ export function parsearSpedFiscal(conteudo: string): SpedFiscalParsed {
 
     const registro = campos[0];
     const numeroLinha = i + 1; // 1-indexed
+    contagemRegistros[registro] = (contagemRegistros[registro] ?? 0) + 1;
 
     try {
       switch (registro) {
@@ -446,6 +451,7 @@ export function parsearSpedFiscal(conteudo: string): SpedFiscalParsed {
     totalC170: notasFiscais.reduce((acc, nf) => acc + nf.itens.length, 0),
     totalC190: notasFiscais.reduce((acc, nf) => acc + nf.consolidacoes.length, 0),
     totalE110: apuracoesIcms.length,
+    contagemRegistros,
     registrosDesconhecidos: Array.from(registrosDesconhecidosSet).sort(),
     erros,
   };
@@ -490,6 +496,38 @@ export function periodoSped(abertura: SpedRegistro0000): string {
   const ano = dt.getFullYear();
   const mes = String(dt.getMonth() + 1).padStart(2, '0');
   return `${ano}-${mes}`;
+}
+
+/**
+ * Data SPED (ddmmaaaa) → "AAAA-MM-DD", sem passar por Date (evita fuso).
+ */
+export function dataSpedIso(dataSped: string): string {
+  const limpo = (dataSped ?? '').replace(/\//g, '');
+  if (limpo.length !== 8) return dataSped ?? '';
+  return `${limpo.slice(4, 8)}-${limpo.slice(2, 4)}-${limpo.slice(0, 2)}`;
+}
+
+/**
+ * Data do XML (instante UTC) → "AAAA-MM-DD" no horário do Ceará (UTC-3, sem horário de verão).
+ */
+export function dataIsoBrasil(data: Date): string {
+  return new Date(data.getTime() - 3 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
+
+/**
+ * CST do SPED pode vir com 3 dígitos (origem + CST, ex: "260"). Retorna só o CST ("60").
+ */
+export function normalizarCst(cst: string | null | undefined): string {
+  const c = (cst ?? '').trim();
+  return c.length === 3 ? c.slice(1) : c;
+}
+
+/**
+ * CFOP de saída do fornecedor → CFOP equivalente de entrada (5→1, 6→2, 7→3).
+ */
+export function grupoCfopEntrada(cfopSaida: string): string {
+  const primeiro = (cfopSaida ?? '').trim().charAt(0);
+  return ({ '5': '1', '6': '2', '7': '3' } as Record<string, string>)[primeiro] ?? primeiro;
 }
 
 /**
