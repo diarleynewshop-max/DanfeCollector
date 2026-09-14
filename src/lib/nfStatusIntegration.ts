@@ -63,14 +63,30 @@ function envLocal(chave: string): string {
   return valor;
 }
 
-function configStatusRecebimento() {
+function configStatusRecebimento(cnpjDestinatario?: string) {
   const baseUrl = (envLocal('NF_STATUS_API_URL') || 'https://api-recebimento.newgrup.cloud/functions/v1/nf-status-integration').trim();
-  const tokens = [
-    envLocal('NF_STATUS_API_TOKEN_FACIL'),
-    envLocal('NF_STATUS_API_TOKEN_SOYE'),
-    envLocal('NF_STATUS_API_TOKEN'),
-    envLocal('NF_STATUS_API_TOKEN_NEWSHOP'),
-  ].filter((t): t is string => Boolean(t?.trim()));
+  const tokenNewshop = envLocal('NF_STATUS_API_TOKEN_NEWSHOP');
+  const tokenFacil = envLocal('NF_STATUS_API_TOKEN_FACIL');
+  const tokenSoye = envLocal('NF_STATUS_API_TOKEN_SOYE');
+  const tokenPadrao = envLocal('NF_STATUS_API_TOKEN');
+
+  const cnpjDigitos = String(cnpjDestinatario || '').replace(/\D/g, '');
+
+  const tokensOrdenados: (string | undefined)[] = [];
+  if (cnpjDigitos.startsWith('45998339')) {
+    // Newshop
+    tokensOrdenados.push(tokenNewshop, tokenPadrao, tokenFacil, tokenSoye);
+  } else if (cnpjDigitos.startsWith('50767035')) {
+    // Fácil
+    tokensOrdenados.push(tokenFacil, tokenSoye, tokenPadrao, tokenNewshop);
+  } else if (cnpjDigitos.startsWith('62803717')) {
+    // Soye
+    tokensOrdenados.push(tokenSoye, tokenFacil, tokenPadrao, tokenNewshop);
+  } else {
+    tokensOrdenados.push(tokenNewshop, tokenFacil, tokenSoye, tokenPadrao);
+  }
+
+  const tokens = tokensOrdenados.filter((t): t is string => Boolean(t?.trim()));
   const lista = [...new Set(tokens)];
   return { baseUrl, tokens: lista };
 }
@@ -107,14 +123,15 @@ export function etiquetaComStatusRecebimento(etiquetaAtual: string | null | unde
   return tags.length > 0 ? tags.join(',') : null;
 }
 
-async function chamarApiStatusRecebimento(chave: string): Promise<ResultadoStatusRecebimento> {
-  const { baseUrl, tokens } = configStatusRecebimento();
+async function chamarApiStatusRecebimento(chave: string, cnpjDestinatario?: string): Promise<ResultadoStatusRecebimento> {
+  const { baseUrl, tokens } = configStatusRecebimento(cnpjDestinatario);
   if (tokens.length === 0) throw new Error('NF_STATUS_API_TOKEN nao configurado no servidor.');
 
   const url = new URL(baseUrl);
   url.searchParams.set('chave', chave);
 
   let ultimoErro: Error | null = null;
+  let algumTokenAutenticou = false;
 
   for (const token of tokens) {
     try {
@@ -136,6 +153,11 @@ async function chamarApiStatusRecebimento(chave: string): Promise<ResultadoStatu
       }
 
       if (resposta.status === 404) {
+        algumTokenAutenticou = true;
+        continue;
+      }
+      if (resposta.status === 401 || resposta.status === 403) {
+        ultimoErro = new Error(`API status NF HTTP ${resposta.status}: Chave de API invalida ou revogada.`);
         continue;
       }
       if (!resposta.ok) {
@@ -152,7 +174,10 @@ async function chamarApiStatusRecebimento(chave: string): Promise<ResultadoStatu
       }
 
       const raw = result as Record<string, unknown>;
-      if (raw.found === false) continue;
+      if (raw.found === false) {
+        algumTokenAutenticou = true;
+        continue;
+      }
 
       const status = texto(raw.status);
       const chaveNfe = normalizarChaveNfe(texto(raw.chaveNfe) ?? chave);
@@ -186,6 +211,10 @@ async function chamarApiStatusRecebimento(chave: string): Promise<ResultadoStatu
     }
   }
 
+  if (algumTokenAutenticou) {
+    return { found: false };
+  }
+
   if (ultimoErro && !ultimoErro.message.includes('404')) {
     throw ultimoErro;
   }
@@ -196,7 +225,7 @@ async function chamarApiStatusRecebimento(chave: string): Promise<ResultadoStatu
 export async function consultarStatusRecebimentoPorNotaId(notaId: number): Promise<ConsultaStatusRecebimento> {
   const nota = await prisma.notaFiscal.findUnique({
     where: { id: notaId },
-    select: { id: true, chave: true, etiqueta: true, recebimentoStatus: true },
+    select: { id: true, chave: true, etiqueta: true, recebimentoStatus: true, destCnpj: true },
   });
   if (!nota) {
     return { chave: '', success: false, found: false, status: null, etiqueta: null, message: 'Nota nao encontrada.' };
@@ -208,7 +237,7 @@ export async function consultarStatusRecebimentoPorNotaId(notaId: number): Promi
   }
 
   try {
-    const result = await chamarApiStatusRecebimento(chave);
+    const result = await chamarApiStatusRecebimento(chave, nota.destCnpj || undefined);
     const consultadoEm = new Date();
 
     if (!result.found) {
