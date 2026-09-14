@@ -198,6 +198,9 @@ async function consultarNotaCompraErp({ empresa, cookie, chave }) {
   url.searchParams.set('filtro.direcao', 'desc');
   url.searchParams.set('_', String(Date.now()));
 
+const USER_AGENT_BROWSER =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36';
+
   const response = await fetch(url, {
     method: 'GET',
     redirect: 'manual',
@@ -206,7 +209,7 @@ async function consultarNotaCompraErp({ empresa, cookie, chave }) {
       'X-Requested-With': 'XMLHttpRequest',
       Referer: `${baseUrl}/notaFiscalCompra/index`,
       Cookie: cookie,
-      'User-Agent': 'DanfeCollector/1.0',
+      'User-Agent': USER_AGENT_BROWSER,
     },
     signal: AbortSignal.timeout(30000),
   });
@@ -242,15 +245,15 @@ async function main() {
   }
   if (args.empresa !== 'AUTO' && !HOSTS[baseEmpresa(args.empresa)]) throw new Error(`Empresa invalida: ${args.empresa}`);
   if (args.destino && !RAIZ_DESTINO[args.destino]) throw new Error(`Destino invalido: ${args.destino}`);
-  args.batchSize = Math.max(1, Math.min(20, Number(args.batchSize) || 20));
-  args.sleepMs = Math.max(0, Number(args.sleepMs) || 0);
-  args.batchSleepMs = Math.max(0, Number(args.batchSleepMs) || 0);
+  args.batchSize = Math.max(1, Math.min(200, Number(args.batchSize) || 50));
+  args.sleepMs = Math.max(0, Number(args.sleepMs) || 300);
+  args.batchSleepMs = Math.max(0, Number(args.batchSleepMs) || 1500);
 
   loadEnv();
   const prisma = new PrismaClient();
   const cookiesPorEmpresa = new Map();
-  async function cookieDaEmpresa(empresa) {
-    if (!cookiesPorEmpresa.has(empresa)) {
+  async function cookieDaEmpresa(empresa, forcarNovo = false) {
+    if (forcarNovo || !cookiesPorEmpresa.has(empresa)) {
       cookiesPorEmpresa.set(empresa, await obterCookieWeb(empresa));
     }
     return cookiesPorEmpresa.get(empresa);
@@ -297,7 +300,18 @@ async function main() {
       try {
         const empresaNota = args.empresa === 'AUTO' ? empresaPorCnpj(nota.cnpj?.cnpj, nota.cnpj?.razaoSocial) : args.empresa;
         porEmpresa.set(empresaNota, (porEmpresa.get(empresaNota) ?? 0) + 1);
-        const resultado = await consultarNotaCompraErp({ empresa: empresaNota, cookie: await cookieDaEmpresa(empresaNota), chave: nota.chave });
+        let resultado;
+        try {
+          resultado = await consultarNotaCompraErp({ empresa: empresaNota, cookie: await cookieDaEmpresa(empresaNota), chave: nota.chave });
+        } catch (errConsulta) {
+          if (String(errConsulta?.message).includes('Sessao ERP expirada')) {
+            console.log(`${prefixo} sessao expirou, reautenticando ${empresaNota}...`);
+            const novoCookie = await cookieDaEmpresa(empresaNota, true);
+            resultado = await consultarNotaCompraErp({ empresa: empresaNota, cookie: novoCookie, chave: nota.chave });
+          } else {
+            throw errConsulta;
+          }
+        }
         if (!resultado.found) {
           cont.naoEncontradas++;
           console.log(`${prefixo} empresa=${empresaNota} nao-encontrada`);
