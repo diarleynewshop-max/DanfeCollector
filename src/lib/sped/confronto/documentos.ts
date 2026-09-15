@@ -53,6 +53,23 @@ export interface NotaDanfeCompleta {
   situacaoSefaz: string;    // AUTORIZADA | CANCELADA | DENEGADA
   /** true se a nota foi emitida dentro do período do SPED (false = veio só pela chave) */
   emitidaNoPeriodo?: boolean;
+  /** Etiquetas da nota — inclui o status do ERP (Efetivada, Pendente a Entrega, Recusada...) */
+  etiqueta?: string | null;
+  /** Status da planilha de conferência importada (ex.: "Efetivada, Transferência") */
+  conferenciaStatus?: string | null;
+}
+
+type StatusErp = 'EFETIVADA' | 'PENDENTE_ENTREGA' | 'RECUSADA' | 'INCONSISTENTE';
+
+/** Status da nota no ERP, lido do que já está salvo no Proton-e (etiqueta ou conferência). */
+function statusErpDaNota(nota: NotaDanfeCompleta): StatusErp | null {
+  const texto = `${nota.etiqueta ?? ''},${nota.conferenciaStatus ?? ''}`
+    .normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase();
+  if (texto.includes('RECUSADA') || texto.includes('CANCELADA')) return 'RECUSADA';
+  if (texto.includes('EFETIVADA')) return 'EFETIVADA';
+  if (texto.includes('PENDENTE')) return 'PENDENTE_ENTREGA';
+  if (texto.includes('INCONSIST')) return 'INCONSISTENTE';
+  return null;
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────
@@ -327,19 +344,39 @@ export function confrontarDocumentos(
     const empresaEhDestinataria = (nota.destCnpj ?? '').replace(/\D/g, '') === cnpjEmpresa;
     const pertoDoFim = empresaEhDestinataria && Number.isFinite(diasAteFim) && diasAteFim <= DIAS_FIM_PERIODO;
     const numeroNf = nota.numero || chave;
+    const fornecedor = nota.emitenteNome || nota.emitenteCnpj;
+    const statusErp = empresaEhDestinataria ? statusErpDaNota(nota) : null;
+
+    // Compra: o SPED escritura pela data de ENTRADA. O status do ERP salvo no Proton-e
+    // diz se a nota foi efetivada (entrada em outra data), ainda não chegou ou foi recusada.
+    let severidade: DivergenciaDocumento['severidade'] = pertoDoFim ? 'BAIXA' : 'ALTA';
+    let descricao = pertoDoFim
+      ? `NF ${numeroNf} de "${fornecedor}" foi emitida em ${emissao} e não está neste SPED. Como foi no fim do mês, provavelmente a entrada será no mês seguinte — confira.`
+      : `NF ${numeroNf} de "${fornecedor}" foi emitida em ${emissao}, está autorizada na SEFAZ, mas não foi escriturada neste SPED.`;
+    if (statusErp === 'EFETIVADA') {
+      severidade = 'INFO';
+      descricao = `NF ${numeroNf} de "${fornecedor}" foi emitida em ${emissao} e está EFETIVADA no ERP, mas não está neste SPED — a entrada foi em outra data e ela vai no SPED do mês da entrada. Só é erro se a data de entrada no ERP for dentro deste período.`;
+    } else if (statusErp === 'PENDENTE_ENTREGA') {
+      severidade = 'INFO';
+      descricao = `NF ${numeroNf} de "${fornecedor}" foi emitida em ${emissao} e está PENDENTE DE ENTREGA no ERP — a mercadoria ainda não entrou, por isso não está neste SPED.`;
+    } else if (statusErp === 'RECUSADA') {
+      severidade = 'BAIXA';
+      descricao = `NF ${numeroNf} de "${fornecedor}" foi emitida em ${emissao} e está RECUSADA no ERP, por isso não está no SPED. Confirme se o fornecedor cancelou a nota ou se foi registrado o evento de desacordo.`;
+    } else if (statusErp === 'INCONSISTENTE') {
+      severidade = 'ALTA';
+      descricao = `NF ${numeroNf} de "${fornecedor}" foi emitida em ${emissao}, não está neste SPED e está INCONSISTENTE no ERP — resolva a inconsistência para a entrada ser lançada.`;
+    }
 
     divergencias.push({
       codigoRegra: 'R-DOC-02',
       tipo: 'NF_AUSENTE_SPED',
-      severidade: pertoDoFim ? 'BAIXA' : 'ALTA',
+      severidade,
       registroSped: 'C100',
       linhaSped: 0,
       campo: 'CHV_NFE',
       valorSped: '(não escriturada)',
-      valorDanfe: chave,
-      descricao: pertoDoFim
-        ? `NF ${numeroNf} de "${nota.emitenteNome || nota.emitenteCnpj}" foi emitida em ${emissao} e não está neste SPED. Como foi no fim do mês, provavelmente a entrada será no mês seguinte — confira.`
-        : `NF ${numeroNf} de "${nota.emitenteNome || nota.emitenteCnpj}" foi emitida em ${emissao}, está autorizada na SEFAZ, mas não foi escriturada neste SPED.`,
+      valorDanfe: statusErp ? `${chave} · ERP: ${statusErp.replace('_', ' ')}` : chave,
+      descricao,
       chaveNfe: chave,
       fornecedorNome: nota.emitenteNome ?? undefined,
       fornecedorCnpj: nota.emitenteCnpj ?? undefined,

@@ -22,7 +22,7 @@ export const CATALOGO_REGRAS: Record<string, RegraCatalogo> = {
   'R-DOC-02': {
     titulo: 'Nota autorizada que não foi escriturada',
     grupo: 'notas',
-    significado: 'Existe na SEFAZ uma nota contra a empresa, emitida no mês, que não aparece no SPED.',
+    significado: 'Existe na SEFAZ uma nota contra a empresa, emitida no mês, que não aparece no SPED. Se ela já está Efetivada ou Pendente de entrega no ERP, o alerta vira informativo: a entrada é em outra data e vai no SPED do mês da entrada.',
     comoCorrigir: 'Verifique se a mercadoria chegou e se a entrada foi lançada no ERP. Se chegou só no mês seguinte, é normal; se foi recusada, confirme o evento de desacordo/cancelamento.',
   },
   'R-DOC-03': {

@@ -183,6 +183,8 @@ export async function POST(req: Request) {
           valorIcms: true,
           status: true,
           situacaoSefaz: true,
+          etiqueta: true,
+          conferenciaStatus: true,
           xmlPath: true,
         } as const;
 
@@ -219,6 +221,8 @@ export async function POST(req: Request) {
             valorIcms: nf.valorIcms,
             status: nf.status,
             situacaoSefaz: nf.situacaoSefaz,
+            etiqueta: nf.etiqueta,
+            conferenciaStatus: nf.conferenciaStatus,
           });
 
           // XML só é necessário para conferir os itens das notas que estão no SPED
