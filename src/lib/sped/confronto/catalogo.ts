@@ -34,7 +34,7 @@ export const CATALOGO_REGRAS: Record<string, RegraCatalogo> = {
   'R-DOC-04': {
     titulo: 'Valor das mercadorias diferente do XML',
     grupo: 'notas',
-    significado: 'O total de produtos escriturado não é o mesmo da nota.',
+    significado: 'O total de produtos escriturado não é o mesmo da nota, e a diferença não é explicada por IPI/ICMS-ST nem pelo total da nota. Quando o ERP só embute os impostos no valor das mercadorias, o alerta aparece como informativo.',
     comoCorrigir: 'Revise os itens lançados (item faltando, duplicado ou com valor errado).',
   },
   'R-DOC-05': {

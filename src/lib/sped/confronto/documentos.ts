@@ -221,17 +221,27 @@ export function confrontarDocumentos(
     }
 
     // R-DOC-04: Valor de produtos divergente
+    // Muitos ERPs lançam VL_MERC com os impostos embutidos (produtos + IPI + ICMS-ST),
+    // chegando ao total da nota. Se a diferença é explicada pelos impostos ou VL_MERC
+    // bate com o total do XML, o valor da nota está certo — vira só informativo.
     if (valorDivergente(c100.valorMercadorias, notaDanfe.valorProdutos)) {
-      const diff = c100.valorMercadorias - (notaDanfe.valorProdutos ?? 0);
+      const vProd = notaDanfe.valorProdutos ?? 0;
+      const diff = c100.valorMercadorias - vProd;
+      const comImpostos = vProd + c100.valorIpi + c100.valorIcmsSt;
+      const impostosEmbutidos =
+        !valorDivergente(c100.valorMercadorias, notaDanfe.valorTotal) ||
+        (c100.valorIpi + c100.valorIcmsSt > 0 && !valorDivergente(c100.valorMercadorias, comImpostos));
       divergencias.push({
         ...base,
         codigoRegra: 'R-DOC-04',
         tipo: 'VALOR_NF',
-        severidade: severidadeValor(diff),
+        severidade: impostosEmbutidos ? 'INFO' : severidadeValor(diff),
         campo: 'VL_MERC',
         valorSped: formatarValor(c100.valorMercadorias),
         valorDanfe: formatarValor(notaDanfe.valorProdutos),
-        descricao: `NF ${numeroNf}: valor das mercadorias no SPED (R$ ${formatarValor(c100.valorMercadorias)}) diferente do XML (R$ ${formatarValor(notaDanfe.valorProdutos)}).`,
+        descricao: impostosEmbutidos
+          ? `NF ${numeroNf}: valor das mercadorias no SPED (R$ ${formatarValor(c100.valorMercadorias)}) inclui impostos/despesas — no XML os produtos são R$ ${formatarValor(vProd)} e o total da nota R$ ${formatarValor(notaDanfe.valorTotal)}. O total confere; o ERP só lançou VL_MERC com os impostos embutidos.`
+          : `NF ${numeroNf}: valor das mercadorias no SPED (R$ ${formatarValor(c100.valorMercadorias)}) diferente do XML (R$ ${formatarValor(vProd)}) e a diferença não é explicada por IPI/ICMS-ST nem pelo total da nota.`,
       });
     }
 
