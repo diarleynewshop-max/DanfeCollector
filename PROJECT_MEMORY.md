@@ -14,6 +14,20 @@ Transformar a gestão manual de planilhas de NF-e (baseado no modelo `NOTA FISCA
 
 ---
 
+## 🖥️ Infraestrutura (atualizado 15/09/2026)
+
+**100% VPS — a Vercel foi removida do projeto.**
+
+- [x] **Hospedagem:** VPS Hostinger (Ubuntu 24.04), CloudPanel + pm2, porta 3100, `https://danfe.newgrup.cloud`. Node via nvm.
+- [x] **Banco:** PostgreSQL self-hosted na própria VPS (Supabase Docker, schema `danfe`, compartilhado com SCAN/Catálogo — cada um no seu schema).
+- [x] **DNS:** `danfe.newgrup.cloud` (registro A) apontando direto para o IP da VPS.
+- [x] **Vercel desconectada:** projeto `danfe-collector` excluído da Vercel (dashboard + integração GitHub); `vercel.json`/`.vercel` removidos do repo.
+- [x] **Deploy automático:** GitHub Actions (`.github/workflows/deploy-vps.yml`) dispara a cada push no `master` — conecta na VPS via SSH (chave com *forced command*, só roda o script de deploy), que puxa o próprio código do GitHub (deploy key somente leitura), builda (`npm install && prisma generate && next build`) e reinicia o `pm2`. Sem gate de aprovação por enquanto — commit que builda vai direto pro ar.
+- [x] **Migrations de banco:** aplicadas manualmente via `supabase/migrations/*.sql` (nunca `prisma db push` em produção — Postgres é compartilhado com outros apps).
+- [ ] **Pendente:** RLS bloqueando o upsert de `SyncWorkerStatus` do worker de sync (erro recorrente no log, não derruba o app, mas o "saúde do worker" fica desatualizado). Resto de `.vercel`/`vercel.json` ainda na pasta da VPS (cosmético).
+
+---
+
 ## 🗺️ Roadmap de Desenvolvimento
 
 ### Fase 1: Estabilização e Conectividade (CONCLUÍDA — código)
