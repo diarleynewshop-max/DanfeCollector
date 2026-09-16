@@ -23,6 +23,9 @@ import {
   importarXmlsDaPasta,
   alternarEtiqueta,
   aplicarEtiquetasLote,
+  listarEtiquetasComCor,
+  criarEtiquetaPersonalizada,
+  type EtiquetaComCor,
   consultarNotaCompraErp,
   consultarStatusRecebimentoNota,
   consultarStatusRecebimentoLote,
@@ -68,6 +71,7 @@ import {
   type NfseEmissaoInput,
   type NfsePreview,
 } from '@/lib/actions';
+import { sugerirCorEtiqueta, corPadraoEtiqueta, coresRodaCromatica, corTextoContraste } from '@/lib/etiquetaCores';
 import type { DanfeData } from '@/lib/sefaz/detalhe';
 import {
   chaveDataLocal,
@@ -213,6 +217,7 @@ type FiltrosRelatorioAplicados = {
   tributoItem: FiltroTributoItem;
   transferenciaNewshop: FiltroTransferenciaNewshop;
   cte: string;
+  etiquetas: string[];
 };
 
 // DAE "a pagar" = DAE em aberto ou ainda a gerar (imposto pendente de pagamento)
@@ -502,6 +507,44 @@ const ETIQUETAS_PRESET = [
 // Uma nota pode ter várias etiquetas, guardadas separadas por vírgula
 function parseEtiquetas(s: string | null | undefined): string[] {
   return (s ?? '').split(',').map((t) => t.trim()).filter(Boolean);
+}
+
+// Cache em memória (nível de módulo) das cores de etiqueta: evita buscar de
+// novo no servidor toda vez que uma nota é aberta na sessão.
+let etiquetaCoresCache: EtiquetaComCor[] | null = null;
+let etiquetaCoresCachePromise: Promise<EtiquetaComCor[]> | null = null;
+
+async function buscarEtiquetaCores(forcar = false): Promise<EtiquetaComCor[]> {
+  if (!forcar && etiquetaCoresCache) return etiquetaCoresCache;
+  if (!forcar && etiquetaCoresCachePromise) return etiquetaCoresCachePromise;
+  etiquetaCoresCachePromise = listarEtiquetasComCor().then((lista) => {
+    etiquetaCoresCache = lista;
+    etiquetaCoresCachePromise = null;
+    return lista;
+  });
+  return etiquetaCoresCachePromise;
+}
+
+// Hook: mapa nome -> cor, já com fallback determinístico pras etiquetas que
+// ainda não têm linha em EtiquetaDefinicao (presets antigos, por exemplo).
+function useEtiquetaCores(): { mapa: Map<string, string>; recarregar: () => void } {
+  const [lista, setLista] = useState<EtiquetaComCor[]>(() => etiquetaCoresCache ?? []);
+
+  const recarregar = useCallback(() => {
+    void buscarEtiquetaCores(true).then(setLista);
+  }, []);
+
+  useEffect(() => {
+    if (etiquetaCoresCache) return;
+    void buscarEtiquetaCores().then(setLista);
+  }, []);
+
+  const mapa = useMemo(() => new Map(lista.map((item) => [item.nome, item.cor])), [lista]);
+  return { mapa, recarregar };
+}
+
+function corDaEtiqueta(nome: string, mapa: Map<string, string>): string {
+  return mapa.get(nome) ?? corPadraoEtiqueta(nome);
 }
 
 function textoSelagemSitram(nota: NotaComCnpj): string {
@@ -5529,7 +5572,7 @@ function ChecklistFiltro({
   maxHeight = 'max-h-36',
 }: {
   titulo: string;
-  opcoes: Array<{ valor: string; label: string; sub?: string }>;
+  opcoes: Array<{ valor: string; label: string; sub?: string; cor?: string }>;
   selecionados: string[];
   onToggle: (valor: string) => void;
   onMarcarTodos?: () => void;
@@ -5615,7 +5658,12 @@ function ChecklistFiltro({
                   className="mt-0.5 h-4 w-4 rounded border-[var(--border-strong)] text-[var(--accent)]"
                 />
                 <span className="min-w-0">
-                  <span className="block truncate font-semibold" title={opcao.label}>{opcao.label}</span>
+                  <span className="flex items-center gap-1.5 truncate font-semibold" title={opcao.label}>
+                    {opcao.cor && (
+                      <span className="inline-block h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: opcao.cor }} />
+                    )}
+                    {opcao.label}
+                  </span>
                   {opcao.sub && <span className="block truncate text-[11px] text-[var(--ink-mut)]" title={opcao.sub}>{opcao.sub}</span>}
                 </span>
               </label>
@@ -5670,6 +5718,10 @@ function RelatoriosDashboard({
   const [limiteTabela, setLimiteTabela] = useState(20);
   const [baixandoExcelTransporte, setBaixandoExcelTransporte] = useState(false);
   const [erroExcelTransporte, setErroExcelTransporte] = useState<string | null>(null);
+  const [baixandoExcelCte, setBaixandoExcelCte] = useState(false);
+  const [erroExcelCte, setErroExcelCte] = useState<string | null>(null);
+  const { mapa: mapaCoresEtiquetaRelatorio } = useEtiquetaCores();
+  const [filtroEtiquetasRelatorio, setFiltroEtiquetasRelatorio] = useState<string[]>([]);
   const [filtrosRelatorioAplicados, setFiltrosRelatorioAplicados] = useState<FiltrosRelatorioAplicados>({
     dataInicio: '',
     dataFim: '',
@@ -5684,6 +5736,7 @@ function RelatoriosDashboard({
     tributoItem: 'todos',
     transferenciaNewshop: 'ocultar',
     cte: 'todos',
+    etiquetas: [],
   });
   const inicioPeriodo = filtrosRelatorioAplicados.dataInicio && filtrosRelatorioAplicados.dataFim && filtrosRelatorioAplicados.dataInicio > filtrosRelatorioAplicados.dataFim
     ? filtrosRelatorioAplicados.dataFim
@@ -5845,6 +5898,18 @@ function RelatoriosDashboard({
     });
   }, [fornecedoresRelatorio, buscaFornecedorRelatorio]);
 
+  const etiquetasDisponiveisRelatorio = useMemo(() => {
+    const set = new Set<string>();
+    for (const nota of notasIndexadas) for (const tag of parseEtiquetas(nota.etiqueta)) set.add(tag);
+    return [...set].sort((a, b) => a.localeCompare(b));
+  }, [notasIndexadas]);
+
+  function toggleFiltroEtiquetaRelatorio(tag: string) {
+    setFiltroEtiquetasRelatorio((atuais) => (
+      atuais.includes(tag) ? atuais.filter((item) => item !== tag) : [...atuais, tag]
+    ));
+  }
+
   const todosFornecedoresRelatorio = useMemo(() => fornecedoresRelatorio.map((item) => item.valor), [fornecedoresRelatorio]);
   const fornecedoresSelecionadosRelatorio = fornecedorFiltroAtivo ? filtroFornecedoresRelatorio : todosFornecedoresRelatorio;
   const fornecedoresAplicadosRelatorio = filtrosRelatorioAplicados.fornecedorAtivo
@@ -5883,6 +5948,10 @@ function RelatoriosDashboard({
       if (!notaPassaFiltroDaeRelatorio(n)) return false;
       if (!notaTemTributoItem({ st: n.qtdItensSt, antecipacao: n.qtdItensAntecipacao }, filtrosRelatorioAplicados.tributoItem)) return false;
       if (filtrosRelatorioAplicados.risco !== 'todos' && n.risco !== filtrosRelatorioAplicados.risco) return false;
+      if (filtrosRelatorioAplicados.etiquetas.length > 0) {
+        const tagsNota = parseEtiquetas(n.etiqueta);
+        if (!filtrosRelatorioAplicados.etiquetas.some((tag) => tagsNota.includes(tag))) return false;
+      }
       if (busca && !n.buscaTexto.includes(busca)) return false;
       return true;
     });
@@ -6183,7 +6252,8 @@ function RelatoriosDashboard({
     filtrosRelatorioAplicados.busca !== buscaRelatorio ||
     filtrosRelatorioAplicados.tributoItem !== filtroTributoItemRelatorio ||
     filtrosRelatorioAplicados.transferenciaNewshop !== filtroTransferenciaNewshopRelatorio ||
-    filtrosRelatorioAplicados.cte !== filtroCteRelatorio;
+    filtrosRelatorioAplicados.cte !== filtroCteRelatorio ||
+    filtrosRelatorioAplicados.etiquetas.join('') !== filtroEtiquetasRelatorio.join('');
 
   function aplicarFiltrosRelatorio() {
     setFiltrosRelatorioAplicados({
@@ -6200,6 +6270,7 @@ function RelatoriosDashboard({
       tributoItem: filtroTributoItemRelatorio,
       transferenciaNewshop: filtroTransferenciaNewshopRelatorio,
       cte: filtroCteRelatorio,
+      etiquetas: [...filtroEtiquetasRelatorio],
     });
     setUfSelecionada(null);
     setLimiteTabela(20);
@@ -6222,6 +6293,7 @@ function RelatoriosDashboard({
     setFiltroTributoItemRelatorio('todos');
     setFiltroTransferenciaNewshopRelatorio('ocultar');
     setFiltroCteRelatorio('todos');
+    setFiltroEtiquetasRelatorio([]);
     setFiltrosRelatorioAplicados({
       dataInicio: '',
       dataFim: '',
@@ -6236,6 +6308,7 @@ function RelatoriosDashboard({
       tributoItem: 'todos',
       transferenciaNewshop: 'ocultar',
       cte: 'todos',
+      etiquetas: [],
     });
     setUfSelecionada(null);
     setLimiteTabela(20);
@@ -6287,6 +6360,7 @@ function RelatoriosDashboard({
       tributoItem: filtroTributoItemRelatorio,
       transferenciaNewshop: filtroTransferenciaNewshopRelatorio,
       cte: filtroCteRelatorio,
+      etiquetas: [...filtroEtiquetasRelatorio],
     };
   }
 
@@ -6367,6 +6441,20 @@ function RelatoriosDashboard({
       setErroExcelTransporte((error as Error).message || 'Erro ao baixar Excel de DAE vencidas.');
     } finally {
       setBaixandoExcelTransporte(false);
+    }
+  }
+
+  async function baixarExcelCteMensal() {
+    setBaixandoExcelCte(true);
+    setErroExcelCte(null);
+    try {
+      // Mesmos parametros de periodo/empresa do relatorio (inicio/fim); o
+      // endpoint ignora os demais filtros de notas que nao se aplicam a CT-e.
+      await baixarArquivoExcel('/api/relatorios/cte-mensal-xlsx', 'Nao foi possivel gerar o Excel de CT-e.');
+    } catch (error: unknown) {
+      setErroExcelCte((error as Error).message || 'Erro ao baixar Excel de CT-e.');
+    } finally {
+      setBaixandoExcelCte(false);
     }
   }
 
@@ -6858,6 +6946,16 @@ function RelatoriosDashboard({
           className="w-[120px]"
           maxHeight="max-h-44"
         />
+        <ChecklistFiltro
+          titulo="Etiqueta"
+          opcoes={etiquetasDisponiveisRelatorio.map((tag) => ({ valor: tag, label: tag, cor: corDaEtiqueta(tag, mapaCoresEtiquetaRelatorio) }))}
+          selecionados={filtroEtiquetasRelatorio}
+          onToggle={toggleFiltroEtiquetaRelatorio}
+          onMarcarTodos={() => setFiltroEtiquetasRelatorio(etiquetasDisponiveisRelatorio)}
+          onLimpar={() => setFiltroEtiquetasRelatorio([])}
+          className="w-[130px]"
+          maxHeight="max-h-44"
+        />
         <div>
           <label className="block text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-mut)]">CT-e</label>
           <select
@@ -6992,11 +7090,23 @@ function RelatoriosDashboard({
         >
           {baixandoExcelTransporte ? rt('Gerando Excel...', 'Excel...') : rt('Baixar Excel', 'Excel')}
         </button>
+        <button
+          type="button"
+          onClick={baixarExcelCteMensal}
+          disabled={baixandoExcelCte}
+          title="Relatorio mensal de CT-e (mesmo periodo/empresa do filtro acima)"
+          className={`${RELATORIO_BOTAO_ACAO} bg-sky-600 font-bold text-white hover:-translate-y-0.5 hover:bg-sky-700 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-60`}
+        >
+          {baixandoExcelCte ? rt('Gerando CT-e...', 'CT-e...') : rt('Baixar CT-e', 'CT-e')}
+        </button>
         <p className="ml-auto text-xs text-[var(--ink-mut)]">
           {rt(`${notasPeriodo.length} nota(s) no período`, `当前期间 ${notasPeriodo.length} 张发票`)} · {moeda(totalValorPeriodo)}
         </p>
         {erroExcelTransporte && (
           <p className="w-full text-sm font-medium text-red-700">{erroExcelTransporte}</p>
+        )}
+        {erroExcelCte && (
+          <p className="w-full text-sm font-medium text-red-700">{erroExcelCte}</p>
         )}
       </div>
 
@@ -7660,6 +7770,64 @@ function Badge({ tone, children }: { tone: 'green' | 'amber' | 'gray' | 'blue' |
     <span className={`shrink-0 text-[10px] px-2 py-1 rounded-full font-bold tracking-wide ${tones[tone]}`}>
       {children}
     </span>
+  );
+}
+
+// Roda de cores (círculo cromático) pra escolher a cor de uma etiqueta nova.
+// Swatches dispostos em círculo; a cor sugerida vem marcada, mas dá pra
+// escolher qualquer outra da roda.
+function RodaCromaticaEtiqueta({
+  corEscolhida,
+  onEscolher,
+}: {
+  corEscolhida: string;
+  onEscolher: (cor: string) => void;
+}) {
+  const cores = useMemo(() => coresRodaCromatica(16), []);
+  const tamanho = 140;
+  const raio = 54;
+  const centro = tamanho / 2;
+
+  return (
+    <div
+      className="relative shrink-0 rounded-full border border-[var(--border)]"
+      style={{ width: tamanho, height: tamanho }}
+    >
+      {cores.map((cor, i) => {
+        const angulo = (360 / cores.length) * i - 90;
+        const x = centro + raio * Math.cos((angulo * Math.PI) / 180) - 11;
+        const y = centro + raio * Math.sin((angulo * Math.PI) / 180) - 11;
+        const ativa = cor.toLowerCase() === corEscolhida.toLowerCase();
+        return (
+          <button
+            key={cor}
+            type="button"
+            title={cor}
+            onClick={() => onEscolher(cor)}
+            className="absolute grid place-items-center rounded-full transition"
+            style={{
+              left: x,
+              top: y,
+              width: 22,
+              height: 22,
+              background: cor,
+              border: ativa ? '3px solid var(--ink)' : '2px solid var(--surface)',
+              boxShadow: ativa ? '0 0 0 1px var(--ink)' : '0 1px 2px rgba(0,0,0,.25)',
+            }}
+          >
+            {ativa && <span className="text-[10px] font-black" style={{ color: corTextoContraste(cor) }}>✓</span>}
+          </button>
+        );
+      })}
+      <div
+        className="absolute rounded-full border border-[var(--border)]"
+        style={{
+          left: centro - 16, top: centro - 16, width: 32, height: 32,
+          background: corEscolhida,
+        }}
+        title="Cor escolhida"
+      />
+    </div>
   );
 }
 
@@ -9013,6 +9181,42 @@ function DetalheNota({
     router.refresh();
   }
 
+  const { mapa: mapaCoresEtiqueta, recarregar: recarregarCoresEtiqueta } = useEtiquetaCores();
+  const [criandoEtiqueta, setCriandoEtiqueta] = useState(false);
+  const [novaEtiquetaNome, setNovaEtiquetaNome] = useState('');
+  const [novaEtiquetaCor, setNovaEtiquetaCor] = useState('');
+  const [salvandoNovaEtiqueta, setSalvandoNovaEtiqueta] = useState(false);
+  const [erroNovaEtiqueta, setErroNovaEtiqueta] = useState<string | null>(null);
+
+  function abrirCriarEtiqueta() {
+    setNovaEtiquetaNome('');
+    setNovaEtiquetaCor(sugerirCorEtiqueta(mapaCoresEtiqueta.size));
+    setErroNovaEtiqueta(null);
+    setCriandoEtiqueta(true);
+  }
+
+  async function handleCriarEtiquetaPersonalizada() {
+    const nome = novaEtiquetaNome.trim();
+    if (!nome) { setErroNovaEtiqueta('Digite um nome para a etiqueta.'); return; }
+    if (tagsOtimizadas.includes(nome) || ETIQUETAS_PRESET.includes(nome)) {
+      setErroNovaEtiqueta('Essa etiqueta já existe.');
+      return;
+    }
+    setSalvandoNovaEtiqueta(true);
+    setErroNovaEtiqueta(null);
+    const res = await criarEtiquetaPersonalizada(nome, novaEtiquetaCor);
+    if (!res.success) {
+      setErroNovaEtiqueta(res.message);
+      setSalvandoNovaEtiqueta(false);
+      return;
+    }
+    recarregarCoresEtiqueta();
+    await handleClicarEtiqueta(nome);
+    setSalvandoNovaEtiqueta(false);
+    setCriandoEtiqueta(false);
+    setNovaEtiquetaNome('');
+  }
+
   // Pré-carrega o DANFE assim que a nota é aberta (não espera o clique na aba)
   useEffect(() => {
     if (!ehResumo && !danfe && !erro && !carregando) {
@@ -9643,32 +9847,94 @@ function DetalheNota({
             <div className="flex flex-wrap gap-1.5 max-w-md">
               {ETIQUETAS_PRESET.map((tag) => {
                 const ativa = tagsOtimizadas.includes(tag);
+                const cor = corDaEtiqueta(tag, mapaCoresEtiqueta);
                 return (
                   <button
                     key={tag}
                     type="button"
                     onClick={(e) => { e.stopPropagation(); handleClicarEtiqueta(tag); }}
-                    className={`px-3 py-1.5 rounded-lg text-sm font-medium border transition disabled:opacity-50 ${
-                      ativa
-                        ? 'bg-[var(--accent)] border-[var(--accent)] text-white'
-                        : 'bg-[var(--surface)] border-[var(--border-strong)] text-[var(--ink-mut)] hover:border-[var(--border-strong)] hover:bg-[var(--accent-soft)]'
-                    }`}
+                    className="px-3 py-1.5 rounded-lg text-sm font-medium border transition disabled:opacity-50"
+                    style={ativa
+                      ? { background: cor, borderColor: cor, color: corTextoContraste(cor) }
+                      : { background: 'var(--surface)', borderColor: 'var(--border-strong)', color: 'var(--ink-mut)' }}
                   >
                     {ativa ? '✓ ' : ''}{tag}
                   </button>
                 );
               })}
-              {tagsOtimizadas.filter((tag) => !ETIQUETAS_PRESET.includes(tag)).map((tag) => (
+              {tagsOtimizadas.filter((tag) => !ETIQUETAS_PRESET.includes(tag)).map((tag) => {
+                const cor = corDaEtiqueta(tag, mapaCoresEtiqueta);
+                return (
+                  <button
+                    key={tag}
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); handleClicarEtiqueta(tag); }}
+                    className="px-3 py-1.5 rounded-lg text-sm font-medium border transition disabled:opacity-50"
+                    style={{ background: cor, borderColor: cor, color: corTextoContraste(cor) }}
+                  >
+                    ✓ {tag}
+                  </button>
+                );
+              })}
+              {!criandoEtiqueta && (
                 <button
-                  key={tag}
                   type="button"
-                  onClick={(e) => { e.stopPropagation(); handleClicarEtiqueta(tag); }}
-                  className="px-3 py-1.5 rounded-lg text-sm font-medium border border-[var(--accent)] bg-[var(--accent)] text-white transition disabled:opacity-50"
+                  onClick={(e) => { e.stopPropagation(); abrirCriarEtiqueta(); }}
+                  className="px-3 py-1.5 rounded-lg text-sm font-medium border border-dashed border-[var(--border-strong)] text-[var(--ink-mut)] hover:border-[var(--accent)] hover:text-[var(--accent)] transition"
                 >
-                  ✓ {tag}
+                  + Nova etiqueta
                 </button>
-              ))}
+              )}
             </div>
+
+            {criandoEtiqueta && (
+              <div
+                className="mt-3 flex flex-wrap items-start gap-4 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-3"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <RodaCromaticaEtiqueta corEscolhida={novaEtiquetaCor} onEscolher={setNovaEtiquetaCor} />
+                <div className="min-w-[180px] flex-1 space-y-2">
+                  <label className="block text-xs font-semibold text-[var(--ink-mut)]">Nome da etiqueta</label>
+                  <input
+                    type="text"
+                    value={novaEtiquetaNome}
+                    onChange={(e) => setNovaEtiquetaNome(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') void handleCriarEtiquetaPersonalizada(); if (e.key === 'Escape') setCriandoEtiqueta(false); }}
+                    placeholder="Ex.: Natal"
+                    maxLength={40}
+                    autoFocus
+                    className="h-9 w-full rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-3 text-sm text-[var(--ink)] outline-none focus:border-[var(--accent)]"
+                  />
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-[var(--ink-mut)]">Cor:</span>
+                    <span
+                      className="inline-block h-5 w-5 rounded-full border border-[var(--border)]"
+                      style={{ background: novaEtiquetaCor }}
+                    />
+                    <span className="font-mono text-xs text-[var(--ink-mut)]">{novaEtiquetaCor}</span>
+                  </div>
+                  {erroNovaEtiqueta && <p className="text-xs font-medium text-red-600">{erroNovaEtiqueta}</p>}
+                  <div className="flex gap-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => void handleCriarEtiquetaPersonalizada()}
+                      disabled={salvandoNovaEtiqueta || !novaEtiquetaNome.trim()}
+                      className="rounded-lg bg-[var(--accent)] px-3 py-1.5 text-sm font-bold text-white disabled:opacity-50"
+                    >
+                      {salvandoNovaEtiqueta ? 'Criando...' : 'Criar e aplicar'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCriandoEtiqueta(false)}
+                      disabled={salvandoNovaEtiqueta}
+                      className="rounded-lg border border-[var(--border-strong)] px-3 py-1.5 text-sm font-medium text-[var(--ink-mut)]"
+                    >
+                      Cancelar
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </section>
         </div>
       )}

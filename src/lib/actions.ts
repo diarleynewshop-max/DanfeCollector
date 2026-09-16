@@ -373,6 +373,7 @@ export type NotaRelatorio = {
   conferenciaFonte: string | null;
   conferenciaAtualizadaEm: Date | null;
   conferenciaDivergencia: boolean;
+  etiqueta: string | null;
   daeVencimento: string | null;
   daeValor: number | null;
   daeValorAberto: number | null;
@@ -2614,6 +2615,7 @@ export async function listarNotasRelatorio(pagina = 1, porPagina = 120): Promise
       conferenciaFonte: true,
       conferenciaAtualizadaEm: true,
       conferenciaDivergencia: true,
+      etiqueta: true,
       cnpj: { select: { cnpj: true, razaoSocial: true } },
     },
   }),
@@ -4782,6 +4784,46 @@ export async function alternarEtiqueta(notaId: number, etiqueta: string): Promis
     };
   } catch (error: unknown) {
     return { success: false, message: `Erro ao salvar etiqueta: ${(error as Error).message}` };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Cor das etiquetas (EtiquetaDefinicao) — usada para etiquetas personalizadas
+// criadas pelo usuário direto na nota (com sugestão de cor via círculo
+// cromático calculada no cliente).
+// ---------------------------------------------------------------------------
+
+export type EtiquetaComCor = { nome: string; cor: string };
+
+export async function listarEtiquetasComCor(): Promise<EtiquetaComCor[]> {
+  const negado = await checarUsuarioAction();
+  if (negado) return [];
+
+  const linhas = await prisma.etiquetaDefinicao.findMany({
+    select: { nome: true, cor: true },
+    orderBy: { criadoEm: 'asc' },
+  });
+  return linhas;
+}
+
+export async function criarEtiquetaPersonalizada(nome: string, cor: string): Promise<ActionResult & { cor?: string }> {
+  const negado = await checarUsuarioAction();
+  if (negado) return negado;
+
+  const nomeLimpo = nome.trim();
+  if (!nomeLimpo) return { success: false, message: 'Nome da etiqueta é obrigatório.' };
+  if (nomeLimpo.length > 40) return { success: false, message: 'Nome da etiqueta muito longo (máx. 40 caracteres).' };
+  if (!/^#[0-9a-fA-F]{6}$/.test(cor)) return { success: false, message: 'Cor inválida.' };
+
+  try {
+    const existente = await prisma.etiquetaDefinicao.findUnique({ where: { nome: nomeLimpo } });
+    if (existente) return { success: true, message: 'Etiqueta já existia.', cor: existente.cor };
+
+    await prisma.etiquetaDefinicao.create({ data: { nome: nomeLimpo, cor } });
+    revalidatePath('/');
+    return { success: true, message: `Etiqueta "${nomeLimpo}" criada.`, cor };
+  } catch (error: unknown) {
+    return { success: false, message: `Erro ao criar etiqueta: ${(error as Error).message}` };
   }
 }
 

@@ -355,3 +355,13 @@ model SpedDivergencia {
   @@index([chaveNfe])
   @@index([fornecedorCnpj])
 }
+
+// Cor de cada etiqueta (preset ou personalizada) usada em NotaFiscal.etiqueta.
+// NotaFiscal.etiqueta continua sendo a lista (CSV) de nomes de etiqueta; esta
+// tabela só guarda a cor de exibição de cada nome, criada sob demanda quando
+// o usuário cria uma etiqueta nova na tela da nota.
+model EtiquetaDefinicao {
+  nome     String   @id
+  cor      String   // hex "#RRGGBB"
+  criadoEm DateTime @default(now())
+}
