@@ -223,6 +223,10 @@ type FiltrosRelatorioAplicados = {
 
 // DAE "a pagar" = DAE em aberto ou ainda a gerar (imposto pendente de pagamento)
 const DAE_A_PAGAR = ['EM_ABERTO', 'LIBERADA_PARA_GERAR'];
+// SEFAZ não deixa gerar/pagar boleto de DAE abaixo desse valor — por padrão
+// o alerta de DAE oculta esses boletos "presos" (não dá pra fazer nada com
+// eles mesmo), com opção de mostrar de novo.
+const LIMITE_DAE_PAGAVEL = 10;
 type NotaDaeRelatorioResumo = {
   daeStatus: string;
   daeCodigo?: string | null;
@@ -8315,7 +8319,7 @@ function AlertaDaes({
   onFiltrar: (inicio: string, fim: string) => void;
 }) {
   const { t } = useIdioma();
-  const itens = useMemo<ItemAlertaDae[]>(() => {
+  const itensBrutos = useMemo<ItemAlertaDae[]>(() => {
     const resultado: ItemAlertaDae[] = [];
 
     for (const nota of notas) {
@@ -8372,6 +8376,35 @@ function AlertaDaes({
     });
   }, [notas, cnpjId]);
 
+  // Boletos abaixo do valor mínimo que a SEFAZ deixa gerar/pagar ficam
+  // ocultos por padrão (não tem o que fazer com eles); dá pra revelar.
+  const [ocultarAbaixoLimiteDae, setOcultarAbaixoLimiteDae] = useState(true);
+  useEffect(() => {
+    const v = typeof window !== 'undefined' ? localStorage.getItem('danfe-alerta-dae-ocultar-baixo-valor') : null;
+    if (v !== null) setOcultarAbaixoLimiteDae(v === '1');
+  }, []);
+  function alternarOcultarAbaixoLimiteDae() {
+    setOcultarAbaixoLimiteDae((v) => {
+      try { localStorage.setItem('danfe-alerta-dae-ocultar-baixo-valor', v ? '0' : '1'); } catch {}
+      return !v;
+    });
+  }
+
+  function itemAbaixoLimitePagavel(item: ItemAlertaDae): boolean {
+    const valor = item.lancamento?.valorAberto ?? 0;
+    return valor > 0 && valor < LIMITE_DAE_PAGAVEL;
+  }
+
+  const itensAbaixoLimiteQtd = useMemo(
+    () => itensBrutos.filter(itemAbaixoLimitePagavel).length,
+    [itensBrutos]
+  );
+
+  const itens = useMemo(
+    () => ocultarAbaixoLimiteDae ? itensBrutos.filter((item) => !itemAbaixoLimitePagavel(item)) : itensBrutos,
+    [itensBrutos, ocultarAbaixoLimiteDae]
+  );
+
   const [aberto, setAberto] = useState(true);
   useEffect(() => {
     const v = typeof window !== 'undefined' ? localStorage.getItem('danfe-alerta-dae-aberto') : null;
@@ -8423,7 +8456,7 @@ function AlertaDaes({
     setFiltroFimAlerta('');
   }
 
-  if (itens.length === 0) return null;
+  if (itensBrutos.length === 0) return null;
 
   function disparar(chave: string, inicio: string, fim: string) {
     setSelecionado(chave);
@@ -8489,6 +8522,22 @@ function AlertaDaes({
           >
             {t('viewAll')}
           </button>
+          {itensAbaixoLimiteQtd > 0 && (
+            <button
+              type="button"
+              onClick={alternarOcultarAbaixoLimiteDae}
+              title={`Boletos abaixo de R$ ${LIMITE_DAE_PAGAVEL},00 — a SEFAZ não deixa gerar/pagar esses`}
+              className={`rounded-lg border px-3 py-2 text-sm font-semibold shadow-sm transition ${
+                ocultarAbaixoLimiteDae
+                  ? 'border-amber-300 bg-[var(--surface)] text-amber-800 hover:bg-amber-50'
+                  : 'border-amber-500 bg-amber-500 text-white'
+              }`}
+            >
+              {ocultarAbaixoLimiteDae
+                ? `🙈 ${itensAbaixoLimiteQtd} < R$${LIMITE_DAE_PAGAVEL} ocultos`
+                : `👁 Ocultar < R$${LIMITE_DAE_PAGAVEL}`}
+            </button>
+          )}
           <button
             type="button"
             onClick={() => setMostrarFiltroAlerta((v) => !v)}
