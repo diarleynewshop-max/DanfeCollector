@@ -40,5 +40,26 @@ module.exports = {
         PATH: `${NODE_BIN}:/usr/local/bin:/usr/bin:/bin`,
       },
     },
+    {
+      // Mantém a etiqueta de status ERP (Pendente a Entrega / Inconsistente)
+      // sempre atualizada, em lotes de 50 notas. Ignora notas Efetivada
+      // (status final, não muda mais). Ver scripts/atualizador-status-erp-continuo.mjs.
+      name: 'danfecollector-status-erp',
+      cwd: '/home/danfe/htdocs/danfe.newgrup.cloud',
+      script: './scripts/atualizador-status-erp-continuo.mjs',
+      interpreter: `${NODE_BIN}/node`,
+      exec_mode: 'fork',
+      instances: 1,
+      autorestart: true,
+      watch: false,
+      min_uptime: '10s',
+      restart_delay: 30000,
+      exp_backoff_restart_delay: 1000,
+      env: {
+        NODE_ENV: 'production',
+        PATH: `${NODE_BIN}:/usr/local/bin:/usr/bin:/bin`,
+        STATUS_ERP_BATCH_SIZE: '50',
+      },
+    },
   ],
 };

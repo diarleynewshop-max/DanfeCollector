@@ -17,7 +17,7 @@
 | Usuário do site | `danfe` |
 | Porta do app | `3100` |
 | Node (nvm) | `/home/danfe/.nvm/versions/node/v22.23.1/bin` (exportar no PATH; nvm não carrega sozinho em shell não-interativo) |
-| Processo | pm2 `danfecollector` + `danfecollector-sync-nf` (auto-start systemd `pm2-danfe`) |
+| Processo | pm2 `danfecollector` + `danfecollector-sync-nf` + `danfecollector-status-erp` (auto-start systemd `pm2-danfe`) |
 | Projeto local | `c:\Users\diarl\OneDrive\Documentos\GitHub\DanfeCollector` |
 
 ---
@@ -99,9 +99,12 @@ su - danfe -c 'export PATH=/home/danfe/.nvm/versions/node/v22.23.1/bin:$PATH; \
 ### 5. Reiniciar o app (Claude)
 ```bash
 su - danfe -c 'export PATH=/home/danfe/.nvm/versions/node/v22.23.1/bin:$PATH; \
-  pm2 restart danfecollector && pm2 start ecosystem.config.cjs --only danfecollector-sync-nf && pm2 save'
+  pm2 restart danfecollector && pm2 start ecosystem.config.cjs --only danfecollector-sync-nf && \
+  pm2 start ecosystem.config.cjs --only danfecollector-status-erp && pm2 save'
 ```
 > O worker `danfecollector-sync-nf` permanece ativo, chama a rota interna `/api/internal/sync-nf` a cada 15 minutos e o PM2 o reinicia se cair. Isso evita depender de abrir o dashboard para sincronizar NF.
+>
+> O worker `danfecollector-status-erp` roda em segundo plano checando o ERP em lotes de 50 notas (`scripts/atualizador-status-erp-continuo.mjs`), só para notas etiquetadas "Pendente a Entrega", "Inconsistente" ou sem etiqueta ainda — ignora "Efetivada"/"Recusada" por serem status finais. Depois de terminar uma volta completa, dorme 10 min e recomeça. Se o pm2 já tiver esse processo registrado de um deploy anterior, `pm2 start ecosystem.config.cjs --only danfecollector-status-erp` apenas reinicia com a config atual (não duplica).
 
 ### 6. Verificar (Claude)
 ```bash
