@@ -7,6 +7,7 @@ import * as path from 'path';
 import ExcelJS from 'exceljs';
 import { Prisma } from '@prisma/client';
 import { prisma } from './prisma';
+import { PRAZO_MANIFESTACAO_DIAS } from './prazoManifestacao';
 import {
   carregarCertificado,
   inspecionarCertificadoPfx,
@@ -2777,7 +2778,7 @@ export async function obterResumoInicio(): Promise<ResumoInicio> {
   const inicio7Dias = new Date(inicioHoje);
   inicio7Dias.setDate(inicio7Dias.getDate() - 6);
   const inicioPrazoManifestacao = new Date(inicioHoje);
-  inicioPrazoManifestacao.setDate(inicioPrazoManifestacao.getDate() - 10);
+  inicioPrazoManifestacao.setDate(inicioPrazoManifestacao.getDate() - PRAZO_MANIFESTACAO_DIAS);
 
   const [totalNotas, notasCompletas, notasSemSitram, pendentesManifestacao, emitidasHoje, emitidasUltimos7Dias, valores] = await Promise.all([
     prisma.notaFiscal.count({ where }),
@@ -5118,6 +5119,37 @@ export async function manifestarNotasLoteInterno(notaIds: number[]): Promise<Res
 
   revalidatePath('/');
   return resultados;
+}
+
+// Manifesta sozinho (Ciência da Operação) as notas que: são RESUMO, ainda
+// não foram manifestadas, não estão canceladas/denegadas, já têm pelo menos
+// 24h desde a emissão (dá tempo do emitente cancelar/corrigir antes) e ainda
+// estão dentro do prazo prático de manifestação (PRAZO_MANIFESTACAO_DIAS).
+// Chamada pelo worker periódico (/api/internal/sync-nf), não pelo usuário.
+export async function manifestarAutomaticamenteNotasElegiveisInterno(
+  limite = 30
+): Promise<{ elegivel: number; resultados: ResultadoManifestoLote[] }> {
+  const agora = new Date();
+  const ha24h = new Date(agora.getTime() - 24 * 60 * 60 * 1000);
+  const inicioPrazo = new Date(agora);
+  inicioPrazo.setHours(0, 0, 0, 0);
+  inicioPrazo.setDate(inicioPrazo.getDate() - PRAZO_MANIFESTACAO_DIAS);
+
+  const notas = await prisma.notaFiscal.findMany({
+    where: {
+      status: 'RESUMO',
+      manifestadaEm: null,
+      situacaoSefaz: { notIn: ['CANCELADA', 'DENEGADA'] },
+      emitidaEm: { gte: inicioPrazo, lte: ha24h },
+    },
+    select: { id: true },
+    orderBy: { emitidaEm: 'asc' },
+    take: Math.max(1, Math.min(100, Math.trunc(limite) || 30)),
+  });
+
+  if (notas.length === 0) return { elegivel: 0, resultados: [] };
+  const resultados = await manifestarNotasLoteInterno(notas.map((n) => n.id));
+  return { elegivel: notas.length, resultados };
 }
 
 // ===== Importação da relação de pagamento SITRAM (marcar DAE pago em lote) =====

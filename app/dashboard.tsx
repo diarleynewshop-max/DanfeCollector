@@ -72,6 +72,7 @@ import {
   type NfsePreview,
 } from '@/lib/actions';
 import { sugerirCorEtiqueta, corPadraoEtiqueta, coresRodaCromatica, corTextoContraste } from '@/lib/etiquetaCores';
+import { dentroPrazoManifestacao } from '@/lib/prazoManifestacao';
 import type { DanfeData } from '@/lib/sefaz/detalhe';
 import {
   chaveDataLocal,
@@ -684,10 +685,7 @@ function modalidadesDaNota(nota: NotaComCnpj): FiltroModalidadeNota[] {
 }
 
 function notaDentroPrazoManifestacao(nota: NotaComCnpj, referencia = new Date()): boolean {
-  const limite = new Date(referencia);
-  limite.setHours(0, 0, 0, 0);
-  limite.setDate(limite.getDate() - 10);
-  return new Date(nota.emitidaEm).getTime() >= limite.getTime();
+  return dentroPrazoManifestacao(nota.emitidaEm, referencia);
 }
 
 export default function Dashboard({

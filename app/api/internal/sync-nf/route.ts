@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import {
   executarBackfillFiscalAutomaticoInterno,
+  manifestarAutomaticamenteNotasElegiveisInterno,
   registrarFimWorker,
   registrarInicioWorker,
   sincronizarCnpjsAtivosInterno,
@@ -26,11 +27,15 @@ export async function POST(req: Request) {
   try {
     const sincronizacao = await sincronizarCnpjsAtivosInterno();
     const backfillFiscal = await executarBackfillFiscalAutomaticoInterno(40, 60, sincronizacao);
+    const autoManifesto = await manifestarAutomaticamenteNotasElegiveisInterno(30);
+    const manifestadasAuto = autoManifesto.resultados.filter((r) => r.status === 'manifestada').length;
+    const erradasAuto = autoManifesto.resultados.filter((r) => r.status === 'erro').length;
     const resultado = {
       ...sincronizacao,
       success: sincronizacao.success && backfillFiscal.success,
-      message: `${sincronizacao.message} SITRAM: ${backfillFiscal.chavesSitram} NF-e verificada(s), ${backfillFiscal.sitramAtualizadas} atualizada(s), ${backfillFiscal.sitramErros} erro(s).`,
+      message: `${sincronizacao.message} SITRAM: ${backfillFiscal.chavesSitram} NF-e verificada(s), ${backfillFiscal.sitramAtualizadas} atualizada(s), ${backfillFiscal.sitramErros} erro(s). Manifestacao automatica: ${autoManifesto.elegivel} elegivel(is), ${manifestadasAuto} manifestada(s), ${erradasAuto} erro(s).`,
       backfillFiscal,
+      autoManifesto,
     };
     await registrarFimWorker(resultado);
     // A falha de um CNPJ fica isolada no resumo. A rota permanece 200 para
