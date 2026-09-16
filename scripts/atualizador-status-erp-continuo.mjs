@@ -225,7 +225,12 @@ async function cookieDaEmpresa(empresa, forcarNovo = false) {
 // Notas que interessam a este worker: sem etiqueta de status ERP ainda, ou
 // marcadas Pendente a Entrega / Inconsistente. Efetivada e Recusada ficam de
 // fora por serem status finais (não mudam mais no ERP).
+// tipoOperacao='Entrada' é obrigatório: o endpoint consultado no ERP
+// (/notaFiscalCompra/pesquisa) só indexa notas de COMPRA (entrada). Notas de
+// Saída nunca aparecem lá — sem esse filtro o worker batia no ERP à toa em
+// toda nota de venda sem etiqueta e sempre voltava "não encontrada".
 const whereAlvo = {
+  tipoOperacao: 'Entrada',
   OR: [
     { etiqueta: null },
     { etiqueta: { contains: 'Pendente a Entrega' } },
