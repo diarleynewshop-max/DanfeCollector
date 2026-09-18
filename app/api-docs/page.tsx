@@ -91,6 +91,43 @@ const exemploHexonStatus = `curl -X POST "https://seu-dominio.com/api/v1/integra
   "message": "Status atualizado para CONCLUIDO RECEBIMENTO."
 }`;
 
+const exemploStatusErp = `curl -H "Authorization: Bearer SUA_CHAVE_API" \\
+  "https://danfe.newgrup.cloud/api/v1/notas/23260700000000000000550010000000011000000010/status-erp"
+
+# Resposta 200 (com consulta previa no ERP e atualizacao no DanfeCollector)
+{
+  "success": true,
+  "chave": "23260700000000000000550010000000011000000010",
+  "encontradaNoErp": true,
+  "mudouStatus": true,
+  "statusAnterior": "Pendente a Entrega",
+  "statusAtual": "Efetivada",
+  "situacaoErp": "EFETIVADA",
+  "etiqueta": "Conferido,Efetivada",
+  "empresaErp": "NEWSHOP",
+  "message": "Status atualizado no DanfeCollector: \\"Pendente a Entrega\\" -> \\"Efetivada\\".",
+  "dadosErp": {
+    "codigo": 12345,
+    "numero": "1",
+    "serie": "1",
+    "situacao": "EFETIVADA",
+    "fornecedor": "FORNECEDOR LTDA",
+    "valor": 1500.5,
+    "tipoOperacao": "Entrada",
+    "dataEmissao": "10/09/2026"
+  },
+  "notaDanfe": {
+    "id": 999,
+    "numero": "1",
+    "serie": "1",
+    "status": "COMPLETA",
+    "situacaoSefaz": "AUTORIZADA",
+    "emitidaEm": "2026-09-10T13:00:00.000Z",
+    "valorTotal": 1500.5
+  },
+  "consultadoEm": "2026-09-18T13:00:00.000Z"
+}`;
+
 const exemploListaCte = `curl -H "Authorization: Bearer SUA_CHAVE_API" \\
   "https://seu-dominio.com/api/v1/ctes?cnpj=00000000000000&inicio=2026-09-01"
 
@@ -226,6 +263,26 @@ GET /api/v1/ctes/{chave}?xml=1`}</BlocoCodigo>
           <p>Documentacao completa: docs/api-hexon-status-nf.md</p>
         </Secao>
 
+        <Secao titulo="Consultar status da NF no ERP (Varejo Fácil)">
+          <p>
+            Consulta o status em tempo real da NF-e diretamente no ERP (módulo de compras do Varejo Fácil).
+            O DanfeCollector <strong>primeiro consulta o ERP</strong> para verificar se a nota mudou de status; se mudou,
+            atualiza automaticamente a base local (etiquetas) e devolve a resposta com o indicador <strong>mudouStatus</strong>.
+          </p>
+          <BlocoCodigo>{`GET /api/v1/notas/{chave}/status-erp
+GET /api/v1/notas/{chave}/erp
+GET /api/v1/erp/status-nfe?chave={chave}`}</BlocoCodigo>
+          <p>
+            <strong>Rate Limit & Proteção:</strong> A rota inclui limitação de taxa (30 requisições/minuto) e semáforo
+            de concorrência para evitar travamentos ou bloqueios de sessão no ERP. Retorna os cabeçalhos <code>X-RateLimit-Limit</code>,
+            <code>X-RateLimit-Remaining</code> e <code>Retry-After</code> caso excedido (HTTP 429).
+          </p>
+          <p>
+            Inclui cache anti-flood de 15 segundos para a mesma chave. Para forçar consulta imediata ao ERP sem esperar o cache, use <code>?forcar=true</code>.
+          </p>
+          <BlocoCodigo>{exemploStatusErp}</BlocoCodigo>
+        </Secao>
+
         <Secao titulo="Codigos HTTP">
           <div className="overflow-x-auto rounded-xl border border-[var(--border)]">
             <table className="w-full text-left text-sm">
@@ -236,11 +293,13 @@ GET /api/v1/ctes/{chave}?xml=1`}</BlocoCodigo>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[var(--border)]">
-                <tr><td className="px-3 py-2 font-mono font-bold">200</td><td className="px-3 py-2">Consulta encontrada.</td></tr>
-                <tr><td className="px-3 py-2 font-mono font-bold">400</td><td className="px-3 py-2">Chave invalida. Informe 44 digitos.</td></tr>
+                <tr><td className="px-3 py-2 font-mono font-bold">200</td><td className="px-3 py-2">Consulta realizada com sucesso.</td></tr>
+                <tr><td className="px-3 py-2 font-mono font-bold">400</td><td className="px-3 py-2">Chave invalida. Informe 44 digitos numericos.</td></tr>
                 <tr><td className="px-3 py-2 font-mono font-bold">401</td><td className="px-3 py-2">Chave de API ausente ou invalida.</td></tr>
                 <tr><td className="px-3 py-2 font-mono font-bold">404</td><td className="px-3 py-2">Nota ou XML nao encontrado.</td></tr>
                 <tr><td className="px-3 py-2 font-mono font-bold">409</td><td className="px-3 py-2">XML completo ainda nao disponivel.</td></tr>
+                <tr><td className="px-3 py-2 font-mono font-bold">429</td><td className="px-3 py-2">Limite de requisicoes (Rate Limit) excedido. Aguarde o tempo indicado em Retry-After.</td></tr>
+                <tr><td className="px-3 py-2 font-mono font-bold">502/503</td><td className="px-3 py-2">ERP indisponivel ou fila de consultas temporariamente cheia.</td></tr>
               </tbody>
             </table>
           </div>

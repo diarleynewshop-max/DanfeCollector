@@ -268,3 +268,48 @@ export async function consultarNotaFiscalCompraErp(
     nota: normalizarNota(notas[0] as NotaFiscalCompraRaw, chaveLimpa),
   };
 }
+
+export const ETIQUETAS_STATUS_ERP_COMPRA = ['Efetivada', 'Pendente a Entrega', 'Inconsistente', 'Recusada'] as const;
+
+export function etiquetaStatusErpCompra(situacao: string | null | undefined): string | null {
+  const status = situacao?.trim().toUpperCase();
+  if (status === 'EFETIVADA') return 'Efetivada';
+  if (status === 'PENDENTE' || status === 'PENDENTE_ENTREGA') return 'Pendente a Entrega';
+  if (status === 'INCONSISTENTE') return 'Inconsistente';
+  if (status === 'RECUSADA') return 'Recusada';
+  return null;
+}
+
+export function extrairEtiquetaStatusErp(etiqueta: string | null | undefined): string | null {
+  if (!etiqueta) return null;
+  const tags = etiqueta.split(',').map((t) => t.trim());
+  for (const status of ETIQUETAS_STATUS_ERP_COMPRA) {
+    if (tags.includes(status)) return status;
+  }
+  return null;
+}
+
+export function empresaErpCompraPorCnpj(
+  cnpj: string | null | undefined,
+  razaoSocial?: string | null
+): EmpresaErp {
+  const raiz = String(cnpj ?? '').replace(/\D/g, '').slice(0, 8);
+  const nome = String(razaoSocial ?? '').toUpperCase();
+  if (raiz === '50767035') return 'FACIL';
+  if (raiz === '62803717') return 'SOYE';
+  if (nome.includes('SEFULY')) return 'SEFULY';
+  return 'NEWSHOP';
+}
+
+export function atualizarEtiquetaStatusErpCompra(
+  etiquetaAtual: string | null | undefined,
+  etiquetaErp: string
+): string {
+  const tags = (etiquetaAtual ?? '')
+    .split(',')
+    .map((tag) => tag.trim())
+    .filter((tag) => tag && !ETIQUETAS_STATUS_ERP_COMPRA.includes(tag as (typeof ETIQUETAS_STATUS_ERP_COMPRA)[number]));
+  if (!tags.includes(etiquetaErp)) tags.push(etiquetaErp);
+  return tags.join(',');
+}
+
