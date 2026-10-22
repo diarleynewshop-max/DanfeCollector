@@ -4300,6 +4300,21 @@ async function anexarDaesEmitidosSeNovo(
 }
 
 export async function consultarPagamentoIcmsNota(notaId: number): Promise<ResultadoPagamentoIcms> {
+  try {
+    return await consultarPagamentoIcmsNotaInterno(notaId);
+  } catch (error: unknown) {
+    // Excecao lancada em server action vira 500 generico em producao; devolve a mensagem real pra tela.
+    console.error(`[consultarPagamentoIcmsNota] nota ${notaId}:`, error);
+    return {
+      success: false,
+      message: `Falha ao consultar pagamento: ${(error as Error).message || 'erro desconhecido.'}`,
+      documentos: [],
+      simulacoes: [],
+    };
+  }
+}
+
+async function consultarPagamentoIcmsNotaInterno(notaId: number): Promise<ResultadoPagamentoIcms> {
   let usuario;
   try {
     usuario = await exigirUsuario();
