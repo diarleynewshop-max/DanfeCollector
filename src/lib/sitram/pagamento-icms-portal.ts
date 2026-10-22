@@ -82,6 +82,7 @@ async function pagamentoFetch<T>(
       ...(init.headers ?? {}),
     },
     cache: 'no-store',
+    signal: AbortSignal.timeout(30_000),
   });
 
   if (!resp.ok) {
@@ -134,6 +135,7 @@ export async function simularDaeNotaFiscal(
       'User-Agent': 'DanfeCollector/1.0',
     },
     cache: 'no-store',
+    signal: AbortSignal.timeout(30_000),
   });
 
   if (!resp.ok) {

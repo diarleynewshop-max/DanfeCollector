@@ -25,6 +25,7 @@ import {
   aplicarEtiquetasLote,
   listarEtiquetasComCor,
   criarEtiquetaPersonalizada,
+  definirTipoNotaEntrada,
   type EtiquetaComCor,
   consultarNotaCompraErp,
   consultarStatusRecebimentoNota,
@@ -43,7 +44,6 @@ import {
   prepararEmissaoNfse,
   emitirNfse,
   consultarPagamentoIcmsNota,
-  consultarPagamentoIcmsLote,
   listarChavesSitramParaAtualizacao,
   executarBackfillFiscalAutomatico,
   atualizarTransporteNotasExistentes,
@@ -2319,6 +2319,13 @@ export default function Dashboard({
   const [manifestoLoteErros, setManifestoLoteErros] = useState<Array<{ chave: string; detalhe: string }> | null>(null);
   const [consultandoPagamentoLote, setConsultandoPagamentoLote] = useState(false);
   const [pagamentoLoteResultado, setPagamentoLoteResultado] = useState<ResultadoPagamentoIcmsLote | null>(null);
+  const [pagamentoLoteProgresso, setPagamentoLoteProgresso] = useState<{
+    feito: number;
+    total: number;
+    numero: string | null;
+    status: string;
+    concluido: boolean;
+  } | null>(null);
   const [consultandoRecebimentoLote, setConsultandoRecebimentoLote] = useState(false);
   const [recebimentoLoteResultado, setRecebimentoLoteResultado] = useState<{
     processadas: number;
@@ -2483,31 +2490,161 @@ export default function Dashboard({
     setStatus({ success: true, message: `Manifestação em lote concluída: ${ids.length} nota(s) processada(s).` });
   }
 
-  async function handleConsultarPagamentoIcmsLote() {
+  async function handleConsultarPagamentoIcmsLote(notaIdsSolicitados?: number[]) {
     if (consultandoPagamentoLote) return;
+
+    const notasParaConsultar = notaIdsSolicitados
+      ? [...new Map([...notasAlerta, ...notas].map((nota) => [nota.id, nota])).values()]
+          .filter((nota) => notaIdsSolicitados.includes(nota.id) && notaElegivelConsultaPagamentoIcms(nota))
+      : notasPagamentoIcmsElegiveis;
+    const ids = [...new Set(notasParaConsultar.map((nota) => nota.id))];
+    if (ids.length === 0) {
+      setStatus({ success: true, message: 'Nenhuma NF visivel precisa consultar pagamento.' });
+      return;
+    }
+    const notasPorId = new Map(notasParaConsultar.map((nota) => [nota.id, nota]));
 
     setConsultandoPagamentoLote(true);
     setPagamentoLoteResultado(null);
-    try {
-      const anoConsulta = filtroAno ? Number(filtroAno) : anoCarregado ?? undefined;
-      const res = await consultarPagamentoIcmsLote({
-        cnpjId: filtroCnpjId === 'todos' ? undefined : filtroCnpjId,
-        ano: anoConsulta && Number.isFinite(anoConsulta) ? anoConsulta : undefined,
-      });
-      setPagamentoLoteResultado(res);
-      setStatus({ success: res.success, message: res.message });
+    setPagamentoLoteProgresso({ feito: 0, total: ids.length, numero: null, status: 'Preparando consulta...', concluido: false });
+    const detalhes: ResultadoPagamentoIcmsLote['detalhes'] = [];
+    let atualizadas = 0;
+    let pagas = 0;
+    let emAberto = 0;
+    let consultadas = 0;
+    let semLancamento = 0;
+    let erros = 0;
+    let anexosCriados = 0;
+    let suspeitasDuplicidade = 0;
+    let notasComSuspeitaDuplicidade = 0;
+    let processadas = 0;
+    let interrompidaPorFalhaDeComunicacao = false;
+    const pareceFalhaDeComunicacao = (mensagem: string) =>
+      /unexpected response was received from the server|fetch failed|failed to fetch|connect.{0,20}timeout|timed out|timeout|aborted|econnreset|eai_again|http 50[0234]/i.test(mensagem);
 
-      if (res.success) {
-        if (anoCarregado !== null) {
-          const atualizadas = await listarNotasPorAno(anoCarregado);
-          setNotas(atualizadas as NotaComCnpj[]);
-          setNotasAlerta(atualizadas as NotaComCnpj[]);
-        } else {
-          router.refresh();
+    try {
+      for (let indice = 0; indice < ids.length; indice++) {
+        const nota = notasPorId.get(ids[indice]);
+        if (!nota) continue;
+
+        let statusDaNota = 'Consulta iniciada';
+        let detalheDaNota = '';
+        setPagamentoLoteProgresso({ feito: indice, total: ids.length, numero: nota.numero, status: 'Consultando SITRAM...', concluido: false });
+        try {
+          const resultado = await consultarPagamentoIcmsNota(nota.id);
+          detalheDaNota = resultado.message;
+          if (resultado.success) {
+            atualizadas++;
+            anexosCriados += resultado.anexosCriados ?? 0;
+            suspeitasDuplicidade += resultado.suspeitasDuplicidade ?? 0;
+            if ((resultado.suspeitasDuplicidade ?? 0) > 0) notasComSuspeitaDuplicidade++;
+
+            if (resultado.statusDae === 'PAGO') {
+              pagas++;
+              statusDaNota = 'Pago';
+            } else if (resultado.statusDae === 'EM_ABERTO') {
+              emAberto++;
+              statusDaNota = 'Em aberto';
+            } else {
+              consultadas++;
+              statusDaNota = resultado.statusDae ? `Consultado: ${resultado.statusDae}` : 'Consultado';
+            }
+
+            detalhes.push({
+              notaId: nota.id,
+              chave: nota.chave,
+              numero: nota.numero,
+              status: (resultado.suspeitasDuplicidade ?? 0) > 0
+                ? 'duplicado'
+                : resultado.statusDae === 'PAGO'
+                  ? 'pago'
+                  : resultado.statusDae === 'EM_ABERTO'
+                    ? 'em-aberto'
+                    : 'consultado',
+              detalhe: detalheDaNota,
+            });
+
+            try {
+              const atualizada = await obterNotaPorId(nota.id);
+              if (atualizada) {
+                setNotas((lista) => lista.map((item) => item.id === nota.id ? atualizada as NotaComCnpj : item));
+                setNotasAlerta((lista) => lista.map((item) => item.id === nota.id ? atualizada as NotaComCnpj : item));
+              }
+            } catch {
+              // A consulta e a gravação já foram concluídas; a atualização visual pode ser refeita ao atualizar a tela.
+            }
+          } else {
+            erros++;
+            if (/sem lancamento|sem lançamento/i.test(resultado.message)) semLancamento++;
+            statusDaNota = 'Erro';
+            detalhes.push({ notaId: nota.id, chave: nota.chave, numero: nota.numero, status: 'erro', detalhe: detalheDaNota });
+            interrompidaPorFalhaDeComunicacao = pareceFalhaDeComunicacao(detalheDaNota);
+          }
+        } catch (error: unknown) {
+          erros++;
+          statusDaNota = 'Erro';
+          detalheDaNota = (error as Error).message || 'Erro ao consultar esta NF.';
+          detalhes.push({ notaId: nota.id, chave: nota.chave, numero: nota.numero, status: 'erro', detalhe: detalheDaNota });
+          interrompidaPorFalhaDeComunicacao = pareceFalhaDeComunicacao(detalheDaNota);
         }
+
+        const feito = indice + 1;
+        processadas = feito;
+        const resumo: ResultadoPagamentoIcmsLote = {
+          success: erros === 0,
+          message: `Consulta em andamento: ${feito}/${ids.length} NF(s), ${pagas} paga(s), ${emAberto} em aberto, ${erros} erro(s).`,
+          totalElegiveis: ids.length,
+          processadas: feito,
+          atualizadas,
+          pagas,
+          emAberto,
+          consultadas,
+          semLancamento,
+          erros,
+          limiteAplicado: false,
+          detalhes: detalhes.slice(0, 80),
+          anexosCriados,
+          suspeitasDuplicidade,
+          notasComSuspeitaDuplicidade,
+        };
+        setPagamentoLoteResultado(resumo);
+        setPagamentoLoteProgresso({
+          feito,
+          total: ids.length,
+          numero: nota.numero,
+          status: interrompidaPorFalhaDeComunicacao ? 'Falha de comunicacao; fila interrompida.' : statusDaNota,
+          concluido: interrompidaPorFalhaDeComunicacao,
+        });
+        if (interrompidaPorFalhaDeComunicacao) break;
       }
+
+      const mensagemFinal = interrompidaPorFalhaDeComunicacao
+        ? `Consulta interrompida por falha de comunicacao: ${processadas}/${ids.length} NF(s) processadas, ${erros} erro(s). Tente novamente quando o SITRAM estiver acessivel.`
+        : `Consulta pagamento ICMS concluida: ${ids.length}/${ids.length} NF(s), ${pagas} paga(s), ${emAberto} em aberto, ${erros} erro(s).`;
+      const res: ResultadoPagamentoIcmsLote = {
+        success: erros === 0 && !interrompidaPorFalhaDeComunicacao,
+        message: mensagemFinal,
+        totalElegiveis: ids.length,
+        processadas,
+        atualizadas,
+        pagas,
+        emAberto,
+        consultadas,
+        semLancamento,
+        erros,
+        limiteAplicado: false,
+        detalhes: detalhes.slice(0, 80),
+        anexosCriados,
+        suspeitasDuplicidade,
+        notasComSuspeitaDuplicidade,
+      };
+      setPagamentoLoteResultado(res);
+      setPagamentoLoteProgresso({ feito: processadas, total: ids.length, numero: null, status: res.message, concluido: true });
+      setStatus({ success: res.success, message: res.message });
+      router.refresh();
     } catch (error: unknown) {
       setStatus({ success: false, message: (error as Error).message || 'Erro ao consultar pagamento ICMS em lote.' });
+      setPagamentoLoteProgresso((atual) => atual ? { ...atual, concluido: true, status: (error as Error).message || 'Falha no processamento.' } : atual);
     } finally {
       setConsultandoPagamentoLote(false);
     }
@@ -2555,6 +2692,51 @@ export default function Dashboard({
 
   return (
     <div className="min-h-screen p-3 md:p-5 bg-[var(--ground)]">
+      {pagamentoLoteProgresso && (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/55 p-4" role="presentation">
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="progresso-pagamento-lote-titulo"
+            className="w-full max-w-lg rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-5 shadow-2xl"
+          >
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 id="progresso-pagamento-lote-titulo" className="text-lg font-black text-[var(--ink)]">
+                  Consulta de pagamento em andamento
+                </h2>
+                <p className="mt-1 text-sm text-[var(--ink-mut)]">
+                  {pagamentoLoteProgresso.feito < pagamentoLoteProgresso.total
+                    ? `NF ${pagamentoLoteProgresso.numero ?? '—'} · ${pagamentoLoteProgresso.feito} de ${pagamentoLoteProgresso.total}`
+                    : `${pagamentoLoteProgresso.feito} de ${pagamentoLoteProgresso.total} notas processadas`}
+                </p>
+              </div>
+              {!consultandoPagamentoLote && pagamentoLoteProgresso.concluido && (
+                <button
+                  type="button"
+                  onClick={() => setPagamentoLoteProgresso(null)}
+                  className="rounded-lg border border-[var(--border-strong)] px-3 py-1.5 text-sm font-semibold text-[var(--ink)] hover:bg-[var(--surface-2)]"
+                >
+                  Fechar
+                </button>
+              )}
+            </div>
+            <div className="mt-4 h-3 overflow-hidden rounded-full bg-[var(--surface-2)]" role="progressbar" aria-valuemin={0} aria-valuemax={pagamentoLoteProgresso.total} aria-valuenow={pagamentoLoteProgresso.feito}>
+              <div
+                className="h-full rounded-full bg-sky-600 transition-[width] duration-300"
+                style={{ width: `${Math.min(100, (pagamentoLoteProgresso.feito / Math.max(1, pagamentoLoteProgresso.total)) * 100)}%` }}
+              />
+            </div>
+            <p className="mt-3 text-sm font-semibold text-[var(--ink)]">{pagamentoLoteProgresso.status}</p>
+            {pagamentoLoteResultado && (
+              <p className="mt-2 text-xs text-[var(--ink-mut)]">
+                {pagamentoLoteResultado.pagas} pagas · {pagamentoLoteResultado.emAberto} em aberto · {pagamentoLoteResultado.erros} erros
+              </p>
+            )}
+            {consultandoPagamentoLote && <p className="mt-3 text-xs text-[var(--ink-mut)]">Aguarde: cada NF é consultada e salva antes da próxima.</p>}
+          </section>
+        </div>
+      )}
       <div className="max-w-[1800px] mx-auto">
         {/* Header */}
         <header className="rounded-xl bg-[var(--surface)] border border-[var(--border)] px-3.5 sm:px-5 py-3 sm:py-3.5 mb-3 sm:mb-4 shadow-sm flex justify-between items-center relative">
@@ -4269,6 +4451,8 @@ export default function Dashboard({
               notas={notasAlerta}
               cnpjId={filtroCnpjId}
               onFiltrar={filtrarVencimentoDae}
+              onConsultarPagamento={handleConsultarPagamentoIcmsLote}
+              consultandoPagamento={consultandoPagamentoLote}
             />
             <section className="mb-5 overflow-hidden rounded-xl border border-slate-300 bg-slate-50 text-slate-900 shadow-sm">
               <div className="flex min-h-14 flex-wrap items-center justify-between gap-3 border-b border-slate-300 bg-slate-100 px-4 py-3">
@@ -5069,7 +5253,7 @@ export default function Dashboard({
                       Consulta NF com DAE no SITRAM. DAE pago antigo consulta uma vez e fica gravado; DAE aberto pode reconsultar.
                     </p>
                     <button
-                      onClick={handleConsultarPagamentoIcmsLote}
+                      onClick={() => void handleConsultarPagamentoIcmsLote()}
                       disabled={consultandoPagamentoLote || pending}
                       className="bg-sky-600 hover:bg-sky-700 text-white px-4 py-1.5 rounded-lg text-sm font-semibold disabled:opacity-50"
                     >
@@ -5245,7 +5429,7 @@ export default function Dashboard({
                 {notasPagamentoIcmsElegiveis.length} visiveis para consultar
               </Badge>
               <button
-                onClick={handleConsultarPagamentoIcmsLote}
+                onClick={() => void handleConsultarPagamentoIcmsLote()}
                 disabled={consultandoPagamentoLote || pending}
                 className="bg-sky-600 hover:bg-sky-700 text-white px-4 py-1.5 rounded-lg text-sm font-semibold disabled:opacity-50"
               >
@@ -8313,10 +8497,14 @@ function AlertaDaes({
   notas,
   cnpjId,
   onFiltrar,
+  onConsultarPagamento,
+  consultandoPagamento,
 }: {
   notas: NotaComCnpj[];
   cnpjId: number | 'todos';
   onFiltrar: (inicio: string, fim: string) => void;
+  onConsultarPagamento: (notaIds: number[]) => void;
+  consultandoPagamento: boolean;
 }) {
   const { t } = useIdioma();
   const itensBrutos = useMemo<ItemAlertaDae[]>(() => {
@@ -8423,6 +8611,9 @@ function AlertaDaes({
   const [filtroFimAlerta, setFiltroFimAlerta] = useState('');
   const [mostrarFiltroAlerta, setMostrarFiltroAlerta] = useState(false);
   const [selecionado, setSelecionado] = useState<string | null>(null);
+  const [categoriaZipConfirmacao, setCategoriaZipConfirmacao] = useState<'vencidos' | 'proximos' | null>(null);
+  const [baixandoZip, setBaixandoZip] = useState(false);
+  const [erroZip, setErroZip] = useState<string | null>(null);
 
   const empresasAlerta = useMemo(() => {
     const nomes = new Set<string>();
@@ -8464,11 +8655,49 @@ function AlertaDaes({
   }
 
   const vencidos = itens.filter((item) => item.dias !== null && item.dias < 0);
+  const notasVencidasIds = [...new Set(vencidos.map((item) => item.nota.id))];
   const vencemHoje = itens.filter((item) => item.dias === 0);
   const proximos = itens.filter((item) => item.dias !== null && item.dias > 0 && item.dias <= 7);
   const totalAberto = itens.reduce((total, item) => total + (item.lancamento?.valorAberto ?? 0), 0);
   const hoje = deslocarData(0);
   const filtroAlertaAtivo = Boolean(filtroEmpresaAlerta || filtroInicioAlerta || filtroFimAlerta);
+
+  async function baixarZipDaes(categoria: 'vencidos' | 'proximos') {
+    const itensParaBaixar = categoria === 'vencidos' ? vencidos : proximos;
+    const notaIds = [...new Set(itensParaBaixar.map((item) => item.nota.id))];
+    if (notaIds.length === 0) return;
+
+    setBaixandoZip(true);
+    setErroZip(null);
+    try {
+      const resposta = await fetch('/api/dae/boletos-zip', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ categoria, notaIds }),
+      });
+      const tipoResposta = resposta.headers.get('content-type') ?? '';
+      if (!resposta.ok || !tipoResposta.includes('application/zip')) {
+        const erro = await resposta.json().catch(() => null) as { message?: string } | null;
+        throw new Error(erro?.message || 'Não foi possível baixar os boletos em ZIP.');
+      }
+
+      const arquivo = await resposta.blob();
+      const url = URL.createObjectURL(arquivo);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = resposta.headers.get('content-disposition')?.match(/filename="([^"]+)"/)?.[1] || `DAEs-${categoria}.zip`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setCategoriaZipConfirmacao(null);
+    } catch (error: unknown) {
+      setErroZip((error as Error).message || 'Não foi possível baixar os boletos em ZIP.');
+    } finally {
+      setBaixandoZip(false);
+    }
+  }
 
   const BOTAO_BASE = 'rounded-lg border px-3 py-2 text-left shadow-sm transition cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-offset-1';
   const BOTAO_SELECIONADO = 'ring-2 ring-offset-1 ring-[var(--ink)] scale-[1.03]';
@@ -8481,6 +8710,33 @@ function AlertaDaes({
             <h2 className="font-bold text-[var(--ink)]">{t('daeAlertTitle')}</h2>
             <p className="text-xs text-[var(--ink-mut)]">{t('daeAlertSummary', { count: itens.length, amount: moeda(totalAberto) })}</p>
           </div>
+          <button
+            type="button"
+            onClick={() => onConsultarPagamento(notasVencidasIds)}
+            disabled={notasVencidasIds.length === 0 || consultandoPagamento}
+            title={`Consultar pagamento das ${notasVencidasIds.length} NF(s) com DAE vencido`}
+            className="rounded-lg border border-blue-300 bg-blue-700 px-3 py-2 text-left text-[10px] font-black uppercase leading-tight text-white shadow-sm transition hover:bg-blue-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {consultandoPagamento ? 'CONSULTA EM ANDAMENTO' : `CONSULTAR PAGAMENTO (${notasVencidasIds.length} NFs)`}
+          </button>
+          <button
+            type="button"
+            onClick={() => { setErroZip(null); setCategoriaZipConfirmacao('vencidos'); }}
+            disabled={vencidos.length === 0 || baixandoZip}
+            title={`${vencidos.length} DAE(s) vencido(s) disponível(is) para baixar`}
+            className="rounded-lg border border-purple-300 bg-purple-700 px-3 py-2 text-left text-[10px] font-black uppercase leading-tight text-white shadow-sm transition hover:bg-purple-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-500 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            BAIXA TODOS OS BOLETOS DE DAE VENCIDO ({vencidos.length})
+          </button>
+          <button
+            type="button"
+            onClick={() => { setErroZip(null); setCategoriaZipConfirmacao('proximos'); }}
+            disabled={proximos.length === 0 || baixandoZip}
+            title={`${proximos.length} DAE(s) com vencimento nos próximos 7 dias disponível(is) para baixar`}
+            className="rounded-lg border border-green-300 bg-green-700 px-3 py-2 text-left text-[10px] font-black uppercase leading-tight text-white shadow-sm transition hover:bg-green-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green-500 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            BAIXA TODOS OS BOLETOS DE DAE DOS PRÓXIMOS 7 DIAS ({proximos.length})
+          </button>
           {vencidos.length > 0 && (
             <button
               type="button"
@@ -8678,6 +8934,42 @@ function AlertaDaes({
           );
         })}
       </div>
+      )}
+      {categoriaZipConfirmacao && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 p-4" role="presentation">
+          <section
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="confirmar-zip-dae-titulo"
+            className="w-full max-w-lg rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-5 shadow-2xl"
+          >
+            <h3 id="confirmar-zip-dae-titulo" className="text-lg font-black text-[var(--ink)]">
+              Baixar ZIP de DAEs {categoriaZipConfirmacao === 'vencidos' ? 'vencidos' : 'dos próximos 7 dias'}
+            </h3>
+            <p className="mt-2 text-sm text-[var(--ink-mut)]">
+              O DanfeCollector vai solicitar os PDFs ao SITRAM e juntar {new Set((categoriaZipConfirmacao === 'vencidos' ? vencidos : proximos).map((item) => item.nota.id)).size} nota(s) no ZIP. A ação pode gerar ou atualizar os documentos no SITRAM; nenhum pagamento será feito.
+            </p>
+            {erroZip && <p role="alert" className="mt-3 rounded-lg border border-red-300 bg-red-50 p-3 text-sm font-semibold text-red-800">{erroZip}</p>}
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                disabled={baixandoZip}
+                onClick={() => setCategoriaZipConfirmacao(null)}
+                className="rounded-lg border border-[var(--border-strong)] px-4 py-2 text-sm font-semibold text-[var(--ink)] disabled:opacity-60"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                disabled={baixandoZip}
+                onClick={() => void baixarZipDaes(categoriaZipConfirmacao)}
+                className="rounded-lg bg-[var(--accent)] px-4 py-2 text-sm font-bold text-white disabled:cursor-wait disabled:opacity-60"
+              >
+                {baixandoZip ? 'Gerando ZIP...' : 'Gerar DAEs e baixar ZIP'}
+              </button>
+            </div>
+          </section>
+        </div>
       )}
     </section>
   );
@@ -9372,6 +9664,15 @@ function DetalheNota({
     }
   }
 
+  async function handleDefinirTipoNotaEntrada(tipo: string) {
+    const res = await definirTipoNotaEntrada(nota.id, tipo || null);
+    setMsgErpCompra({ ok: res.success, texto: res.message });
+    if (res.success) {
+      const atualizada = await obterNotaPorId(nota.id);
+      if (atualizada) onNotaAtualizada(atualizada);
+    }
+  }
+
   async function handlePrepararSelagem() {
     setPreparandoSelagem(true);
     setMsgSelagem(null);
@@ -9808,6 +10109,24 @@ function DetalheNota({
                   {msgErpCompra.texto}
                 </p>
               )}
+              <div className="mt-3 flex flex-wrap items-center gap-3 border-t border-sky-200 pt-3">
+                <label htmlFor={`tipo-nota-entrada-${nota.id}`} className="text-xs font-bold uppercase tracking-wide text-sky-900">Tipo da nota</label>
+                <select
+                  id={`tipo-nota-entrada-${nota.id}`}
+                  value={nota.tipoNotaEntrada ?? ''}
+                  onChange={(e) => void handleDefinirTipoNotaEntrada(e.target.value)}
+                  className="min-w-56 rounded-lg border border-sky-300 bg-white px-3 py-2 text-sm text-slate-900"
+                >
+                  <option value="">Detectar automaticamente</option>
+                  <option value="USO E CONSUMO">USO E CONSUMO</option>
+                  <option value="VENDA">VENDA</option>
+                  <option value="DEVOLUÇÃO">DEVOLUÇÃO</option>
+                  <option value="BONIFICAÇÃO">BONIFICAÇÃO</option>
+                </select>
+                <span className="text-xs text-sky-800">
+                  {nota.tipoNotaEntradaOrigem === 'MANUAL' ? 'Definido manualmente' : nota.tipoNotaEntradaOrigem === 'AUTOMATICA' ? 'Classificado automaticamente; pode ajustar acima' : 'A consulta do ERP tenta classificar pela natureza da operação'}
+                </span>
+              </div>
             </div>
             {notaEhRedFlagDevolucaoFornecedor(nota) && (
               <div className="mb-4 rounded-lg border border-red-300 bg-red-50 p-3 text-red-900">

@@ -11,7 +11,9 @@ module.exports = {
       instances: 1,
       autorestart: true,
       watch: false,
-      max_memory_restart: '900M',
+      // A tela de DAEs processa centenas de registros; 900 MB faz o PM2
+      // encerrar o Next durante a resposta e o Nginx devolve 502.
+      max_memory_restart: '1600M',
       min_uptime: '20s',
       restart_delay: 5000,
       exp_backoff_restart_delay: 1000,

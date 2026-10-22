@@ -21,6 +21,7 @@
     "@xmldom/xmldom": "^0.9.10",
     "exceljs": "^4.4.0",
     "fast-xml-parser": "^5.8.0",
+    "jszip": "^3.10.1",
     "next": "^15.3.2",
     "node-forge": "^1.4.0",
     "pdf-parse": "^2.4.5",

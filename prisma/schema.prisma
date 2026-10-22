@@ -82,6 +82,8 @@ model NotaFiscal {
   emitidaEm     DateTime
   tipoOperacao  String?  // "Entrada" ou "Saída" (tpNF)
   naturezaOp    String?  // natureza da operação (natOp)
+  tipoNotaEntrada String? // USO E CONSUMO | VENDA | DEVOLUÇÃO | BONIFICAÇÃO
+  tipoNotaEntradaOrigem String? // AUTOMATICA | MANUAL
 
   // Emitente
   emitenteNome  String?

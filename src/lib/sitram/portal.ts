@@ -100,6 +100,7 @@ async function portalGet<T>(pathname: string, query?: Record<string, string | nu
       'User-Agent': 'DanfeCollector/1.0',
     },
     cache: 'no-store',
+    signal: AbortSignal.timeout(30_000),
   });
 
   if (!resp.ok) {

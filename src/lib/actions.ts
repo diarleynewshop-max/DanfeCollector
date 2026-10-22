@@ -82,7 +82,7 @@ import {
   type ConsultaStatusRecebimento,
 } from './nfStatusIntegration';
 export type { ConsultaStatusRecebimento } from './nfStatusIntegration';
-import { consultarNotaFiscalCompraErp } from './varejoFacilNotaCompra';
+import { classificarTipoNotaEntrada, consultarNotaFiscalCompraErp, TIPOS_NOTA_ENTRADA, type TipoNotaEntrada } from './varejoFacilNotaCompra';
 import { verificarTipoOperacaoErp } from './erpRegrasConferencia';
 import {
   NFSE_CNPJ_AUTORIZADO,
@@ -122,6 +122,7 @@ export type ConsultaNotaCompraErp = {
   fornecedor: string | null;
   tipoOperacao: string | null;
   tipoOperacaoDivergente: boolean;
+  tipoNotaEntrada: TipoNotaEntrada | null;
 };
 
 export type TramitaSelagemPreview = {
@@ -1280,9 +1281,14 @@ export async function sincronizarNotasInterno(cnpjId: number): Promise<ActionRes
           if (!nota) continue;
 
           const existente = await prisma.notaFiscal.findUnique({ where: { chave: nota.chave } });
+          const tipoNotaAuto = classificarTipoNotaEntrada(nota.naturezaOp, nota.tipoOperacao);
           if (!existente) {
             await prisma.notaFiscal.create({
-              data: { ...nota, cnpjId },
+              data: {
+                ...nota,
+                cnpjId,
+                ...(tipoNotaAuto ? { tipoNotaEntrada: tipoNotaAuto, tipoNotaEntradaOrigem: 'AUTOMATICA' } : {}),
+              },
             });
             novasNotas++;
           } else if (existente.status === 'RESUMO' && (nota.status === 'COMPLETA' || !existente.emitenteNome)) {
@@ -1294,6 +1300,9 @@ export async function sincronizarNotasInterno(cnpjId: number): Promise<ActionRes
               where: { chave: nota.chave },
               data: {
                 ...campos,
+                ...(existente.tipoNotaEntradaOrigem !== 'MANUAL' && tipoNotaAuto
+                  ? { tipoNotaEntrada: tipoNotaAuto, tipoNotaEntradaOrigem: 'AUTOMATICA' }
+                  : {}),
                 status,
                 situacaoSefaz: existente.situacaoSefaz === 'CANCELADA' ? existente.situacaoSefaz : situacaoSefaz,
               },
@@ -2029,12 +2038,24 @@ async function guardarDocumento(
   const nota = await processarDocumento(doc, cnpjInteressado);
   if (!nota) return null;
   const existente = await prisma.notaFiscal.findUnique({ where: { chave: nota.chave } });
+  const tipoNotaAuto = classificarTipoNotaEntrada(nota.naturezaOp, nota.tipoOperacao);
   if (!existente) {
-    await prisma.notaFiscal.create({ data: { ...nota, cnpjId } });
+    await prisma.notaFiscal.create({
+      data: { ...nota, cnpjId, ...(tipoNotaAuto ? { tipoNotaEntrada: tipoNotaAuto, tipoNotaEntradaOrigem: 'AUTOMATICA' } : {}) },
+    });
   } else if (existente.status === 'RESUMO' && nota.status === 'COMPLETA') {
     const { status, chave, ...campos } = nota;
     void chave;
-    await prisma.notaFiscal.update({ where: { chave: nota.chave }, data: { ...campos, status } });
+    await prisma.notaFiscal.update({
+      where: { chave: nota.chave },
+      data: {
+        ...campos,
+        status,
+        ...(existente.tipoNotaEntradaOrigem !== 'MANUAL' && tipoNotaAuto
+          ? { tipoNotaEntrada: tipoNotaAuto, tipoNotaEntradaOrigem: 'AUTOMATICA' }
+          : {}),
+      },
+    });
   }
   return nota.status === 'COMPLETA' ? 'completa' : 'resumo';
 }
@@ -3432,6 +3453,50 @@ export async function listarChavesSitramSemConsulta(
   return listarChavesSitramParaAtualizacao(ano, cnpjId);
 }
 
+/**
+ * Varredura incremental do worker: inclui notas resumo e notas sem UF
+ * identificada, e revisita o histórico completo ao menos uma vez por dia.
+ */
+export async function executarMonitorSitramContinuoInterno(limite = 50) {
+  const limiteSeguro = Math.max(1, Math.min(100, Math.trunc(Number(limite) || 50)));
+  const corte = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  const notas = await prisma.notaFiscal.findMany({
+    where: {
+      status: { in: ['COMPLETA', 'RESUMO'] },
+      situacaoSefaz: { notIn: ['CANCELADA', 'DENEGADA'] },
+      AND: [
+        { OR: [{ emitenteUf: null }, { emitenteUf: { not: 'CE' } }] },
+        { OR: [{ sitramConsultadaEm: null }, { sitramConsultadaEm: { lt: corte } }] },
+      ],
+    },
+    select: { chave: true, sitramConsultadaEm: true, emitidaEm: true },
+    orderBy: [
+      { sitramConsultadaEm: 'asc' },
+      { emitidaEm: 'desc' },
+    ],
+    take: limiteSeguro * 3,
+  });
+  const chaves = notas
+    .map((nota) => nota.chave.replace(/\D/g, ''))
+    .filter((chave) => chave.length === 44 && chave.slice(20, 22) === '55')
+    .slice(0, limiteSeguro);
+
+  if (!chaves.length) {
+    return { success: true, consultadas: 0, atualizadas: 0, erros: 0, message: 'Nenhuma NF-e SITRAM vencida para revisao.' };
+  }
+
+  const lote = await atualizarSitramPorChavesInterno(chaves, false);
+  const atualizadas = lote.resultados.reduce((total, item) => total + item.notasAtualizadas, 0);
+  const erros = lote.resultados.filter((item) => item.status === 'erro').length;
+  return {
+    success: erros === 0,
+    consultadas: chaves.length,
+    atualizadas,
+    erros,
+    message: `${chaves.length} NF-e SITRAM revisada(s), ${atualizadas} atualizada(s), ${erros} erro(s).`,
+  };
+}
+
 async function listarChavesSitramBackfillAutomatico(
   usuario: Awaited<ReturnType<typeof exigirUsuario>> | null,
   limite: number,
@@ -3757,6 +3822,7 @@ export async function atualizarSitramPorChavesInterno(
   }
 
   const resultados: ResultadoSitramManifesto[] = [];
+  let interrompidaPorFalhaDeComunicacao = false;
 
   for (const chave of chaves) {
     if (chave.length !== 44) {
@@ -3789,29 +3855,36 @@ export async function atualizarSitramPorChavesInterno(
         });
       }
     } catch (error: unknown) {
+      const detalheErro = (error as Error).message || 'Falha de comunicacao com o SITRAM.';
       resultados.push({
         chave,
         status: 'erro',
         notasNoManifesto: 0,
         notasAtualizadas: 0,
         notasNaoEncontradas: 0,
-        detalhe: (error as Error).message,
+        detalhe: detalheErro,
       });
+      if (/timeout|timed out|aborted|fetch failed|econnreset|eai_again|http 50[0234]/i.test(detalheErro)) {
+        interrompidaPorFalhaDeComunicacao = true;
+        break;
+      }
     }
   }
 
   const atualizadas = resultados.reduce((acc, r) => acc + r.notasAtualizadas, 0);
   const foraBanco = resultados.reduce((acc, r) => acc + r.notasNaoEncontradas, 0);
   const erros = resultados.filter((r) => r.status === 'erro').length;
+  const chavesProcessadas = resultados.length;
 
   if (revalidarPagina) revalidatePath('/');
 
   return {
-    success: atualizadas > 0 || erros === 0,
+    success: !interrompidaPorFalhaDeComunicacao && (atualizadas > 0 || erros === 0),
     message:
-      `SITRAM: ${chaves.length} chave(s) processada(s), ${atualizadas} nota(s) atualizada(s)` +
+      `SITRAM: ${chavesProcessadas}/${chaves.length} chave(s) processada(s), ${atualizadas} nota(s) atualizada(s)` +
       `${foraBanco ? `, ${foraBanco} nao atualizada(s)` : ''}` +
-      `${erros ? `, ${erros} erro(s)` : ''}.`,
+      `${erros ? `, ${erros} erro(s)` : ''}` +
+      `${interrompidaPorFalhaDeComunicacao ? ', lote interrompido por falha de comunicacao' : ''}.`,
     resultados,
   };
 }
@@ -4335,7 +4408,16 @@ async function consultarPagamentoIcmsNotaInterno(notaId: number): Promise<Result
   let lancamentos = Array.isArray(detalhe.lancamentos) ? detalhe.lancamentos.map(registroJson) : [];
 
   if (lancamentos.length === 0) {
-    await salvarRetornoSitramPorNfe(nota.chave);
+    try {
+      await salvarRetornoSitramPorNfe(nota.chave);
+    } catch (error: unknown) {
+      return {
+        success: false,
+        message: `Nao foi possivel consultar o SITRAM: ${(error as Error).message || 'falha de comunicacao.'}`,
+        documentos: [],
+        simulacoes: [],
+      };
+    }
     nota = await prisma.notaFiscal.findUnique({
       where: { id: notaId },
       include: { cnpj: { select: { cnpj: true, razaoSocial: true } } },
@@ -4911,7 +4993,7 @@ export async function consultarNotaCompraErp(notaId: number): Promise<ConsultaNo
   const usuario = await exigirUsuario();
   const id = Number(notaId);
   if (!Number.isFinite(id) || id <= 0) {
-    return { success: false, found: false, situacao: null, etiqueta: null, message: 'Nota invalida.', numero: null, serie: null, fornecedor: null, tipoOperacao: null, tipoOperacaoDivergente: false };
+    return { success: false, found: false, situacao: null, etiqueta: null, message: 'Nota invalida.', numero: null, serie: null, fornecedor: null, tipoOperacao: null, tipoOperacaoDivergente: false, tipoNotaEntrada: null };
   }
 
   const nota = await prisma.notaFiscal.findUnique({
@@ -4921,18 +5003,21 @@ export async function consultarNotaCompraErp(notaId: number): Promise<ConsultaNo
       cnpjId: true,
       chave: true,
       etiqueta: true,
+      naturezaOp: true,
+      tipoNotaEntrada: true,
+      tipoNotaEntradaOrigem: true,
       cnpj: { select: { cnpj: true, razaoSocial: true } },
     },
   });
   if (!nota || !usuarioPodeAcessarCnpj(usuario, nota.cnpjId)) {
-    return { success: false, found: false, situacao: null, etiqueta: null, message: 'Nota nao encontrada.', numero: null, serie: null, fornecedor: null, tipoOperacao: null, tipoOperacaoDivergente: false };
+    return { success: false, found: false, situacao: null, etiqueta: null, message: 'Nota nao encontrada.', numero: null, serie: null, fornecedor: null, tipoOperacao: null, tipoOperacaoDivergente: false, tipoNotaEntrada: null };
   }
 
   try {
     const empresaErp = empresaErpCompraPorCnpj(nota.cnpj.cnpj, nota.cnpj.razaoSocial);
     const resultado = await consultarNotaFiscalCompraErp(nota.chave, empresaErp);
     if (!resultado.found) {
-      return { success: true, found: false, situacao: null, etiqueta: nota.etiqueta, message: 'NF nao encontrada no ERP.', numero: null, serie: null, fornecedor: null, tipoOperacao: null, tipoOperacaoDivergente: false };
+      return { success: true, found: false, situacao: null, etiqueta: nota.etiqueta, message: 'NF nao encontrada no ERP.', numero: null, serie: null, fornecedor: null, tipoOperacao: null, tipoOperacaoDivergente: false, tipoNotaEntrada: nota.tipoNotaEntrada as TipoNotaEntrada | null };
     }
 
     const situacao = resultado.nota.situacao;
@@ -4951,6 +5036,16 @@ export async function consultarNotaCompraErp(notaId: number): Promise<ConsultaNo
     const serie = resultado.nota.serie;
     const fornecedor = resultado.nota.fornecedor;
     const tipoOperacao = resultado.nota.tipoOperacao;
+    const tipoNotaSugerido = classificarTipoNotaEntrada(nota.naturezaOp, tipoOperacao);
+    let tipoNotaEntrada = nota.tipoNotaEntrada as TipoNotaEntrada | null;
+    if (nota.tipoNotaEntradaOrigem !== 'MANUAL' && tipoNotaSugerido) {
+      tipoNotaEntrada = tipoNotaSugerido;
+      await prisma.notaFiscal.update({
+        where: { id: nota.id },
+        data: { tipoNotaEntrada, tipoNotaEntradaOrigem: 'AUTOMATICA' },
+      });
+      revalidatePath('/');
+    }
     const verificacaoTipoOperacao = verificarTipoOperacaoErp(fornecedor, tipoOperacao);
     const referencia = `NF ${numero || '-'} / Serie ${serie || '-'}`;
     const complemento = fornecedor ? ` - ${fornecedor}` : '';
@@ -4967,6 +5062,7 @@ export async function consultarNotaCompraErp(notaId: number): Promise<ConsultaNo
       fornecedor,
       tipoOperacao,
       tipoOperacaoDivergente: verificacaoTipoOperacao.divergente,
+      tipoNotaEntrada,
     };
   } catch (error: unknown) {
     return {
@@ -4980,7 +5076,35 @@ export async function consultarNotaCompraErp(notaId: number): Promise<ConsultaNo
       fornecedor: null,
       tipoOperacao: null,
       tipoOperacaoDivergente: false,
+      tipoNotaEntrada: null,
     };
+  }
+}
+
+export async function definirTipoNotaEntrada(notaId: number, tipo: string | null): Promise<ActionResult> {
+  const usuario = await exigirUsuario();
+  const id = Number(notaId);
+  if (!Number.isInteger(id) || id <= 0) return { success: false, message: 'Nota invalida.' };
+  const tipoValido = tipo === null || tipo === '' ? null : TIPOS_NOTA_ENTRADA.find((item) => item === tipo);
+  if (tipo !== null && tipo !== '' && !tipoValido) return { success: false, message: 'Tipo de nota invalido.' };
+  const nota = await prisma.notaFiscal.findUnique({ where: { id }, select: { id: true, cnpjId: true, naturezaOp: true, tipoOperacao: true } });
+  if (!nota || !usuarioPodeAcessarCnpj(usuario, nota.cnpjId)) return { success: false, message: 'Nota nao encontrada.' };
+  const tipoFinal = tipoValido ?? classificarTipoNotaEntrada(nota.naturezaOp, nota.tipoOperacao);
+  try {
+    await prisma.notaFiscal.update({
+      where: { id },
+      data: {
+        tipoNotaEntrada: tipoFinal,
+        tipoNotaEntradaOrigem: tipoFinal ? (tipoValido ? 'MANUAL' : 'AUTOMATICA') : null,
+      },
+    });
+    revalidatePath('/');
+    return {
+      success: true,
+      message: tipoValido ? `Tipo da nota definido como ${tipoValido}.` : tipoFinal ? `Classificada automaticamente como ${tipoFinal}.` : 'Nao foi possivel identificar automaticamente; selecione o tipo manualmente.',
+    };
+  } catch (error: unknown) {
+    return { success: false, message: `Erro ao salvar tipo da nota: ${(error as Error).message}` };
   }
 }
 

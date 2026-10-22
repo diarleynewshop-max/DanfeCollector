@@ -34,6 +34,7 @@ export default function FornecedorIeConsulta() {
   const [uf, setUf] = useState('');
   const [carregando, setCarregando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
+  const [sessaoExpirada, setSessaoExpirada] = useState(false);
   const [resultado, setResultado] = useState<ConsultaIeFornecedor | null>(null);
   const [portalOficial, setPortalOficial] = useState<string | null>(null);
   const [portalCcc, setPortalCcc] = useState<string | null>(null);
@@ -46,6 +47,7 @@ export default function FornecedorIeConsulta() {
     event.preventDefault();
     setCarregando(true);
     setErro(null);
+    setSessaoExpirada(false);
     setResultado(null);
     setPortalOficial(null);
     setPortalCcc(null);
@@ -54,9 +56,16 @@ export default function FornecedorIeConsulta() {
       const params = new URLSearchParams({ cnpj: cnpjLimpo });
       if (uf) params.set('uf', uf);
 
-      const resposta = await fetch(`/api/fornecedor-ie?${params.toString()}`, { cache: 'no-store' });
+      const resposta = await fetch(`/api/fornecedor-ie?${params.toString()}`, {
+        cache: 'no-store',
+        credentials: 'same-origin',
+      });
+      if (resposta.status === 401) {
+        setSessaoExpirada(true);
+        throw new Error('Sua sessão expirou. Entre novamente para continuar a consulta.');
+      }
       const json = (await resposta.json()) as ApiResposta;
-      if (!json.success) throw new Error(json.message);
+      if (!resposta.ok || !json.success) throw new Error(json.success ? 'Erro ao consultar IE do fornecedor.' : json.message);
 
       setResultado(json.consulta);
       setPortalOficial(json.portalOficial);
@@ -138,6 +147,11 @@ export default function FornecedorIeConsulta() {
         {erro && (
           <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700">
             {erro}
+            {sessaoExpirada && (
+              <a href="/login" className="ml-2 underline underline-offset-2">
+                Fazer login
+              </a>
+            )}
           </div>
         )}
       </div>

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import {
   executarBackfillFiscalAutomaticoInterno,
+  executarMonitorSitramContinuoInterno,
   manifestarAutomaticamenteNotasElegiveisInterno,
   registrarFimWorker,
   registrarInicioWorker,
@@ -27,14 +28,16 @@ export async function POST(req: Request) {
   try {
     const sincronizacao = await sincronizarCnpjsAtivosInterno();
     const backfillFiscal = await executarBackfillFiscalAutomaticoInterno(40, 60, sincronizacao);
+    const monitorSitram = await executarMonitorSitramContinuoInterno(50);
     const autoManifesto = await manifestarAutomaticamenteNotasElegiveisInterno(30);
     const manifestadasAuto = autoManifesto.resultados.filter((r) => r.status === 'manifestada').length;
     const erradasAuto = autoManifesto.resultados.filter((r) => r.status === 'erro').length;
     const resultado = {
       ...sincronizacao,
-      success: sincronizacao.success && backfillFiscal.success,
-      message: `${sincronizacao.message} SITRAM: ${backfillFiscal.chavesSitram} NF-e verificada(s), ${backfillFiscal.sitramAtualizadas} atualizada(s), ${backfillFiscal.sitramErros} erro(s). Manifestacao automatica: ${autoManifesto.elegivel} elegivel(is), ${manifestadasAuto} manifestada(s), ${erradasAuto} erro(s).`,
+      success: sincronizacao.success && backfillFiscal.success && monitorSitram.success,
+      message: `${sincronizacao.message} SITRAM backfill: ${backfillFiscal.chavesSitram} NF-e verificada(s), ${backfillFiscal.sitramAtualizadas} atualizada(s), ${backfillFiscal.sitramErros} erro(s). Monitor continuo: ${monitorSitram.message} Manifestacao automatica: ${autoManifesto.elegivel} elegivel(is), ${manifestadasAuto} manifestada(s), ${erradasAuto} erro(s).`,
       backfillFiscal,
+      monitorSitram,
       autoManifesto,
     };
     await registrarFimWorker(resultado);

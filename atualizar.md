@@ -124,6 +124,18 @@ Depois do `HTTP 200`, abrir `https://danfe.newgrup.cloud/login` e validar no nav
 - os textos principais em português e chinês simplificado devem aparecer sem erro visível de ortografia;
 - a navegação e os cards do relatório precisam responder bem no mobile.
 
+#### Registro de publicação — 16/10/2026
+
+- Os botões roxo e verde do alerta de DAE montam um ZIP com os PDFs retornados pelo SITRAM para os DAEs vencidos ou com vencimento nos próximos 7 dias. A confirmação informa que nenhum pagamento será realizado.
+- Build local e remoto aprovados; `/login` interno e público retornaram HTTP 200, a rota ZIP sem sessão retornou 401, `danfecollector` e os dois workers ficaram online, e `pm2-danfe` permaneceu ativo.
+- A geração autenticada dos PDFs não foi executada nesta publicação, pois ela pode gerar ou atualizar documentos fiscais; a solicitação ocorre após confirmação no dashboard.
+
+#### Publicação — 21/10/2026 — consulta de pagamento ICMS
+
+- O botão consulta uma NF por vez, grava o resultado antes de avançar e exibe uma janela com NF atual, posição do lote e totais de pagas, em aberto e erros. Falha individual não interrompe as demais notas.
+- Deploy isolado de `app/dashboard.tsx`, com backup em `/home/danfe/backups/payment-progress-20261021-135045`; build executado na VPS e somente `danfecollector` reiniciado. `danfecollector-sync-nf` e `danfecollector-status-erp` permaneceram online.
+- Bundle contém a nova janela; `/login` interno e público retornaram HTTP 200. Validação visual autenticada do fluxo fica pendente nesta sessão, sem navegador disponível.
+
 ---
 
 ### Conferencia SITRAM por item
@@ -165,3 +177,23 @@ Desde 29/jul/2026, o Danfe usa o schema isolado `danfe` no Supabase da VPS. SCAN
 
 ## Rollback rápido
 O deploy sobrescreve **apenas o código** (dados/`.env`/certs ficam preservados na VPS). Se precisar voltar o código, reenviar um pacote de uma versão anterior e refazer passos 3–5. Para restaurar **dados**, usar o `.tgz` de backup correspondente.
+
+#### Correção publicada — 21/10/2026 — consulta dos vencidos
+
+- O botão de consulta sequencial foi ligado ao cabeçalho dos DAEs vencidos. Ele envia as NFs únicas que compõem os vencimentos exibidos e mantém a janela `NF x de y` atualizando uma por vez.
+- Build remoto aprovado e somente `app/dashboard.tsx` publicado. Backup da fonte em `/home/danfe/backups/overdue-payment-consult-retry-20261021-150819/dashboard.tsx`; SHA-256 publicado `99de8879652df1e21a885af70ff941fa9130313cbba623be4f5e2dfa754aebfc`.
+- `danfecollector` online; os workers auxiliares permaneceram online; serviço `pm2-danfe` ativo; `/login` interno e público retornaram HTTP 200. Validação visual autenticada ainda pendente.
+- Consultar não baixa a contagem por si só: os 264 DAEs continuam vencidos enquanto o SITRAM os reportar em aberto. A contagem deve mudar quando o SITRAM confirmar pagamento ou o status do DAE mudar.
+
+#### Proteção da fila de consulta — 21/10/2026
+
+- Se a ação receber erro de rede/timeout/5xx do SITRAM ou resposta inesperada do servidor, interrompe o lote após a NF que falhou e informa quantas foram processadas, evitando repetir falhas nas demais notas.
+- Diagnóstico desta tentativa: VPS sem conexão HTTPS com `portal-sitram.sefaz.ce.gov.br:443` (`UND_ERR_CONNECT_TIMEOUT`). A aplicação Danfe respondeu normalmente; não houve confirmação de pagamento nessas falhas.
+- Deploy isolado de `app/dashboard.tsx`, build remoto aprovado e app reiniciado. Backup: `/home/danfe/backups/payment-consult-failfast-20261021-152528/dashboard.tsx`; SHA-256 `422d5c8b89a54a725295791942e1dcee795a62d84b7e8b046cc4b3f1c4310d57`.
+
+#### Timeout da consulta de pagamento SITRAM — 21/10/2026
+
+- As chamadas HTTP do SITRAM agora encerram após 30 segundos; a janela mostra a NF atual antes de aguardar a resposta, e a fila de atualização automática para após falha de comunicação.
+- Publicação isolada de quatro arquivos a partir da versão presente na VPS; build de produção aprovado. Backup: `/home/danfe/backups/payment-timeouts-20261021-155155/`.
+- Checksums publicados: `dashboard.tsx` `1f5922b5e71469f051c4301baf8934663f6b323489b64d8d4e9c126a30507c1b`; `actions.ts` `31b676b9d999062c82221d84936283ba791457fc9542ba5e5f1d2b233c44dc82`; `portal.ts` `1601c70c53cbc30a4c3a8c88027f8393eb0445a3d95cb95a159f2d57838fa024`; `pagamento-icms-portal.ts` `64588920ab65b10868aac03cd248447e32b241fd1f23f0c46560a3e45e6a8f77`.
+- Reiniciado apenas `danfecollector`; os workers auxiliares ficaram online. `/login` interno e público retornaram HTTP 200. Consulta de pagamento/SITRAM e contagem atual dos DAEs ainda precisam de confirmação no navegador autenticado.

@@ -22,7 +22,10 @@ for (const linha of fs.readFileSync(envPath, 'utf8').split(/\r?\n/)) {
   if (m && !process.env[m[1]]) process.env[m[1]] = m[2];
 }
 
-const API_KEY = process.env.MEUDANFE_API_KEY || '2ab335f0-120b-45a1-9060-b7105287400f';
+const API_KEY = String(process.env.MEUDANFE_API_KEY || '').trim();
+if (!API_KEY) {
+  throw new Error('MEUDANFE_API_KEY nao configurada no ambiente.');
+}
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function getCertParaCnpj(cnpj) {

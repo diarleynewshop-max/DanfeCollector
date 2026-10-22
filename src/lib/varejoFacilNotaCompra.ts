@@ -17,6 +17,23 @@ export type NotaFiscalCompraErp = {
   dataEmissao: string | null;
 };
 
+export const TIPOS_NOTA_ENTRADA = ['USO E CONSUMO', 'VENDA', 'DEVOLUÇÃO', 'BONIFICAÇÃO'] as const;
+export type TipoNotaEntrada = (typeof TIPOS_NOTA_ENTRADA)[number];
+
+function textoBuscaTipoNota(...valores: (string | null | undefined)[]): string {
+  return valores.filter(Boolean).join(' ').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase();
+}
+
+/** Classifica pelo que veio no XML/ERP; quando não há sinal claro, deixa para escolha manual. */
+export function classificarTipoNotaEntrada(...valores: (string | null | undefined)[]): TipoNotaEntrada | null {
+  const texto = textoBuscaTipoNota(...valores);
+  if (/DEVOLU/.test(texto) || /\b120[12]\b|\b220[12]\b|\b141[01]\b|\b241[01]\b/.test(texto)) return 'DEVOLUÇÃO';
+  if (/BONIFIC|BRINDE|DOACAO/.test(texto) || /\b1910\b|\b2910\b/.test(texto)) return 'BONIFICAÇÃO';
+  if (/USO\s*E\s*CONSUMO|CONSUMO PROPRIO|MATERIAL DE CONSUMO/.test(texto) || /\b1556\b|\b2556\b|\b1407\b|\b2407\b/.test(texto)) return 'USO E CONSUMO';
+  if (/VENDA|REVENDA|COMERCIALIZACAO/.test(texto) || /\b1102\b|\b2102\b|\b1403\b|\b2403\b/.test(texto)) return 'VENDA';
+  return null;
+}
+
 export type ResultadoNotaFiscalCompraErp =
   | { found: true; nota: NotaFiscalCompraErp; totalRegistros: number }
   | { found: false; totalRegistros: number };
