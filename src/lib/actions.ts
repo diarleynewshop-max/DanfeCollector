@@ -82,6 +82,7 @@ import {
   type ConsultaStatusRecebimento,
 } from './nfStatusIntegration';
 export type { ConsultaStatusRecebimento } from './nfStatusIntegration';
+import { buscarXmlMeuDanfe } from './meudanfe';
 import { classificarTipoNotaEntrada, consultarNotaFiscalCompraErp, TIPOS_NOTA_ENTRADA, type TipoNotaEntrada } from './varejoFacilNotaCompra';
 import { verificarTipoOperacaoErp } from './erpRegrasConferencia';
 import {
@@ -2123,7 +2124,16 @@ export async function importarChavesLoteInterno(
 
       const ret = await consultarPorChave(registro.cnpj, registro.uf, chave);
       if (ret.cStat !== 138 || ret.documentos.length === 0) {
-        // 632 = nota antiga (>~90 dias), fora do prazo de download da SEFAZ
+        // 632 = nota antiga (>~90 dias), fora do prazo de download da SEFAZ.
+        // Nesse caso (e quando a SEFAZ não acha) tenta o XML arquivado no MeuDanfe.
+        const xmlMeuDanfe = await buscarXmlMeuDanfe(chave);
+        if (xmlMeuDanfe) {
+          const tipoMeuDanfe = await guardarDocumento(cnpjId, registro.cnpj, { nsu: '', schema: 'procNFe_v4.00', xml: xmlMeuDanfe });
+          if (tipoMeuDanfe) {
+            resultados.push({ chave, status: tipoMeuDanfe, detalhe: 'XML obtido no MeuDanfe' });
+            continue;
+          }
+        }
         const status = ret.cStat === 632 ? 'fora-de-prazo' : 'nao-encontrada';
         resultados.push({ chave, status, detalhe: `${ret.cStat}: ${ret.xMotivo}` });
         continue;
