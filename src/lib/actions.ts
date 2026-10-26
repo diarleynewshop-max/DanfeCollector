@@ -5081,6 +5081,113 @@ export async function consultarNotaCompraErp(notaId: number): Promise<ConsultaNo
   }
 }
 
+export type NotaImportacaoDireta = {
+  id: number;
+  chave: string;
+  numero: string | null;
+  serie: string | null;
+  emitidaEm: string;
+  situacaoSefaz: string;
+  naturezaOp: string | null;
+  emitenteNome: string | null;
+  emitenteCnpj: string | null;
+  emitenteUf: string | null;
+  valorTotal: number | null;
+  tipoNotaEntradaOrigem: string | null;
+  destinatarioCnpj: string | null;
+  destinatarioNome: string | null;
+};
+
+const LIMITE_NOTAS_IMPORTACAO_DIRETA = 500;
+
+/**
+ * Notas classificadas como IMPORTAÇÃO DIRETA. Além das já marcadas (manual ou automático),
+ * inclui as que ainda não foram classificadas mas trazem sinal claro no XML: natureza da
+ * operação com "importa..." ou emitente no exterior (UF "EX"). Quem marcou outro tipo na mão
+ * nunca é puxado de volta para cá.
+ */
+export async function listarNotasImportacaoDireta(filtros: {
+  busca?: string;
+  cnpjId?: number | null;
+  inicio?: string;
+  fim?: string;
+} = {}): Promise<{ success: true; notas: NotaImportacaoDireta[]; limiteAtingido: boolean } | { success: false; message: string }> {
+  const usuario = await exigirUsuario();
+  const cnpjId = Number(filtros.cnpjId);
+  const inicio = filtros.inicio ? new Date(`${filtros.inicio}T00:00:00.000Z`) : null;
+  const fim = filtros.fim ? new Date(`${filtros.fim}T23:59:59.999Z`) : null;
+  if ((inicio && Number.isNaN(inicio.getTime())) || (fim && Number.isNaN(fim.getTime()))) {
+    return { success: false, message: 'Periodo invalido.' };
+  }
+  const busca = (filtros.busca ?? '').trim();
+  const buscaDigitos = busca.replace(/\D/g, '');
+
+  const and: Prisma.NotaFiscalWhereInput[] = [
+    whereNotaPermitida(usuario),
+    {
+      OR: [
+        { tipoNotaEntrada: 'IMPORTAÇÃO DIRETA' },
+        {
+          AND: [
+            { OR: [{ tipoNotaEntradaOrigem: null }, { tipoNotaEntradaOrigem: { not: 'MANUAL' } }] },
+            {
+              OR: [
+                { naturezaOp: { contains: 'importa', mode: 'insensitive' } },
+                { emitenteUf: 'EX' },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  ];
+  if (Number.isInteger(cnpjId) && cnpjId > 0) and.push({ cnpjId });
+  if (inicio || fim) and.push({ emitidaEm: { ...(inicio ? { gte: inicio } : {}), ...(fim ? { lte: fim } : {}) } });
+  if (busca) {
+    and.push({
+      OR: [
+        { numero: { contains: busca } },
+        { emitenteNome: { contains: busca, mode: 'insensitive' } },
+        { naturezaOp: { contains: busca, mode: 'insensitive' } },
+        ...(buscaDigitos ? [{ chave: { contains: buscaDigitos } }, { emitenteCnpj: { contains: buscaDigitos } }] : []),
+      ],
+    });
+  }
+
+  const notas = await prisma.notaFiscal.findMany({
+    where: { AND: and },
+    orderBy: { emitidaEm: 'desc' },
+    take: LIMITE_NOTAS_IMPORTACAO_DIRETA,
+    select: {
+      id: true,
+      chave: true,
+      numero: true,
+      serie: true,
+      emitidaEm: true,
+      situacaoSefaz: true,
+      naturezaOp: true,
+      emitenteNome: true,
+      emitenteCnpj: true,
+      emitenteUf: true,
+      valorTotal: true,
+      tipoNotaEntradaOrigem: true,
+      destCnpj: true,
+      destNome: true,
+    },
+  });
+
+  return {
+    success: true,
+    limiteAtingido: notas.length >= LIMITE_NOTAS_IMPORTACAO_DIRETA,
+    notas: notas.map(({ emitidaEm, destCnpj, destNome, ...resto }) => ({
+      ...resto,
+      emitidaEm: emitidaEm.toISOString(),
+      destinatarioCnpj: destCnpj,
+      destinatarioNome: destNome,
+    })),
+  };
+}
+
 export async function definirTipoNotaEntrada(notaId: number, tipo: string | null): Promise<ActionResult> {
   const usuario = await exigirUsuario();
   const id = Number(notaId);

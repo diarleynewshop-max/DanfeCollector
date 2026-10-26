@@ -140,6 +140,7 @@ import SitramItensView from './components/SitramItensView';
 import MapaBrasil, { nomeUf, type ValorUf } from './components/MapaBrasil';
 import FornecedorIeConsulta from './components/FornecedorIeConsulta';
 import CteConsulta from './components/CteConsulta';
+import ImportacaoDiretaConsulta from './components/ImportacaoDiretaConsulta';
 import SpedConsulta from './components/SpedConsulta';
 import { useIdioma } from '@/lib/i18n';
 
@@ -162,7 +163,7 @@ type FiltroOrigemNota = 'proprio' | 'terceiro';
 type FiltroManifestoNota = 'manifestada' | 'nao-manifestada' | 'pendente-processando' | 'com-erros';
 type FiltroModalidadeNota = 'simplificada' | 'estorno' | 'devolucao' | 'transferencia' | 'normal' | 'ajuste-icms';
 type FiltroTributoItem = 'todos' | TipoTributoItemSitram;
-type SecaoApp = 'home' | 'notas' | 'relatorios' | 'nfse' | 'cte' | 'ie-fornecedor' | 'sped' | 'empresas' | 'usuarios' | 'configuracao';
+type SecaoApp = 'home' | 'notas' | 'relatorios' | 'nfse' | 'cte' | 'importacao-direta' | 'ie-fornecedor' | 'sped' | 'empresas' | 'usuarios' | 'configuracao';
 const NFSE_CNPJ_AUTORIZADO_DASHBOARD = '45998339000329';
 type ColunaRedimensionavel = 'nf' | 'emitente' | 'destinatario' | 'valores' | 'transporte' | 'sitram' | 'status';
 type ModalRelatorioTipo = 'ranking-uf' | 'detalhe-uf' | 'evolucao-mensal' | 'emitentes' | 'daes-pagos' | 'daes-nao-pagos' | 'daes-prioritarios' | 'pendencias';
@@ -2992,6 +2993,7 @@ export default function Dashboard({
             <SecaoBotao atual={secaoAtual} alvo="relatorios" onClick={setSecaoAtual}>{t('reports')}</SecaoBotao>
             {cnpjNfseAutorizado && <SecaoBotao atual={secaoAtual} alvo="nfse" onClick={setSecaoAtual}>NFS-e</SecaoBotao>}
             <SecaoBotao atual={secaoAtual} alvo="cte" onClick={setSecaoAtual}>CT-e</SecaoBotao>
+            <SecaoBotao atual={secaoAtual} alvo="importacao-direta" onClick={setSecaoAtual}>Importação Direta</SecaoBotao>
             <SecaoBotao atual={secaoAtual} alvo="ie-fornecedor" onClick={setSecaoAtual}>IE Fornecedor</SecaoBotao>
             <SecaoBotao atual={secaoAtual} alvo="sped" onClick={setSecaoAtual}>SPED Fiscal</SecaoBotao>
             <SecaoBotao atual={secaoAtual} alvo="empresas" onClick={setSecaoAtual}>{t('companies')}</SecaoBotao>
@@ -3757,6 +3759,8 @@ export default function Dashboard({
         )}
 
         {secaoAtual === 'cte' && <CteConsulta cnpjs={cnpjs} />}
+
+        {secaoAtual === 'importacao-direta' && <ImportacaoDiretaConsulta cnpjs={cnpjs} />}
 
         {secaoAtual === 'ie-fornecedor' && <FornecedorIeConsulta />}
 
@@ -10122,6 +10126,7 @@ function DetalheNota({
                   <option value="VENDA">VENDA</option>
                   <option value="DEVOLUÇÃO">DEVOLUÇÃO</option>
                   <option value="BONIFICAÇÃO">BONIFICAÇÃO</option>
+                  <option value="IMPORTAÇÃO DIRETA">IMPORTAÇÃO DIRETA</option>
                 </select>
                 <span className="text-xs text-sky-800">
                   {nota.tipoNotaEntradaOrigem === 'MANUAL' ? 'Definido manualmente' : nota.tipoNotaEntradaOrigem === 'AUTOMATICA' ? 'Classificado automaticamente; pode ajustar acima' : 'A consulta do ERP tenta classificar pela natureza da operação'}
